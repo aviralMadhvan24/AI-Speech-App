@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Speech Arena</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Speech Arena</p>
+            <h1>Pronunciation Battle</h1>
+          </div>
+          <div class="mode-switch" role="tablist" aria-label="Mode">
+            <button class="mode-button active" data-mode="battle" type="button">1v1</button>
+            <button class="mode-button" data-mode="live" type="button">Live</button>
+          </div>
+        </header>
+
+        <section class="hero-line" aria-label="Audio signal">
+          <canvas id="waveCanvas"></canvas>
+        </section>
+
+        <section class="controls-grid">
+          <div class="panel prompt-panel">
+            <label for="promptSelect">Prompt Bank</label>
+            <select id="promptSelect"></select>
+
+            <label for="expectedText">Expected Text</label>
+            <textarea id="expectedText" rows="4">The design is very subtle</textarea>
+
+            <div class="prompt-meta">
+              <span id="focusWord">subtle</span>
+              <span id="difficulty">easy</span>
+              <span id="hint">The b is silent.</span>
+            </div>
+          </div>
+
+          <div class="panel upload-panel">
+            <div class="record-row">
+              <button id="recordButton" class="primary-button" type="button">Record</button>
+              <button id="stopButton" class="secondary-button" type="button" disabled>Stop</button>
+              <button id="analyzeButton" class="primary-button" type="button">Analyze</button>
+            </div>
+
+            <label for="audioFile">Audio File</label>
+            <input id="audioFile" type="file" accept="audio/*">
+
+            <audio id="previewAudio" controls></audio>
+            <p id="statusText" class="status-text">Ready</p>
+          </div>
+        </section>
+
+        <section class="results-layout">
+          <div class="score-strip">
+            <div class="score-tile">
+              <span>Pronunciation</span>
+              <strong id="pronunciationScore">--</strong>
+            </div>
+            <div class="score-tile">
+              <span>Clarity</span>
+              <strong id="clarityScore">--</strong>
+            </div>
+            <div class="score-tile">
+              <span>Pace</span>
+              <strong id="paceScore">--</strong>
+            </div>
+          </div>
+
+          <div class="panel transcript-panel">
+            <h2>Transcript</h2>
+            <p id="transcriptText">No analysis yet.</p>
+          </div>
+
+          <div class="panel mistakes-panel">
+            <h2>Mistakes</h2>
+            <div id="mistakesList" class="mistakes-list"></div>
+          </div>
+
+          <div class="panel words-panel">
+            <h2>Word Timeline</h2>
+            <div id="wordsList" class="words-list"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/ui/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,212 @@
+[
+  {
+    "id": "subtle",
+    "text": "The design is very subtle",
+    "focus_word": "subtle",
+    "difficulty": "easy",
+    "hint": "The b is silent."
+  },
+  {
+    "id": "debt",
+    "text": "She paid the debt on time",
+    "focus_word": "debt",
+    "difficulty": "easy",
+    "hint": "The b is silent."
+  },
+  {
+    "id": "doubt",
+    "text": "I doubt that answer is correct",
+    "focus_word": "doubt",
+    "difficulty": "easy",
+    "hint": "The b is silent."
+  },
+  {
+    "id": "receipt",
+    "text": "Please keep the receipt safe",
+    "focus_word": "receipt",
+    "difficulty": "easy",
+    "hint": "The p is silent."
+  },
+  {
+    "id": "island",
+    "text": "The island looks peaceful today",
+    "focus_word": "island",
+    "difficulty": "easy",
+    "hint": "The s is silent."
+  },
+  {
+    "id": "honest",
+    "text": "Give me an honest answer",
+    "focus_word": "honest",
+    "difficulty": "easy",
+    "hint": "The h is silent."
+  },
+  {
+    "id": "hour",
+    "text": "The meeting lasted one hour",
+    "focus_word": "hour",
+    "difficulty": "easy",
+    "hint": "The h is silent."
+  },
+  {
+    "id": "could",
+    "text": "Could you explain your idea",
+    "focus_word": "could",
+    "difficulty": "easy",
+    "hint": "The l is silent."
+  },
+  {
+    "id": "would",
+    "text": "I would like to respond",
+    "focus_word": "would",
+    "difficulty": "easy",
+    "hint": "The l is silent."
+  },
+  {
+    "id": "should",
+    "text": "You should support your claim",
+    "focus_word": "should",
+    "difficulty": "easy",
+    "hint": "The l is silent."
+  },
+  {
+    "id": "colonel",
+    "text": "The colonel gave clear orders",
+    "focus_word": "colonel",
+    "difficulty": "hard",
+    "hint": "It sounds like kernel."
+  },
+  {
+    "id": "choir",
+    "text": "The choir performed beautifully",
+    "focus_word": "choir",
+    "difficulty": "medium",
+    "hint": "It sounds like kwire."
+  },
+  {
+    "id": "chaos",
+    "text": "The debate turned into chaos",
+    "focus_word": "chaos",
+    "difficulty": "medium",
+    "hint": "The ch sounds like k."
+  },
+  {
+    "id": "schedule",
+    "text": "Our schedule changed this morning",
+    "focus_word": "schedule",
+    "difficulty": "medium",
+    "hint": "American English often starts with sk."
+  },
+  {
+    "id": "specific",
+    "text": "Please give a specific example",
+    "focus_word": "specific",
+    "difficulty": "medium",
+    "hint": "Avoid saying pacific."
+  },
+  {
+    "id": "probably",
+    "text": "That is probably the best option",
+    "focus_word": "probably",
+    "difficulty": "medium",
+    "hint": "Keep the first syllable clear."
+  },
+  {
+    "id": "comfortable",
+    "text": "I feel comfortable speaking here",
+    "focus_word": "comfortable",
+    "difficulty": "medium",
+    "hint": "Often pronounced kumf-ter-bul."
+  },
+  {
+    "id": "vegetable",
+    "text": "A vegetable diet can be healthy",
+    "focus_word": "vegetable",
+    "difficulty": "medium",
+    "hint": "Often pronounced vej-tuh-bul."
+  },
+  {
+    "id": "develop",
+    "text": "We need to develop the idea",
+    "focus_word": "develop",
+    "difficulty": "medium",
+    "hint": "Stress the second syllable."
+  },
+  {
+    "id": "analysis",
+    "text": "Her analysis was very strong",
+    "focus_word": "analysis",
+    "difficulty": "medium",
+    "hint": "Stress the second syllable."
+  },
+  {
+    "id": "entrepreneur",
+    "text": "The entrepreneur solved a real problem",
+    "focus_word": "entrepreneur",
+    "difficulty": "hard",
+    "hint": "Break it into smaller syllables."
+  },
+  {
+    "id": "rural",
+    "text": "Rural communities need better roads",
+    "focus_word": "rural",
+    "difficulty": "hard",
+    "hint": "Keep both r sounds controlled."
+  },
+  {
+    "id": "thorough",
+    "text": "A thorough review is necessary",
+    "focus_word": "thorough",
+    "difficulty": "hard",
+    "hint": "It sounds like thur-oh."
+  },
+  {
+    "id": "although",
+    "text": "Although I disagree, I understand",
+    "focus_word": "although",
+    "difficulty": "medium",
+    "hint": "End with a clear oh sound."
+  },
+  {
+    "id": "thought",
+    "text": "That thought deserves attention",
+    "focus_word": "thought",
+    "difficulty": "medium",
+    "hint": "Start with the th sound."
+  },
+  {
+    "id": "through",
+    "text": "We worked through the problem",
+    "focus_word": "through",
+    "difficulty": "medium",
+    "hint": "Do not pronounce the gh."
+  },
+  {
+    "id": "throughout",
+    "text": "Confidence matters throughout the debate",
+    "focus_word": "throughout",
+    "difficulty": "medium",
+    "hint": "Do not pronounce the gh."
+  },
+  {
+    "id": "world",
+    "text": "The world needs better communication",
+    "focus_word": "world",
+    "difficulty": "medium",
+    "hint": "Keep the r and l close."
+  },
+  {
+    "id": "asked",
+    "text": "She asked a thoughtful question",
+    "focus_word": "asked",
+    "difficulty": "medium",
+    "hint": "The ending is often pronounced skt."
+  },
+  {
+    "id": "strength",
+    "text": "Your main strength is clarity",
+    "focus_word": "strength",
+    "difficulty": "hard",
+    "hint": "Move carefully through the consonants."
+  }
+]

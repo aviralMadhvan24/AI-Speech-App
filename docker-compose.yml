@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: .
+    container_name: speech_backend
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - .:/app
+
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+
+    container_name: speech_db
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: speech_db
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
