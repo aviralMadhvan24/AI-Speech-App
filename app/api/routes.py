@@ -24,6 +24,7 @@ from app.pronunciation.scoring_service import calculate_pronunciation_score
 from app.pronunciation.scoring_service import build_word_scores
 from app.pronunciation.scoring_service import compare_expected_to_transcript
 
+
 router = APIRouter()
 
 PROMPTS_PATH = Path("app/data/pronunciation_prompts.json")
@@ -38,6 +39,7 @@ SUPPORTED_FORMATS = [
     "audio/webm",
     "audio/ogg"
 ]
+
 
 
 @router.get("/")
@@ -80,6 +82,10 @@ async def analyze_audio(
         transcription_result["text"]
     )
 
+
+    print("EXPECTED =", expected_text)
+    print("TRANSCRIPT =", transcript)
+
     words_output = []
 
     segments = transcription_result.get(
@@ -116,8 +122,9 @@ async def analyze_audio(
     expected_phonemes = []
 
     phoneme_timeline = []
-
+    heard_phonemes = []
     word_scores = []
+    word_phoneme_data = []
 
     mfa_available = False
 
@@ -128,7 +135,6 @@ async def analyze_audio(
             expected_text,
             transcript
         )
-
         pronunciation_score = word_match_score
 
         expected_phonemes = get_expected_word_phonemes(expected_text)
@@ -136,11 +142,20 @@ async def analyze_audio(
         try:
             textgrid_path = run_mfa_alignment(
                 processed_audio_path,
-                expected_text
+                transcript
             )
 
-            phoneme_timeline = parse_textgrid(textgrid_path)
-
+            alignment_data = parse_textgrid(
+    textgrid_path
+)
+            phoneme_timeline = alignment_data.get(
+                "phones",
+                []
+            )
+            word_phoneme_data = alignment_data.get(
+                "words",
+                []
+            )
             mfa_available = True
 
         except Exception as error:
@@ -153,8 +168,27 @@ async def analyze_audio(
             transcript,
             words_output,
             expected_phonemes,
+            word_phoneme_data,
             mfa_available
         )
+
+        mistake_words = {
+            mistake["expected_word"]
+            for mistake in mistakes
+        }
+
+        for word_score in word_scores:
+            if (
+                word_score["phoneme_score"] is not None
+                and word_score["phoneme_score"] < 85
+                and word_score["word"] not in mistake_words
+            ):
+                mistakes.append({
+                    "expected_word": word_score["word"],
+                    "heard_word": word_score["heard_word"],
+                    "feedback": word_score["feedback"]
+                })
+                mistake_words.add(word_score["word"])
 
         pronunciation_score = calculate_pronunciation_score(
             word_match_score,
@@ -168,6 +202,7 @@ async def analyze_audio(
             "language",
             "en"
         ),
+        
         processed_audio_path=processed_audio_path,
         words=words_output,
         pronunciation_score=pronunciation_score,

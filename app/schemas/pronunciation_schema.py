@@ -56,6 +56,8 @@ class WordPronunciationScore(BaseModel):
 
     expected_phonemes: List[str] = Field(default_factory=list)
 
+    heard_phonemes: List[str] = Field(default_factory=list)
+
     feedback: str
 
 

@@ -5,11 +5,15 @@ from app.core.logger import logger
 
 MFA_OUTPUT_DIR = "outputs/mfa"
 
-DICTIONARY_PATH = "mfa_models/dictionary/cmudict.dict"
+DICTIONARY_PATH = "app/mfa_models/dictionary/cmudict.dict"
 
-ACOUSTIC_MODEL_PATH = "mfa_models/acoustic/english_us_arpa.zip"
-
-
+ACOUSTIC_MODEL_PATH = "app/mfa_models/acoustic/english_us_arpa.zip"
+CONDA_EXECUTABLE = (
+    r"C:\Users\avira\miniconda3\Scripts\conda.exe"
+)
+MFA_EXECUTABLE = (
+    r"C:\Users\avira\miniconda3\envs\mfa\Scripts\mfa.exe"
+)
 def run_mfa_alignment(
     audio_path: str,
     transcript: str
@@ -49,19 +53,36 @@ def run_mfa_alignment(
             dst.write(src.read())
 
     command = [
-        "mfa",
-        "align",
-        temp_input_dir,
-        DICTIONARY_PATH,
-        ACOUSTIC_MODEL_PATH,
-        MFA_OUTPUT_DIR,
-        "--clean"
-    ]
+    CONDA_EXECUTABLE,
+    "run",
+    "-n",
+    "mfa",
+    "mfa",
+    "align",
+    temp_input_dir,
+    "english_us_arpa",
+    "english_us_arpa",
+    MFA_OUTPUT_DIR,
+    "--clean"
+]
 
-    subprocess.run(
+    print("Running MFA command:")
+    print(command)
+    import shutil
+    print("CONDA EXISTS =", os.path.exists(CONDA_EXECUTABLE))
+    print("CONDA =", shutil.which("conda"))
+    print("MFA =", shutil.which("mfa"))
+    print("COMMAND =", command)
+    result = subprocess.run(
         command,
-        check=True
+        capture_output=True,
+        text=True
     )
+
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        raise Exception(result.stderr)
 
     logger.info("MFA alignment completed")
 
@@ -71,37 +92,82 @@ def run_mfa_alignment(
     )
 
     return textgrid_path
-
-
-def parse_textgrid(
-    textgrid_path: str
-):
+def parse_textgrid(textgrid_path: str):
 
     from textgrid import TextGrid
 
     logger.info(f"Parsing TextGrid: {textgrid_path}")
 
     tg = TextGrid()
-
     tg.read(textgrid_path)
 
-    phoneme_data = []
+    words = []
+    phones = []
 
     for tier in tg.tiers:
 
-        if tier.name.lower() == "phones":
+        tier_name = tier.name.lower()
+
+        if tier_name == "words":
+
+            for interval in tier.intervals:
+
+                word = interval.mark.strip()
+
+                if not word:
+                    continue
+
+                words.append({
+                    "word": word,
+                    "start": interval.minTime,
+                    "end": interval.maxTime,
+                    "phonemes": [],
+                    "phoneme_timings": []
+                })
+
+        elif tier_name == "phones":
 
             for interval in tier.intervals:
 
                 phoneme = interval.mark.strip()
 
-                if phoneme == "":
+                if not phoneme:
                     continue
 
-                phoneme_data.append({
+                phones.append({
                     "phoneme": phoneme,
                     "start": interval.minTime,
                     "end": interval.maxTime
                 })
 
-    return phoneme_data
+    # map phones to words
+    for phone in phones:
+
+        phone_midpoint = (
+            phone["start"] + phone["end"]
+        ) / 2
+
+        for word in words:
+
+            if (
+                word["start"]
+                <= phone_midpoint
+                <= word["end"]
+            ):
+
+                word["phonemes"].append(
+                    phone["phoneme"].rstrip("012")
+                )
+                word["phoneme_timings"].append({
+                    "phoneme": phone["phoneme"].rstrip("012"),
+                    "start": phone["start"],
+                    "end": phone["end"],
+                    "duration": phone["end"] - phone["start"]
+                })
+
+                break
+
+    return {
+        "words": words,
+        "phones": phones
+    }
