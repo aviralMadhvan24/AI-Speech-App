@@ -19,14 +19,51 @@ const phonemesList = document.querySelector("#phonemesList");
 const waveCanvas = document.querySelector("#waveCanvas");
 const modeButtons = document.querySelectorAll(".mode-button");
 
+const backendHost = window.location.hostname || "127.0.0.1";
+const API_BASE_URL = window.location.port === "8000"
+  ? window.location.origin
+  : `http://${backendHost}:8000`;
+
 let prompts = [];
 let selectedMode = "battle";
 let recordedBlob = null;
 let mediaRecorder = null;
 let recordedChunks = [];
 
+function apiUrl(path) {
+  return new URL(path, `${API_BASE_URL}/`).toString();
+}
+
 function setStatus(message) {
   statusText.textContent = message;
+}
+
+async function readJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const body = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    const summary = body.replace(/\s+/g, " ").trim().slice(0, 160);
+
+    throw new Error(
+      `Server returned ${response.status} ${response.statusText}` +
+      (summary ? `: ${summary}` : "")
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error(`Server returned invalid JSON with status ${response.status}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(data.detail || `Request failed with status ${response.status}`);
+  }
+
+  return data;
 }
 
 function formatScore(value, suffix = "") {
@@ -45,8 +82,8 @@ function updatePromptMeta(prompt) {
 }
 
 async function loadPrompts() {
-  const response = await fetch("/battle/prompts");
-  prompts = await response.json();
+  const response = await fetch(apiUrl("/battle/prompts"));
+  prompts = await readJsonResponse(response);
 
   promptSelect.innerHTML = "";
 
@@ -139,26 +176,33 @@ async function analyzeAudio() {
     formData.append("expected_text", expectedText.value.trim());
   }
 
-  setStatus("Analyzing");
+  const startedAt = Date.now();
+  setStatus("Preparing audio...");
   analyzeButton.disabled = true;
+  const progressTimer = window.setInterval(() => {
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    const firstRunHint = elapsedSeconds >= 10
+      ? " The first run may take longer while the speech model loads."
+      : "";
+    setStatus(`Analyzing audio... ${elapsedSeconds}s.${firstRunHint}`);
+  }, 1000);
 
   try {
-    const response = await fetch("/analyze", {
+    const response = await fetch(apiUrl("/analyze"), {
       method: "POST",
       body: formData
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || "Analysis failed");
-    }
-
-    const result = await response.json();
+    const result = await readJsonResponse(response);
     renderResult(result);
     setStatus("Complete");
   } catch (error) {
-    setStatus(error.message);
+    const message = error instanceof TypeError
+      ? `Cannot reach the API at ${API_BASE_URL}. Start the FastAPI server first.`
+      : error.message;
+    setStatus(message);
   } finally {
+    window.clearInterval(progressTimer);
     analyzeButton.disabled = false;
   }
 }
@@ -298,5 +342,10 @@ modeButtons.forEach((button) => {
   button.addEventListener("click", () => setMode(button.dataset.mode));
 });
 
-loadPrompts().catch((error) => setStatus(error.message));
+loadPrompts().catch((error) => {
+  const message = error instanceof TypeError
+    ? `Cannot reach the API at ${API_BASE_URL}. Start the FastAPI server first.`
+    : error.message;
+  setStatus(message);
+});
 drawWave();

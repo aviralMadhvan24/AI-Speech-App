@@ -4,8 +4,9 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi import File
 import json
-from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 
+from app.core.config import project_path
 from app.core.logger import logger
 from app.schemas.pronunciation_schema import AnalyzeResponse
 from app.schemas.pronunciation_schema import WordTimestamp
@@ -27,7 +28,7 @@ from app.pronunciation.scoring_service import compare_expected_to_transcript
 
 router = APIRouter()
 
-PROMPTS_PATH = Path("app/data/pronunciation_prompts.json")
+PROMPTS_PATH = project_path("app/data/pronunciation_prompts.json")
 
 SUPPORTED_FORMATS = [
     "audio/wav",
@@ -72,9 +73,13 @@ async def analyze_audio(
 
     uploaded_file_path = await save_upload_file(file)
 
-    processed_audio_path = preprocess_audio(uploaded_file_path)
+    processed_audio_path = await run_in_threadpool(
+        preprocess_audio,
+        uploaded_file_path
+    )
 
-    transcription_result = transcribe_audio(
+    transcription_result = await run_in_threadpool(
+        transcribe_audio,
         processed_audio_path
     )
 
@@ -82,9 +87,6 @@ async def analyze_audio(
         transcription_result["text"]
     )
 
-
-    print("EXPECTED =", expected_text)
-    print("TRANSCRIPT =", transcript)
 
     words_output = []
 
@@ -137,17 +139,22 @@ async def analyze_audio(
         )
         pronunciation_score = word_match_score
 
-        expected_phonemes = get_expected_word_phonemes(expected_text)
+        expected_phonemes = await run_in_threadpool(
+            get_expected_word_phonemes,
+            expected_text
+        )
 
         try:
-            textgrid_path = run_mfa_alignment(
+            textgrid_path = await run_in_threadpool(
+                run_mfa_alignment,
                 processed_audio_path,
                 transcript
             )
 
-            alignment_data = parse_textgrid(
-    textgrid_path
-)
+            alignment_data = await run_in_threadpool(
+                parse_textgrid,
+                textgrid_path
+            )
             phoneme_timeline = alignment_data.get(
                 "phones",
                 []

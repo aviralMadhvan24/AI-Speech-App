@@ -1,7 +1,5 @@
 from functools import lru_cache
 
-import cmudict
-
 from app.pronunciation.transcript_cleaner import normalize_transcript
 
 
@@ -27,6 +25,7 @@ def strip_stress(phoneme: str):
 
 @lru_cache(maxsize=1)
 def load_cmudict():
+    import cmudict
 
     return cmudict.dict()
 

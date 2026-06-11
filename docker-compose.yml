@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   backend:
@@ -11,6 +9,10 @@ services:
 
     volumes:
       - .:/app
+      - whisper_cache:/root/.cache/whisper
+
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base.en}
 
     depends_on:
       - db
@@ -33,3 +35,4 @@ services:
 
 volumes:
   postgres_data:
+  whisper_cache:

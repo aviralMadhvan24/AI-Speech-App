@@ -1,27 +1,31 @@
-import torch
-import whisper
+from functools import lru_cache
 
+from app.core.config import settings
 from app.core.logger import logger
 from app.utils.ffmpeg_utils import ensure_ffmpeg_on_path
 
-MODEL_NAME = "small"
-
 ensure_ffmpeg_on_path()
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
-logger.info(f"Whisper using device: {device}")
+@lru_cache(maxsize=1)
+def load_model():
+    import torch
+    import whisper
 
-model = whisper.load_model(MODEL_NAME)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info("Loading Whisper model '%s' on %s", settings.WHISPER_MODEL, device)
 
-model = model.to(device)
+    model = whisper.load_model(settings.WHISPER_MODEL)
+    model = model.to(device)
 
-logger.info("Whisper model loaded successfully")
+    logger.info("Whisper model loaded successfully")
+    return model, torch
 
 
 def transcribe_audio(audio_path: str):
 
     logger.info(f"Starting transcription: {audio_path}")
+    model, torch = load_model()
 
     result = model.transcribe(
         audio_path,
