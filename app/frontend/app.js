@@ -12,6 +12,9 @@ const statusText = document.querySelector("#statusText");
 const pronunciationScore = document.querySelector("#pronunciationScore");
 const clarityScore = document.querySelector("#clarityScore");
 const paceScore = document.querySelector("#paceScore");
+const fluencyScore = document.querySelector("#fluencyScore");
+const communicationScore = document.querySelector("#communicationScore");
+const t3Details = document.querySelector("#t3Details");
 const transcriptText = document.querySelector("#transcriptText");
 const mistakesList = document.querySelector("#mistakesList");
 const wordsList = document.querySelector("#wordsList");
@@ -211,6 +214,26 @@ function renderResult(result) {
   pronunciationScore.textContent = formatScore(result.pronunciation_score, "%");
   clarityScore.textContent = formatScore(result.clarity_score, "%");
   paceScore.textContent = formatScore(result.pace_wpm);
+  
+  if (result.fluency_data) {
+    fluencyScore.textContent = result.fluency_data.score ? `${result.fluency_data.score}%` : "--";
+  } else {
+    fluencyScore.textContent = "--";
+  }
+  
+  if (result.communication_data) {
+    communicationScore.textContent = formatScore(result.communication_data.overall_score, "%");
+  } else {
+    communicationScore.textContent = "--";
+  }
+  
+  if (t3Details) {
+    t3Details.textContent = JSON.stringify({
+      fluency: result.fluency_data,
+      communication: result.communication_data
+    }, null, 2);
+  }
+
   transcriptText.textContent = result.transcript || "No transcript returned.";
 
   mistakesList.innerHTML = "";

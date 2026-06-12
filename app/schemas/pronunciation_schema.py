@@ -90,3 +90,7 @@ class AnalyzeResponse(BaseModel):
     mfa_available: bool = False
 
     mfa_error: Optional[str] = None
+
+    fluency_data: Optional[dict] = None
+
+    communication_data: Optional[dict] = None

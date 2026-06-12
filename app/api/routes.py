@@ -26,6 +26,9 @@ from app.pronunciation.scoring_service import build_word_scores
 from app.pronunciation.scoring_service import compare_expected_to_transcript
 
 
+from app.fluency.service import FluencyService
+from app.rubrics.service import RubricService
+
 router = APIRouter()
 
 PROMPTS_PATH = project_path("app/data/pronunciation_prompts.json")
@@ -202,6 +205,17 @@ async def analyze_audio(
             word_scores
         )
 
+    # --- TEAMMATE 3 INTEGRATION ---
+    fluency_service = FluencyService()
+    rubric_service = RubricService()
+    
+    # Needs to match the whisper dictionary format approximately
+    fluency_data = fluency_service.analyze_fluency(
+        {"words": [{"word": w.word, "start": w.start, "end": w.end} for w in words_output]},
+        total_duration_seconds=words_output[-1].end if words_output else 0.0
+    )
+    communication_data = rubric_service.evaluate_communication(transcript, expected_text)
+
     return AnalyzeResponse(
         transcript=transcript,
         expected_text=expected_text,
@@ -220,5 +234,7 @@ async def analyze_audio(
         phoneme_timeline=phoneme_timeline,
         word_scores=word_scores,
         mfa_available=mfa_available,
-        mfa_error=mfa_error
+        mfa_error=mfa_error,
+        fluency_data=fluency_data,
+        communication_data=communication_data
     )
