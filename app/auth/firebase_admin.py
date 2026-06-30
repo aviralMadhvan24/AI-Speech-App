@@ -36,6 +36,24 @@ _initialized = False
 _firebase_module = None  # type: ignore[var-annotated]
 
 
+def _resolve_gac_path() -> str | None:
+    """Read GOOGLE_APPLICATION_CREDENTIALS from `.env` (via settings) or
+    the real process environment, preferring the explicit settings value.
+    Returns an absolute path so firebase-admin doesn't get confused by the
+    server's working directory.
+    """
+    raw = settings.GOOGLE_APPLICATION_CREDENTIALS or os.environ.get(
+        "GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    abs_path = os.path.abspath(raw)
+    return abs_path
+
+
 def _do_initialize() -> None:
     """Import and configure firebase-admin lazily so the import is optional
     when `AUTH_BYPASS=true` and the package isn't installed."""
@@ -55,7 +73,7 @@ def _do_initialize() -> None:
         pass
 
     inline_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON
-    gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    gac_path = _resolve_gac_path()
 
     if inline_json:
         try:
@@ -70,11 +88,19 @@ def _do_initialize() -> None:
         return
 
     if gac_path:
-        # firebase-admin can read the file directly through ApplicationDefault.
-        cred = credentials.ApplicationDefault()
+        if not os.path.isfile(gac_path):
+            raise RuntimeError(
+                f"GOOGLE_APPLICATION_CREDENTIALS points to {gac_path} but "
+                "the file does not exist. Check the path in `.env`."
+            )
+        # `credentials.Certificate(path)` reads the JSON file directly. We
+        # prefer this over `ApplicationDefault()` because the latter only
+        # reads from `os.environ` which pydantic-settings may not populate.
+        cred = credentials.Certificate(gac_path)
         firebase_admin.initialize_app(cred)
         logger.info(
-            "firebase_admin initialized via GOOGLE_APPLICATION_CREDENTIALS"
+            "firebase_admin initialized via GOOGLE_APPLICATION_CREDENTIALS (%s)",
+            gac_path,
         )
         return
 
@@ -106,7 +132,7 @@ def init_firebase_admin() -> None:
             return
 
         inline_json = settings.FIREBASE_SERVICE_ACCOUNT_JSON
-        gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        gac_path = _resolve_gac_path()
         if not inline_json and not gac_path:
             raise RuntimeError(
                 "Auth is enabled but no Firebase credentials are configured. "

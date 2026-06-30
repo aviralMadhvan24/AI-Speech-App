@@ -39,8 +39,18 @@ interface AttemptsWire {
 
 // --- Fetch helpers ---
 
+import { getCurrentIdToken } from "./hooks/useAuth";
+
+async function authedHeaders(init?: RequestInit): Promise<Headers> {
+  const headers = new Headers(init?.headers || {});
+  const token = await getCurrentIdToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return headers;
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const headers = await authedHeaders(init);
+  const response = await fetch(url, { ...init, headers });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(
@@ -199,4 +209,71 @@ export async function fetchSessions(): Promise<SessionPreview[]> {
     sentencePreview: a.expected_text || a.transcript || "(no prompt)",
     available: !!a.pronunciation_available,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Interview Studio
+// ---------------------------------------------------------------------------
+
+export interface InterviewGestureMetric {
+  name: string;
+  score: number | null;
+  flag: string;
+}
+
+export interface InterviewAnalysisResult {
+  sessionId: string;
+  gestureScore: number;
+  metrics: InterviewGestureMetric[];
+  durationSeconds: number;
+  teacherScore: number | null;
+  combinedScore: number | null;
+  available: boolean;
+  message: string | null;
+}
+
+interface InterviewAnalysisWire {
+  session_id: string;
+  gesture_score: number;
+  metrics: Array<{ name: string; score: number | null; flag: string }>;
+  duration_seconds: number;
+  teacher_score: number | null;
+  combined_score: number | null;
+  available: boolean;
+  message: string | null;
+}
+
+export async function analyzeInterview(
+  video: Blob,
+  filename = "interview.webm",
+): Promise<InterviewAnalysisResult> {
+  // Strip any `;codecs=...` parameter the recorder appended so the
+  // backend's allow-list (video/webm, video/mp4, etc.) accepts the upload.
+  const bareType = (video.type || "video/webm").split(";")[0] || "video/webm";
+  const cleaned = new Blob([video], { type: bareType });
+
+  const formData = new FormData();
+  formData.append("video", cleaned, filename);
+
+  const raw = await fetchJson<InterviewAnalysisWire>("/interview/analyze", {
+    method: "POST",
+    body: formData,
+  });
+
+  return {
+    sessionId: raw.session_id,
+    gestureScore: Math.round(raw.gesture_score ?? 0),
+    metrics: (raw.metrics ?? []).map((m) => ({
+      name: m.name,
+      score: typeof m.score === "number" ? m.score : null,
+      flag: m.flag || "ok",
+    })),
+    durationSeconds: Number(raw.duration_seconds ?? 0),
+    teacherScore:
+      typeof raw.teacher_score === "number" ? raw.teacher_score : null,
+    combinedScore:
+      typeof raw.combined_score === "number" ? raw.combined_score : null,
+    available: !!raw.available,
+    message: raw.message ?? null,
+  };
 }

@@ -70,7 +70,14 @@ function computeWordsMastered(cache: Map<string, ScoreResult>): number {
 }
 
 export default function App() {
-  const { user, signIn, signOut } = useAuth();
+  const {
+    user,
+    loading: authLoading,
+    mode: authMode,
+    signInWithEmail,
+    signInWithGoogle,
+    signOut,
+  } = useAuth();
 
   const [view, setView] = useState<View>("main-menu");
   const [sentences, setSentences] = useState<Sentence[]>([]);
@@ -322,13 +329,30 @@ export default function App() {
     setSentenceIdx(0);
   }, []);
 
+  // --- Render: auth loading state (Firebase restoring session) ---
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-zinc-400 relative">
+        <BackgroundOrbs />
+        <div className="text-sm tracking-wide animate-pulse">
+          Restoring your session…
+        </div>
+      </div>
+    );
+  }
+
   // --- Render: pre-auth ---
 
   if (!user) {
     return (
       <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 relative">
         <BackgroundOrbs />
-        <LoginView onSignIn={signIn} />
+        <LoginView
+          mode={authMode}
+          onSignInWithEmail={signInWithEmail}
+          onSignInWithGoogle={signInWithGoogle}
+        />
       </div>
     );
   }
@@ -341,7 +365,7 @@ export default function App() {
       <Header
         user={user}
         onSignOut={() => {
-          signOut();
+          void signOut();
           setView("main-menu");
           setBattleSession(null);
         }}

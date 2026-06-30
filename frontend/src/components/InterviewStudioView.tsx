@@ -24,6 +24,7 @@ import {
   UserCheck,
   Video,
 } from "lucide-react";
+import { analyzeInterview, type InterviewGestureMetric } from "../api";
 
 interface InterviewStudioViewProps {
   onBack: () => void;
@@ -44,6 +45,56 @@ interface GestureScore {
   value: number;
   icon: typeof Eye;
   blurb: string;
+  flag: string;
+}
+
+const METRIC_META: Record<
+  string,
+  { label: string; icon: typeof Eye; blurb: string }
+> = {
+  posture: {
+    label: "Posture",
+    icon: PersonStanding,
+    blurb: "Upright shoulders and head alignment. Avoid slouching forward.",
+  },
+  eye_contact: {
+    label: "Eye Contact",
+    icon: Eye,
+    blurb: "Steady gaze on camera reads as confident.",
+  },
+  gesture: {
+    label: "Hand Gestures",
+    icon: Hand,
+    blurb: "Open, purposeful hand motion adds energy without distracting.",
+  },
+  stillness: {
+    label: "Stillness",
+    icon: Sparkles,
+    blurb: "Calm body, minimal fidgeting. Less is more.",
+  },
+  facial_expression: {
+    label: "Facial Expression",
+    icon: Smile,
+    blurb: "Micro-expressions stay engaged. Smile when introducing a story.",
+  },
+};
+
+function gestureScoresFromMetrics(metrics: InterviewGestureMetric[]): GestureScore[] {
+  return metrics.map((m) => {
+    const meta = METRIC_META[m.name] ?? {
+      label: m.name.replace(/_/g, " "),
+      icon: Sparkles,
+      blurb: "Body language metric reported by the gesture analyzer.",
+    };
+    return {
+      key: m.name,
+      label: meta.label,
+      icon: meta.icon,
+      blurb: meta.blurb,
+      value: typeof m.score === "number" ? m.score : 0,
+      flag: m.flag || "ok",
+    };
+  });
 }
 
 interface TeacherRubricItem {
@@ -89,39 +140,6 @@ const CATEGORY_LABEL: Record<InterviewQuestion["category"], string> = {
 
 function rand(min: number, max: number): number {
   return Math.round(min + Math.random() * (max - min));
-}
-
-function pickGestureScores(): GestureScore[] {
-  return [
-    {
-      key: "eye",
-      label: "Eye Contact",
-      value: rand(60, 90),
-      icon: Eye,
-      blurb: "Tracked face landmarks across the recording. Steady gaze on camera looks confident.",
-    },
-    {
-      key: "posture",
-      label: "Posture",
-      value: rand(65, 92),
-      icon: PersonStanding,
-      blurb: "Upright shoulders and head alignment. Avoid slouching forward.",
-    },
-    {
-      key: "gestures",
-      label: "Hand Gestures",
-      value: rand(55, 88),
-      icon: Hand,
-      blurb: "Natural, open hand motion adds energy without becoming distracting.",
-    },
-    {
-      key: "expression",
-      label: "Facial Expression",
-      value: rand(60, 90),
-      icon: Smile,
-      blurb: "Micro-expressions stay engaged. Smile when introducing a story.",
-    },
-  ];
 }
 
 function pickTeacherRubric(): TeacherRubricItem[] {
@@ -199,7 +217,13 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // MediaRecorder bits
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordedBlobRef = useRef<Blob | null>(null);
+
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [gestureScores, setGestureScores] = useState<GestureScore[]>([]);
   const [teacherRubric, setTeacherRubric] = useState<TeacherRubricItem[]>([]);
 
@@ -246,7 +270,50 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     [startCamera],
   );
 
+  function pickRecorderMimeType(): string | undefined {
+    if (typeof MediaRecorder === "undefined") return undefined;
+    const candidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+      "video/mp4",
+    ];
+    for (const c of candidates) {
+      if (MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return undefined;
+  }
+
   const startRecording = useCallback(() => {
+    if (!stream) return;
+    recordedBlobRef.current = null;
+    chunksRef.current = [];
+    setRecordingError(null);
+
+    const mimeType = pickRecorderMimeType();
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch (err) {
+      setRecordingError(
+        err instanceof Error ? err.message : "Could not start recorder",
+      );
+      return;
+    }
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data && event.data.size > 0) {
+        chunksRef.current.push(event.data);
+      }
+    };
+    recorder.onstop = () => {
+      const finalType = recorder.mimeType || mimeType || "video/webm";
+      recordedBlobRef.current = new Blob(chunksRef.current, { type: finalType });
+      chunksRef.current = [];
+    };
+
+    recorderRef.current = recorder;
+    recorder.start(500);
     setIsRecording(true);
     setElapsed(0);
     if (elapsedTimerRef.current !== null) {
@@ -256,36 +323,73 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     elapsedTimerRef.current = window.setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     }, 250);
-  }, []);
+  }, [stream]);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback(async (): Promise<Blob | null> => {
     setIsRecording(false);
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current);
       elapsedTimerRef.current = null;
     }
+
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      return recordedBlobRef.current;
+    }
+    return await new Promise<Blob | null>((resolve) => {
+      const originalOnStop = recorder.onstop;
+      recorder.onstop = (event) => {
+        if (originalOnStop) {
+          originalOnStop.call(recorder, event);
+        }
+        resolve(recordedBlobRef.current);
+      };
+      try {
+        recorder.stop();
+      } catch {
+        resolve(recordedBlobRef.current);
+      }
+    });
   }, []);
 
-  const beginAnalysis = useCallback(() => {
-    stopRecording();
+  const beginAnalysis = useCallback(async () => {
+    const blob = await stopRecording();
     stream?.getTracks().forEach((track) => track.stop());
     setStream(null);
     setAnalyzeProgress(0);
+    setAnalyzeError(null);
+    setGestureScores([]);
     setStage("analyze");
 
-    // Simulate the gesture analysis pipeline with a brief progress bar.
+    if (!blob || blob.size === 0) {
+      setAnalyzeError(
+        "No video was captured. Try again — keep the recording button pressed for a few seconds.",
+      );
+      return;
+    }
+
+    // Indeterminate progress driver — actual call duration is unknown
+    // (ss3 polling takes 10-30 s on CPU). The bar fakes asymptotic progress
+    // up to 95% and snaps to 100% once the API returns.
     const startedAt = Date.now();
-    const total = 2400; // ms
-    const tick = () => {
-      const pct = Math.min(100, Math.round(((Date.now() - startedAt) / total) * 100));
+    const ramp = window.setInterval(() => {
+      const elapsedMs = Date.now() - startedAt;
+      // Approaches 95 as elapsedMs grows; never quite gets there.
+      const pct = Math.min(95, Math.round(95 * (1 - Math.exp(-elapsedMs / 8000))));
       setAnalyzeProgress(pct);
-      if (pct < 100) {
-        window.setTimeout(tick, 80);
-      } else {
-        setGestureScores(pickGestureScores());
-      }
-    };
-    tick();
+    }, 150);
+
+    try {
+      const result = await analyzeInterview(blob);
+      setGestureScores(gestureScoresFromMetrics(result.metrics));
+      setAnalyzeProgress(100);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Gesture analysis failed";
+      setAnalyzeError(message);
+    } finally {
+      window.clearInterval(ramp);
+    }
   }, [stream, stopRecording]);
 
   const submitForReview = useCallback(() => {
@@ -305,6 +409,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     setGestureScores([]);
     setTeacherRubric([]);
     setAnalyzeProgress(0);
+    setAnalyzeError(null);
+    recordedBlobRef.current = null;
+    chunksRef.current = [];
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try {
+        recorderRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
     stream?.getTracks().forEach((track) => track.stop());
     setStream(null);
   }, [stream]);
@@ -503,31 +617,62 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
 
       {stage === "analyze" && (
         <section className="card-glass p-8 md:p-12 text-center space-y-5">
-          <Loader2 className="w-10 h-10 text-amber-300 animate-spin mx-auto" />
+          {!analyzeError && analyzeProgress < 100 && (
+            <Loader2 className="w-10 h-10 text-amber-300 animate-spin mx-auto" />
+          )}
           <div>
             <h2 className="text-2xl font-semibold text-zinc-100">
-              Analysing your body language
+              {analyzeError
+                ? "Analysis failed"
+                : analyzeProgress === 100
+                  ? "Body language summary"
+                  : "Analysing your body language"}
             </h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Posture · eye contact · gestures · expression
+              Posture · eye contact · gestures · stillness · expression
             </p>
           </div>
-          <div className="max-w-md mx-auto">
-            <div className="h-2 rounded-full bg-zinc-900/80 border border-zinc-800/60 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 transition-[width] duration-150"
-                style={{ width: `${analyzeProgress}%` }}
-              />
+
+          {!analyzeError && (
+            <div className="max-w-md mx-auto">
+              <div className="h-2 rounded-full bg-zinc-900/80 border border-zinc-800/60 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 transition-[width] duration-150"
+                  style={{ width: `${analyzeProgress}%` }}
+                />
+              </div>
+              <div className="mt-2 text-xs text-zinc-500 tabular-nums">
+                {analyzeProgress}%
+              </div>
             </div>
-            <div className="mt-2 text-xs text-zinc-500 tabular-nums">
-              {analyzeProgress}%
-            </div>
-          </div>
-          {analyzeProgress === 100 && (
+          )}
+
+          {analyzeError && (
+            <>
+              <div className="mx-auto max-w-md card-glass border-rose-500/40 px-4 py-3 text-sm text-rose-300 text-left">
+                {analyzeError}
+              </div>
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleRestart}
+                  className="btn-ghost inline-flex items-center gap-2 px-4 py-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Try a different question
+                </button>
+              </div>
+              <p className="text-xs text-zinc-500 max-w-md mx-auto leading-relaxed">
+                Tip: make sure the gesture-analysis microservice is running on
+                <code className="text-zinc-300"> http://localhost:8001</code>.
+                See <code className="text-zinc-300">README</code> for the conda
+                setup.
+              </p>
+            </>
+          )}
+
+          {!analyzeError && analyzeProgress === 100 && (
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-zinc-100">
-                Body language summary
-              </h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-left max-w-3xl mx-auto">
                 {gestureScores.map((g, index) => {
                   const Icon = g.icon;
@@ -544,12 +689,19 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                           {g.label}
                         </span>
                       </div>
-                      <div className={`mt-2 text-3xl font-bold tabular-nums ${verdict.textClass}`}>
+                      <div
+                        className={`mt-2 text-3xl font-bold tabular-nums ${verdict.textClass}`}
+                      >
                         {g.value}
                       </div>
                       <p className="mt-1 text-[11px] text-zinc-500 leading-snug">
                         {g.blurb}
                       </p>
+                      {g.flag !== "ok" && (
+                        <p className="mt-1 text-[10px] text-amber-300/80">
+                          Flag: {g.flag}
+                        </p>
+                      )}
                     </div>
                   );
                 })}

@@ -25,15 +25,28 @@ class Settings(BaseSettings):
     OUTPUT_DIR: str = "outputs"
     TEMP_DIR: str = "temp"
 
+    # --- Interview Studio (gesture microservice) ---
+    # URL of the ss3 Communication Skills Analyzer FastAPI app, which runs
+    # MediaPipe gesture analysis in a Python 3.11 conda env. Our backend
+    # proxies /interview/analyze to this service. Default points at the
+    # local conda env on port 8001.
+    CSA_SERVICE_URL: str = "http://127.0.0.1:8001"
+    # How long we'll wait (in seconds) for the ss3 service to finish one
+    # video. Each /analyze blocks for the duration so frontend just shows
+    # an "analyzing" spinner.
+    CSA_ANALYZE_TIMEOUT_SECONDS: int = 120
+
     # --- Auth ---
     # When true, the backend skips Firebase token verification entirely and
     # treats every request as a fake `dev@kiet.edu` user. Pair with
     # `VITE_AUTH_BYPASS=true` on the frontend.
     AUTH_BYPASS: bool = False
     # Inline JSON string of the Firebase service-account credentials. If not
-    # set, firebase-admin falls back to the `GOOGLE_APPLICATION_CREDENTIALS`
-    # env var (path to a JSON file) which the library reads itself.
+    # set, falls back to `GOOGLE_APPLICATION_CREDENTIALS` (path to a JSON file).
     FIREBASE_SERVICE_ACCOUNT_JSON: str | None = None
+    # Path to the Firebase service-account JSON. Loaded from `.env` so users
+    # don't have to also export it as a process env var.
+    GOOGLE_APPLICATION_CREDENTIALS: str | None = None
 
     class Config:
         env_file = ".env"

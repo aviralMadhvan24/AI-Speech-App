@@ -27,6 +27,8 @@ export default defineConfig({
       },
       "/analyze": "http://localhost:8080",
       "/attempts": "http://localhost:8080",
+      "/interview": "http://localhost:8080",
+      "/auth": "http://localhost:8080",
     },
   },
 });

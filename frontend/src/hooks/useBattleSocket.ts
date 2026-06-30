@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlayerScore, RoomState } from "../battleApi";
+import { getCurrentIdToken } from "./useAuth";
 
 interface WSStateMessage {
   type: "state";
@@ -27,12 +28,20 @@ export interface UseBattleSocket {
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000];
 
-function buildSocketUrl(roomCode: string, playerId: string): string {
+async function buildSocketUrl(
+  roomCode: string,
+  playerId: string,
+): Promise<string> {
   // Same-origin connection so the Vite dev proxy (or whatever serves the SPA
   // in prod) routes it to the FastAPI backend on port 8080.
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host;
   const params = new URLSearchParams({ player_id: playerId });
+  // Browsers can't set headers on WebSocket connections, so pass the Firebase
+  // ID token as a query param. Backend reads `id_token` and verifies before
+  // accepting the connection.
+  const token = await getCurrentIdToken();
+  if (token) params.set("id_token", token);
   return `${protocol}//${host}/battle/ws/${encodeURIComponent(
     roomCode,
   )}?${params.toString()}`;
@@ -84,9 +93,19 @@ export function useBattleSocket(
       }
     };
 
-    const connect = () => {
+    const connect = async () => {
       if (cancelled) return;
-      const url = buildSocketUrl(roomCode, playerId);
+      let url: string;
+      try {
+        url = await buildSocketUrl(roomCode, playerId);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Could not build socket URL.";
+        setError(message);
+        scheduleReconnect();
+        return;
+      }
+      if (cancelled) return;
       let ws: WebSocket;
       try {
         ws = new WebSocket(url);
@@ -153,10 +172,12 @@ export function useBattleSocket(
       const delay =
         RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
       reconnectAttemptRef.current = attempt + 1;
-      reconnectTimerRef.current = window.setTimeout(connect, delay);
+      reconnectTimerRef.current = window.setTimeout(() => {
+        void connect();
+      }, delay);
     };
 
-    connect();
+    void connect();
 
     return () => {
       cancelled = true;

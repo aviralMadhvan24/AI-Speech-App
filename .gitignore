@@ -48,3 +48,4 @@ postgres_data/
 node_modules/
 dist/
 build/
+.firebase-admin.json

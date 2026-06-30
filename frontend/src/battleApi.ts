@@ -72,8 +72,18 @@ export interface JoinRoomResponse {
   state: RoomState;
 }
 
+import { getCurrentIdToken } from "./hooks/useAuth";
+
+async function authedHeaders(init?: RequestInit): Promise<Headers> {
+  const headers = new Headers(init?.headers || {});
+  const token = await getCurrentIdToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return headers;
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const headers = await authedHeaders(init);
+  const response = await fetch(url, { ...init, headers });
   if (!response.ok) {
     let detail = "";
     try {
@@ -86,7 +96,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
       detail = await response.text().catch(() => "");
     }
     const message =
-      response.status === 404
+      response.status === 401
+        ? "Sign in first to use battles."
+        : response.status === 403
+        ? `Forbidden: ${detail || "your account isn't allowed"}.`
+        : response.status === 404
         ? "Room not found. Double-check the code."
         : response.status === 409
         ? detail === "room_full"

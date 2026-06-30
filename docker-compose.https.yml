@@ -1,0 +1,36 @@
+# Optional overlay for HTTPS deployment.
+#
+# Use it like this when you actually have a domain pointing at the host:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+#
+# It pulls in a Caddy reverse proxy in front of the `app` service. Caddy
+# auto-provisions Let's Encrypt certs. Edit `Caddyfile` to set the right
+# domain.
+#
+# For plain http://localhost demos, keep using `docker-compose.yml` alone.
+
+services:
+  proxy:
+    image: caddy:2.8-alpine
+    container_name: speech_proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # The app container no longer needs to expose 8080 to the host — Caddy
+  # talks to it on the internal compose network. Override the published
+  # port so only 80/443 are reachable from outside.
+  app:
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:
