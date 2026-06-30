@@ -1,0 +1,46 @@
+# Body Language module configuration.
+# Thresholds and weights used by the five analyzers and the Scoring_Engine.
+# All values here are the design-doc defaults; the config loader (task 5.1)
+# overlays user-provided values on top of built-in defaults and warns about
+# any missing analyzer threshold fields (Req 12.4).
+
+sampling:
+  # Frames per second to sample from the source video, regardless of
+  # source fps. 5 fps × 120 s = 600 frames maximum (Req 2.8 budget).
+  fps: 5
+
+posture:
+  # Max deviation from vertical for the neck-to-shoulder vector (degrees).
+  neck_to_shoulder_max_deg: 15
+  # Max deviation from vertical for the shoulder-to-hip vector (degrees).
+  shoulder_to_hip_max_deg: 10
+
+eye_contact:
+  # Max absolute head yaw to count a frame as on-camera (degrees).
+  yaw_max_deg: 15
+  # Max absolute head pitch to count a frame as on-camera (degrees).
+  pitch_max_deg: 15
+
+gesture:
+  # Hand-to-face proximity threshold as a fraction of the frame diagonal.
+  hand_to_face_pct_diag: 0.10
+
+stillness:
+  # Normalized displacement variance at or below this maps to score 100.
+  variance_min: 0.0005
+  # Normalized displacement variance at or above this maps to score 0.
+  variance_max: 0.01
+
+facial_expression:
+  # Smile is true when mouth-corner / inter-eye ratio exceeds this value.
+  smile_ratio_threshold: 0.45
+  # Smile percentage is capped at this value before linear rescale to 0..100.
+  smile_cap_pct: 80
+
+weights:
+  # Per-metric weights used by the Scoring_Engine. Must sum to 1.0.
+  posture:           0.20
+  eye_contact:       0.25
+  gesture:           0.20
+  stillness:         0.15
+  facial_expression: 0.20

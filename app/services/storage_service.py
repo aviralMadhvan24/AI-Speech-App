@@ -1,18 +1,7 @@
-import aiofiles
-import os
+from app.audio.storage import save_uploaded_audio
 
-from fastapi import UploadFile
 
-from app.utils.file_utils import generate_filename
+async def save_upload_file(file):
+    audio_asset = await save_uploaded_audio(file)
 
-async def save_upload_file(file: UploadFile):
-
-    filename = generate_filename(file.filename)
-
-    file_path = os.path.join("uploads", filename)
-
-    async with aiofiles.open(file_path, "wb") as out_file:
-        content = await file.read()
-        await out_file.write(content)
-
-    return file_path
+    return audio_asset.original_path

@@ -1,35 +1,37 @@
-version: "3.9"
+# Production-style compose. One container running the full stack:
+# FastAPI backend + the prebuilt React frontend served from /.
+#
+# Usage:
+#   docker compose up --build
+# Then visit http://localhost:8080
+#
+# First /analyze call downloads ~1.4 GB of model weights into the
+# `model_cache` volume so they survive container restarts.
 
 services:
-
-  backend:
-    build: .
-    container_name: speech_backend
-
+  app:
+    build:
+      context: .
+    container_name: speech_app
     ports:
-      - "8000:8000"
-
-    volumes:
-      - .:/app
-
-    depends_on:
-      - db
-
-  db:
-    image: postgres:15
-
-    container_name: speech_db
-
+      - "8080:8080"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: speech_db
-
-    ports:
-      - "5432:5432"
-
+      # See .env.example for the full list of tunables.
+      PRONUNCIATION_PROVIDER: ${PRONUNCIATION_PROVIDER:-hf_phoneme}
+      HF_PHONEME_MODEL_NAME: ${HF_PHONEME_MODEL_NAME:-facebook/wav2vec2-lv-60-espeak-cv-ft}
+      HF_HOME: /cache/huggingface
+      XDG_CACHE_HOME: /cache
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Persist downloaded model weights across container rebuilds.
+      - model_cache:/cache
+      # Persist analyzed attempts (JSONL log + uploaded/processed audio).
+      - app_uploads:/app/uploads
+      - app_temp:/app/temp
+      - app_outputs:/app/outputs
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
+  model_cache:
+  app_uploads:
+  app_temp:
+  app_outputs:

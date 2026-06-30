@@ -3,90 +3,68 @@ from pydantic import Field
 from typing import List
 from typing import Optional
 
-
-class WordTimestamp(BaseModel):
-
-    word: str
-
-    start: float
-
-    end: float
-
-    probability: float
+from app.audio.schemas import AudioAsset
+from app.asr.schemas import TranscriptionResult
+from app.fluency.schemas import FluencyResult
 
 
-class PronunciationMistake(BaseModel):
+class PhonemeError(BaseModel):
 
-    expected_word: str
+    type: str
 
-    heard_word: Optional[str] = None
+    word: Optional[str] = None
 
-    feedback: str
+    expected: Optional[str] = None
 
+    observed: Optional[str] = None
 
-class PhonemeTiming(BaseModel):
-
-    phoneme: str
-
-    start: float
-
-    end: float
+    message: str
 
 
-class ExpectedWordPhonemes(BaseModel):
+class WordPronunciationResult(BaseModel):
 
     word: str
 
-    phonemes: List[str] = Field(default_factory=list)
-
-
-class WordPronunciationScore(BaseModel):
-
-    word: str
-
-    heard_word: Optional[str] = None
-
-    score: float
-
-    word_match_score: float
-
-    confidence_score: float
-
-    phoneme_score: Optional[float] = None
+    score: Optional[float] = None
 
     expected_phonemes: List[str] = Field(default_factory=list)
 
-    heard_phonemes: List[str] = Field(default_factory=list)
+    observed_phonemes: List[str] = Field(default_factory=list)
 
-    feedback: str
+    errors: List[PhonemeError] = Field(default_factory=list)
+
+    feedback: Optional[str] = None
+
+
+class PronunciationResult(BaseModel):
+
+    available: bool
+
+    provider: Optional[str] = None
+
+    overall_score: Optional[float] = None
+
+    words: List[WordPronunciationResult] = Field(default_factory=list)
+
+    phoneme_errors: List[PhonemeError] = Field(default_factory=list)
+
+    message: Optional[str] = None
+
+    raw: Optional[dict] = None
 
 
 class AnalyzeResponse(BaseModel):
 
-    transcript: str
+    analysis_id: str
 
-    expected_text: Optional[str] = None
+    audio: AudioAsset
 
-    language: str
+    transcription: TranscriptionResult
 
-    processed_audio_path: str
+    pronunciation: PronunciationResult
 
-    words: List[WordTimestamp]
+    fluency: FluencyResult
 
-    pronunciation_score: Optional[float] = None
+    communication: dict = Field(default_factory=dict)
 
-    clarity_score: float
-
-    pace_wpm: float
-
-    mistakes: List[PronunciationMistake] = Field(default_factory=list)
-
-    expected_phonemes: List[ExpectedWordPhonemes] = Field(default_factory=list)
-
-    phoneme_timeline: List[PhonemeTiming] = Field(default_factory=list)
-
-    word_scores: List[WordPronunciationScore] = Field(default_factory=list)
-
-    mfa_available: bool = False
-
-    mfa_error: Optional[str] = None
+    debug: dict = Field(default_factory=dict)

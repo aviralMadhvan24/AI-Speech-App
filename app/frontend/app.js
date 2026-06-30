@@ -15,7 +15,9 @@ const paceScore = document.querySelector("#paceScore");
 const transcriptText = document.querySelector("#transcriptText");
 const mistakesList = document.querySelector("#mistakesList");
 const wordsList = document.querySelector("#wordsList");
-const phonemesList = document.querySelector("#phonemesList");
+const providerInfo = document.querySelector("#providerInfo");
+const attemptsList = document.querySelector("#attemptsList");
+const refreshAttempts = document.querySelector("#refreshAttempts");
 const waveCanvas = document.querySelector("#waveCanvas");
 const modeButtons = document.querySelectorAll(".mode-button");
 
@@ -156,6 +158,7 @@ async function analyzeAudio() {
     const result = await response.json();
     renderResult(result);
     setStatus("Complete");
+    loadAttempts().catch(() => {});
   } catch (error) {
     setStatus(error.message);
   } finally {
@@ -164,83 +167,231 @@ async function analyzeAudio() {
 }
 
 function renderResult(result) {
-  pronunciationScore.textContent = formatScore(result.pronunciation_score, "%");
-  clarityScore.textContent = formatScore(result.clarity_score, "%");
-  paceScore.textContent = formatScore(result.pace_wpm);
-  transcriptText.textContent = result.transcript || "No transcript returned.";
+  const pronunciation = result.pronunciation || {};
+  const fluency = result.fluency || {};
+  const transcription = result.transcription || {};
+  const debug = result.debug || {};
+  const transcriptMatchScore = debug.transcript_match_score;
+
+  pronunciationScore.textContent = pronunciation.available
+    ? formatScore(pronunciation.overall_score, "%")
+    : "--";
+  clarityScore.textContent = formatScore(fluency.clarity_score, "%");
+  paceScore.textContent = formatScore(fluency.words_per_minute);
+  transcriptText.textContent = transcription.text || transcription.normalized_text || "";
 
   mistakesList.innerHTML = "";
   wordsList.innerHTML = "";
-  phonemesList.innerHTML = "";
 
-  if (!result.mistakes.length) {
+  renderProviderInfo(result);
+
+  const transcriptMistakes = debug.transcript_mistakes || [];
+  const phonemeErrors = pronunciation.phoneme_errors || [];
+
+  if (!transcriptMistakes.length && !phonemeErrors.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "No mistakes found.";
+    empty.textContent = transcriptMatchScore === null || transcriptMatchScore === undefined
+      ? "Add expected text to check transcript mismatch."
+      : "Transcript matches expected text.";
     mistakesList.appendChild(empty);
   }
 
-  result.mistakes.forEach((mistake) => {
+  transcriptMistakes.forEach((mistake) => {
     const item = document.createElement("div");
     item.className = "mistake-item";
     item.innerHTML = `
       <div>
         <strong>${mistake.expected_word} -> ${mistake.heard_word || "missing"}</strong>
-        <p>${mistake.feedback}</p>
+        <p>Transcript: ${mistake.feedback}</p>
       </div>
-      <span class="pill">Check</span>
+      <span class="pill">Text</span>
     `;
     mistakesList.appendChild(item);
   });
 
-  const wordScores = result.word_scores && result.word_scores.length
-    ? result.word_scores
-    : result.words.map((word) => ({
-      word: word.word,
-      heard_word: word.word,
-      score: word.probability * 100,
-      confidence_score: word.probability * 100,
-      expected_phonemes: [],
-      feedback: `${word.start.toFixed(2)}s - ${word.end.toFixed(2)}s`
-    }));
-
-  wordScores.forEach((wordScore) => {
+  phonemeErrors.forEach((error) => {
     const item = document.createElement("div");
-    item.className = "word-item";
-    const phonemes = wordScore.expected_phonemes && wordScore.expected_phonemes.length
-      ? wordScore.expected_phonemes.join(" ")
-      : "No phoneme data";
-
+    item.className = "mistake-item";
+    const wordLabel = error.word ? `${error.word}: ` : "";
+    const expectedObserved = error.expected || error.observed
+      ? `<p>Expected: ${error.expected || "—"} → Heard: ${error.observed || "—"}</p>`
+      : "";
     item.innerHTML = `
       <div>
-        <strong>${wordScore.word} -> ${wordScore.heard_word || "missing"}</strong>
-        <span>${phonemes}</span>
-        <p>${wordScore.feedback}</p>
+        <strong>${wordLabel}${error.message}</strong>
+        ${expectedObserved}
       </div>
-      <span class="pill">${Math.round(wordScore.score)}%</span>
+      <span class="pill">Phoneme</span>
     `;
-    wordsList.appendChild(item);
+    mistakesList.appendChild(item);
   });
 
-  if (!result.phoneme_timeline || !result.phoneme_timeline.length) {
+  if (pronunciation.available) {
+    const words = pronunciation.words || [];
+    words.forEach((wordScore) => {
+      const item = document.createElement("div");
+      item.className = "word-item";
+
+      const expected = wordScore.expected_phonemes && wordScore.expected_phonemes.length
+        ? wordScore.expected_phonemes.join(" ")
+        : "";
+      const heard = wordScore.observed_phonemes && wordScore.observed_phonemes.length
+        ? wordScore.observed_phonemes.join(" ")
+        : "";
+
+      const phonemeLine = expected || heard
+        ? `<span>Expected: ${expected || "—"}</span>
+           <span>Heard: ${heard || "—"}</span>`
+        : `<span>ASR word</span>`;
+
+      item.innerHTML = `
+        <div>
+          <strong>${wordScore.word}</strong>
+          ${phonemeLine}
+          <p>${wordScore.feedback || ""}</p>
+        </div>
+        <span class="pill">${formatScore(wordScore.score, "%")}</span>
+      `;
+      wordsList.appendChild(item);
+    });
+  } else {
+    const words = transcription.words || [];
+    words.forEach((word) => {
+      const item = document.createElement("div");
+      item.className = "word-item";
+      item.innerHTML = `
+        <div>
+          <strong>${word.word}</strong>
+          <span>ASR word</span>
+          <p>${word.start.toFixed(2)}s - ${word.end.toFixed(2)}s</p>
+        </div>
+        <span class="pill">--</span>
+      `;
+      wordsList.appendChild(item);
+    });
+  }
+}
+
+function renderProviderInfo(result) {
+  const pronunciation = result.pronunciation || {};
+  const communication = result.communication || {};
+  const transcription = result.transcription || {};
+  const audio = result.audio || {};
+
+  providerInfo.innerHTML = "";
+
+  const rows = [
+    {
+      label: "Pronunciation",
+      status: pronunciation.available ? "available" : "unavailable",
+      value: pronunciation.available
+        ? `${pronunciation.provider || "unknown"} provider`
+        : "Not configured",
+      detail: pronunciation.message || ""
+    },
+    {
+      label: "Transcription",
+      status: "available",
+      value: `${transcription.provider || "whisper"} (${transcription.model || "small"})`,
+      detail: `Language: ${transcription.language || "en"}`
+    },
+    {
+      label: "Communication",
+      status: communication.available ? "available" : "unavailable",
+      value: communication.available
+        ? `${communication.rubric_version || "rubric"}`
+        : "Not configured",
+      detail: communication.message || ""
+    },
+    {
+      label: "Audio",
+      status: "available",
+      value: audio.duration_seconds
+        ? `${audio.duration_seconds.toFixed(2)}s @ ${audio.sample_rate || "?"} Hz`
+        : "processed",
+      detail: audio.processed_path || ""
+    }
+  ];
+
+  rows.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = `provider-row provider-${row.status}`;
+    item.innerHTML = `
+      <div>
+        <strong>${row.label}</strong>
+        <span>${row.value}</span>
+        ${row.detail ? `<p>${row.detail}</p>` : ""}
+      </div>
+      <span class="pill provider-status-pill">${row.status}</span>
+    `;
+    providerInfo.appendChild(item);
+  });
+}
+
+function renderAttempts(attempts) {
+  attemptsList.innerHTML = "";
+
+  if (!attempts.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = result.mfa_available
-      ? "No phoneme timings returned."
-      : "MFA not available yet. Install MFA models to enable phoneme timing.";
-    phonemesList.appendChild(empty);
+    empty.textContent = "No attempts yet. Record or upload audio to start.";
+    attemptsList.appendChild(empty);
     return;
   }
 
-  result.phoneme_timeline.forEach((phoneme) => {
+  attempts.forEach((attempt) => {
     const item = document.createElement("div");
-    item.className = "phoneme-item";
+    item.className = "attempt-item";
+
+    const created = new Date(attempt.created_at);
+    const timeLabel = isNaN(created.getTime())
+      ? attempt.created_at
+      : created.toLocaleString();
+
+    const pronScore = attempt.pronunciation_available && attempt.pronunciation_score !== null
+      ? `${Math.round(attempt.pronunciation_score)}%`
+      : "—";
+    const clarity = attempt.clarity_score !== null && attempt.clarity_score !== undefined
+      ? `${Math.round(attempt.clarity_score)}%`
+      : "—";
+    const pace = attempt.pace_wpm
+      ? `${Math.round(attempt.pace_wpm)} wpm`
+      : "—";
+
     item.innerHTML = `
-      <strong>${phoneme.phoneme}</strong>
-      <span>${phoneme.start.toFixed(2)}s - ${phoneme.end.toFixed(2)}s</span>
+      <div class="attempt-main">
+        <strong>${attempt.expected_text || "(no prompt)"}</strong>
+        <p class="attempt-heard">Heard: ${attempt.transcript || "—"}</p>
+        <p class="attempt-meta">${timeLabel} · ${attempt.pronunciation_provider || "no provider"} · ${attempt.mistakes_count} mismatch${attempt.mistakes_count === 1 ? "" : "es"}</p>
+      </div>
+      <div class="attempt-scores">
+        <span class="pill">Pron ${pronScore}</span>
+        <span class="pill">Clarity ${clarity}</span>
+        <span class="pill">${pace}</span>
+      </div>
     `;
-    phonemesList.appendChild(item);
+    attemptsList.appendChild(item);
   });
+}
+
+async function loadAttempts() {
+  try {
+    const response = await fetch("/attempts?limit=10");
+
+    if (!response.ok) {
+      throw new Error(`Failed to load attempts (${response.status})`);
+    }
+
+    const data = await response.json();
+    renderAttempts(data.attempts || []);
+  } catch (error) {
+    attemptsList.innerHTML = "";
+    const message = document.createElement("p");
+    message.className = "empty-state";
+    message.textContent = error.message;
+    attemptsList.appendChild(message);
+  }
 }
 
 function drawWave() {
@@ -298,5 +449,10 @@ modeButtons.forEach((button) => {
   button.addEventListener("click", () => setMode(button.dataset.mode));
 });
 
+if (refreshAttempts) {
+  refreshAttempts.addEventListener("click", () => loadAttempts());
+}
+
 loadPrompts().catch((error) => setStatus(error.message));
+loadAttempts().catch(() => {});
 drawWave();

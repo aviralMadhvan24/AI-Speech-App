@@ -361,3 +361,145 @@ body.live-mode #promptSelect {
     grid-template-columns: 1fr;
   }
 }
+
+
+.provider-panel,
+.attempts-panel {
+  margin-top: 0;
+}
+
+.provider-info {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.provider-row.provider-available {
+  border-left-color: var(--green);
+}
+
+.provider-row.provider-unavailable {
+  border-left-color: var(--gold);
+  background: #fffaf2;
+}
+
+.provider-row strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.provider-row span {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.provider-row p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.provider-status-pill {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.provider-available .provider-status-pill {
+  background: var(--green-soft);
+  color: #124c40;
+}
+
+.provider-unavailable .provider-status-pill {
+  background: #fdebd3;
+  color: #6c3f06;
+}
+
+.attempts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.attempts-header h2 {
+  margin-bottom: 0;
+}
+
+.attempts-header .secondary-button {
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.attempts-list {
+  display: grid;
+  gap: 10px;
+}
+
+.attempt-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.attempt-main strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 15px;
+}
+
+.attempt-heard {
+  color: var(--ink);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.attempt-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attempt-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.attempt-scores .pill {
+  min-width: 86px;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .attempt-item {
+    grid-template-columns: 1fr;
+  }
+
+  .attempt-scores {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}

@@ -1,52 +1,15 @@
-import os
-import subprocess
-
-from app.core.logger import logger
-from app.core.exceptions import AudioProcessingException
-from app.utils.ffmpeg_utils import get_ffmpeg_command
+from app.audio.preprocessing import preprocess_audio_asset
+from app.audio.schemas import AudioAsset
 
 
 def preprocess_audio(input_path: str):
+    audio_asset = AudioAsset(
+        audio_id="legacy",
+        original_path=input_path
+    )
 
-    input_base_name = os.path.splitext(os.path.basename(input_path))[0]
+    processed_audio = preprocess_audio_asset(
+        audio_asset
+    )
 
-    output_filename = f"processed_{input_base_name}.wav"
-    output_path = os.path.join("temp", output_filename)
-
-    command = [
-        get_ffmpeg_command(),
-        "-y",
-        "-i",
-        input_path,
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-af",
-        "loudnorm",
-        output_path
-    ]
-
-    try:
-        logger.info(f"Processing audio: {input_path}")
-
-        subprocess.run(
-            command,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        logger.info(f"Processed audio saved: {output_path}")
-
-        return output_path
-
-    except FileNotFoundError:
-        logger.error("ffmpeg executable not found")
-        raise AudioProcessingException(
-            detail="ffmpeg executable not found"
-        )
-
-    except subprocess.CalledProcessError as e:
-        logger.error(e.stderr.decode())
-        raise AudioProcessingException()
+    return processed_audio.processed_path

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.vitest/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Vite
+frontend/dist/
+
+# Uploaded videos (local VideoStore)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Prisma (SQLite dev database)
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/prisma/migrations/dev.db

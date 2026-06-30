@@ -1,0 +1,4 @@
+host: 127.0.0.1
+port: 8000
+data_dir: ./data
+retention_limit: 20

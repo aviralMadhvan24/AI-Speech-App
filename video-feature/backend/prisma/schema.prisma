@@ -1,0 +1,61 @@
+// Prisma schema for the Mock Interview MVP.
+// SQLite is used as a zero-config file database for the MVP; the datasource URL
+// can later be swapped to Postgres without changing application code.
+//
+// The User / Submission / Evaluation models are defined and migrated in Task 5.
+// Task 1 only wires up Prisma with a SQLite datasource so the backend boots.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// A registered user, either a student or a teacher (role stored as a string).
+model User {
+  id           String       @id @default(uuid())
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         String // 'student' | 'teacher'
+
+  submissions  Submission[]
+  evaluations  Evaluation[]
+}
+
+// A single recorded video answer to a seeded question by a student.
+model Submission {
+  id         String      @id @default(uuid())
+  studentId  String // -> User.id
+  questionId Int // -> QUESTIONS constant
+  videoPath  String
+  status     String // 'pending' | 'evaluated'
+  createdAt  DateTime    @default(now())
+
+  student    User        @relation(fields: [studentId], references: [id])
+  evaluation Evaluation?
+}
+
+// A teacher's completed review of a submission (one evaluation per submission).
+model Evaluation {
+  id                String   @id @default(uuid())
+  submissionId      String   @unique // -> Submission.id (one evaluation per submission)
+  teacherId         String // -> User.id
+  confidence        Int
+  communication     Int
+  fluency           Int
+  clarity           Int
+  vocabularyGrammar Int
+  bodyLanguage      Int
+  eyeContact        Int
+  professionalism   Int
+  overallScore      Int // 0..100, computed
+  overallFeedback   String
+  createdAt         DateTime @default(now())
+
+  submission        Submission @relation(fields: [submissionId], references: [id])
+  teacher           User       @relation(fields: [teacherId], references: [id])
+}

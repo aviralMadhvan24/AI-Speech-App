@@ -1,0 +1,23 @@
+{
+  "name": "mock-interview-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mock Interview MVP — Express + TypeScript backend (SQLite via Prisma) and a Vite React + TypeScript + Tailwind frontend.",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "build:backend": "npm run build --workspace backend",
+    "build:frontend": "npm run build --workspace frontend",
+    "test": "npm run test --workspace backend",
+    "test:backend": "npm run test --workspace backend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

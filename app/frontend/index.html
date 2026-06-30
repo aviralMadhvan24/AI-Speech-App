@@ -76,18 +76,30 @@
           </div>
 
           <div class="panel mistakes-panel">
-            <h2>Mistakes</h2>
+            <h2>Transcript Mismatch</h2>
             <div id="mistakesList" class="mistakes-list"></div>
           </div>
 
           <div class="panel words-panel">
-            <h2>Word Scores</h2>
+            <h2>Transcript Words</h2>
             <div id="wordsList" class="words-list"></div>
           </div>
 
-          <div class="panel phonemes-panel">
-            <h2>Phoneme Timeline</h2>
-            <div id="phonemesList" class="phonemes-list"></div>
+          <div class="panel provider-panel">
+            <h2>Assessment Provider</h2>
+            <div id="providerInfo" class="provider-info">
+              <p class="empty-state">No analysis yet.</p>
+            </div>
+          </div>
+
+          <div class="panel attempts-panel">
+            <div class="attempts-header">
+              <h2>Recent Attempts</h2>
+              <button id="refreshAttempts" class="secondary-button" type="button">Refresh</button>
+            </div>
+            <div id="attemptsList" class="attempts-list">
+              <p class="empty-state">Loading attempts...</p>
+            </div>
           </div>
         </section>
       </section>

@@ -1,0 +1,71 @@
+# Feedback_Generator text bank.
+# Score bands: low = 0-39, mid = 40-69, high = 70-100.
+# `recheck` is emitted in addition to any band suggestion when a metric
+# flag is not "ok" (Req 9.5).
+# The config loader (task 5.1) hard-fails at startup if any metric is
+# missing one of the four entries below (Req 12.6).
+
+posture:
+  low:
+    - "Sit up tall. Imagine a string gently pulling the top of your head toward the ceiling."
+    - "You slouched for most of the recording. Pull your shoulders back and stack your head over your hips."
+    - "Try resting your hands lightly on the desk so your shoulders relax down and back instead of curling forward."
+  mid:
+    - "Good posture overall. Watch for slouching when you pause to think."
+    - "You held an upright frame for stretches, but drifted forward at times. Reset every 20 seconds or so."
+  high:
+    - "Excellent posture throughout. You looked grounded and confident."
+    - "Your upper body stayed open and upright the whole way. Keep doing this."
+  recheck: "Couldn't read your posture clearly. Re-record with your full upper body in frame and even lighting on your shoulders."
+
+eye_contact:
+  low:
+    - "Look at the camera lens, not the screen. The camera is your interviewer's eyes."
+    - "You spent most of the recording looking away. Pick a spot just above the lens and return to it after every sentence."
+    - "Try placing a small sticky note next to the lens as a visual anchor while you practice."
+  mid:
+    - "Decent eye contact. You drifted to your notes or the screen a few times. Glance, then come back."
+    - "You held the camera for stretches but lost it on longer answers. Pause, breathe, return."
+  high:
+    - "Strong, steady eye contact. You looked engaged and present."
+    - "You held the camera through the whole recording without staring. Natural and confident."
+  recheck: "Couldn't reliably detect your face. Re-record facing the camera with light on your face, not behind you."
+
+gesture:
+  low:
+    - "Your hands rarely came into frame or stayed clasped. Let them move at chest level to emphasise key points."
+    - "Use open, palm-up gestures when you make a point. They read as honest and inviting."
+    - "Avoid touching your face or crossing your arms. Both signal nervousness, even when you feel fine."
+  mid:
+    - "Your gestures helped your words at times, but you also fell back to resting or hiding your hands. Aim for more open gestures on key phrases."
+    - "Mostly good gesture use. Watch for occasional hand-to-face moments when you pause."
+  high:
+    - "Great gesture variety. Your hands supported your words instead of distracting from them."
+    - "Open, controlled gestures throughout. You looked comfortable and expressive."
+  recheck: "Couldn't see your hands well enough. Re-record framed from the waist up so your hands stay visible when you gesture."
+
+stillness:
+  low:
+    - "You moved a lot, especially with your head and hands. Anchor your feet and let only intentional movement happen."
+    - "Try recording with your hands resting at the start of each sentence. Move them on the verbs, not on every word."
+    - "Lots of small fidgeting. Take a slow breath before answering so your body settles before you speak."
+  mid:
+    - "Reasonably composed, with a few bursts of movement. Watch for fidgeting when you pause to think."
+    - "You stayed mostly still but shifted weight a few times. Plant your feet and keep your torso quiet."
+  high:
+    - "Very composed. You moved with intention rather than nervous energy."
+    - "Calm, controlled stillness. You looked like you belonged in the room."
+  recheck: "Couldn't read enough of your body between frames to judge stillness. Re-record with your full upper body in steady, even lighting."
+
+facial_expression:
+  low:
+    - "Your face stayed flat for most of the recording. A small, genuine smile when you greet and at the end of a strong point goes a long way."
+    - "Try smiling for the first few seconds of the recording. It warms up your voice as well as your face."
+    - "Practice a soft smile at rest. It reads as approachable without looking forced."
+  mid:
+    - "You smiled at moments. Try adding a brief smile when you finish a positive point, not only at the start."
+    - "Some warmth on your face, but long stretches looked neutral. Match expression to what you're saying."
+  high:
+    - "Warm, expressive face. You looked engaged and easy to talk to."
+    - "Great facial energy. Your expression supported your message throughout."
+  recheck: "Couldn't see your face for enough of the recording to judge expression. Re-record with light on your face and the camera at eye level."

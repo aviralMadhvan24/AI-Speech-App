@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "communication-skills-analyzer"
+version = "0.1.0"
+description = "Phase 1 of the LeetCode-for-soft-skills platform: a local web app that analyzes body language from a short webcam recording."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "CSA Team" }]
+
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "opencv-python>=4.9",
+    # Pin to 0.10.x which ships the legacy ``mp.solutions`` API used by our
+    # analyzers. Newer 0.11+ wheels (especially on Py 3.13) dropped it.
+    "mediapipe>=0.10.11,<0.11",
+    "numpy>=1.26,<2.0",
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+    "httpx>=0.27",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+exclude = ["tests*", "frontend*", "data*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "backend"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning:google.*",
+    "ignore::DeprecationWarning:mediapipe.*",
+]

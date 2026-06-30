@@ -1,0 +1,7 @@
+{
+  "id": "body_language",
+  "display_name": "Body Language",
+  "version": "1.0.0",
+  "entry": "backend.modules.body_language:run",
+  "config_files": ["config.yaml", "suggestions.yaml"]
+}

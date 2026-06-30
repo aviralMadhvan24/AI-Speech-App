@@ -1,0 +1,39 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    volumes:
+      - ./:/app
+    environment:
+      - PRONUNCIATION_PROVIDER=local_acoustic
+      - GOPT_FEATURE_DIR=/data/gopt_features
+      - GOPT_MODEL_DIR=/models/pronunciation/gopt
+    ports:
+      - "8000:8000"
+    depends_on:
+      - gopt_scoring
+
+  gopt_scoring:
+    build: ./docker/gopt_scoring
+    volumes:
+      - ./models/pronunciation/gopt:/models/pronunciation/gopt:ro
+      - ./temp/gopt_features:/data/gopt_features
+    environment:
+      - GOPT_FEATURE_DIR=/data/gopt_features
+      - GOPT_MODEL_DIR=/models/pronunciation/gopt
+    ports:
+      - "8001:8001"
+
+  kaldi_worker:
+    build: ./docker/kaldi_worker
+    volumes:
+      - ./temp/kaldi_gop:/work
+      - ./temp/gopt_features:/data/gopt_features
+      - ./uploads:/uploads
+    environment:
+      - GOP_WORK_DIR=/work
+      - GOP_FEATURE_DIR=/data/gopt_features
+    command: ["/bin/bash"]
+
+# Note: The Kaldi worker image is a scaffold. You must run the kaldi build script and then
+# run the actual GOP extraction commands inside the kaldi_worker container or host.

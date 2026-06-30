@@ -16,3 +16,7 @@ torch
 openai-whisper
 textgrid
 cmudict
+pytest
+kaldiio
+transformers
+firebase-admin

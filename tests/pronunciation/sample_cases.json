@@ -1,0 +1,62 @@
+[
+  {
+    "id": "design-degien",
+    "expected_text": "The design is very subtle",
+    "known_errors": [
+      {
+        "word": "design",
+        "error": "pronounced like degien"
+      }
+    ]
+  },
+  {
+    "id": "specific-pacific",
+    "expected_text": "Be specific in your answer",
+    "known_errors": [
+      {
+        "word": "specific",
+        "error": "pronounced like pacific"
+      }
+    ]
+  },
+  {
+    "id": "subtle-pronounced-b",
+    "expected_text": "The change was subtle",
+    "known_errors": [
+      {
+        "word": "subtle",
+        "error": "b sound pronounced"
+      }
+    ]
+  },
+  {
+    "id": "debt-pronounced-b",
+    "expected_text": "The debt is now clear",
+    "known_errors": [
+      {
+        "word": "debt",
+        "error": "b sound pronounced"
+      }
+    ]
+  },
+  {
+    "id": "thought-taught",
+    "expected_text": "I thought about the topic",
+    "known_errors": [
+      {
+        "word": "thought",
+        "error": "pronounced like taught"
+      }
+    ]
+  },
+  {
+    "id": "world-word",
+    "expected_text": "The world is changing",
+    "known_errors": [
+      {
+        "word": "world",
+        "error": "pronounced like word"
+      }
+    ]
+  }
+]
