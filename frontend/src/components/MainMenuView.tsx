@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import {
   ArrowRight,
   Briefcase,
-  Gauge,
   LayoutDashboard,
   MessageSquareText,
   Mic,
@@ -19,7 +18,6 @@ interface MainMenuViewProps {
   onSelectPronunciation: () => void;
   onSelectBattle: () => void;
   onSelectInterview: () => void;
-  onSelectFourth: () => void;
   onSelectDebate: () => void;
   onSelectGD: () => void;
   onSelectAdmin?: () => void;
@@ -48,7 +46,6 @@ export function MainMenuView({
   onSelectPronunciation,
   onSelectBattle,
   onSelectInterview,
-  onSelectFourth,
   onSelectDebate,
   onSelectGD,
   onSelectAdmin,
@@ -103,22 +100,6 @@ export function MainMenuView({
           "bg-gradient-to-br from-amber-500 to-orange-600 shadow-[0_0_18px_-4px_rgba(245,158,11,0.55)]",
         onClick: onSelectInterview,
         ariaLabel: "Open interview studio",
-      },
-      {
-        id: "cruise",
-        title: "Voice CruiseControl",
-        tagline: "Phase 2 · Live",
-        description:
-          "Read a passage aloud. Watch your live speaking pace move the speedometer — green zone is 120–160 wpm.",
-        icon: Gauge,
-        status: "live",
-        accent: "text-emerald-300",
-        gradient: "from-emerald-500/20 via-cyan-500/10 to-transparent",
-        ringGlow: "hover:shadow-glow-emerald",
-        iconGlow:
-          "bg-gradient-to-br from-emerald-500 to-cyan-500 shadow-glow-emerald-sm",
-        onClick: onSelectFourth,
-        ariaLabel: "Open voice cruise control",
       },
       {
         id: "debate",
@@ -179,7 +160,6 @@ export function MainMenuView({
       onSelectPronunciation,
       onSelectBattle,
       onSelectInterview,
-      onSelectFourth,
       onSelectDebate,
       onSelectGD,
       onSelectAdmin,

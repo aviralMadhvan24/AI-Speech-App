@@ -16,7 +16,6 @@ import { MainMenuView } from "./components/MainMenuView";
 import { PracticeView } from "./components/PracticeView";
 import { ProcessingView } from "./components/ProcessingView";
 import { ReportView } from "./components/ReportView";
-import { SpeedometerView } from "./components/SpeedometerView";
 import { fetchSentences, fetchSessions, scoreAudio } from "./api";
 import type { PlayerRole, RoomState } from "./battleApi";
 import { useAuth } from "./hooks/useAuth";
@@ -38,7 +37,6 @@ type View =
   | "battle-room"
   | "battle-result"
   | "interview"
-  | "cruise"
   | "debate-arena"
   | "gd-arena"
   | "admin-panel"
@@ -191,10 +189,6 @@ export default function App() {
 
   const handleSelectInterview = useCallback(() => {
     setView("interview");
-  }, []);
-
-  const handleSelectFourth = useCallback(() => {
-    setView("cruise");
   }, []);
 
   const handleSelectDebate = useCallback(() => {
@@ -435,7 +429,6 @@ export default function App() {
             onSelectPronunciation={handleSelectPronunciation}
             onSelectBattle={handleSelectBattle}
             onSelectInterview={handleSelectInterview}
-            onSelectFourth={handleSelectFourth}
             onSelectDebate={handleSelectDebate}
             onSelectGD={handleSelectGD}
             onSelectAdmin={handleSelectAdmin}
@@ -511,8 +504,6 @@ export default function App() {
         {view === "interview" && (
           <InterviewStudioView onBack={handleBackToMenu} />
         )}
-
-        {view === "cruise" && <SpeedometerView onBack={handleBackToMenu} />}
 
         {view === "debate-arena" && (
           <DebateArenaView onBack={handleBackToMenu} />
