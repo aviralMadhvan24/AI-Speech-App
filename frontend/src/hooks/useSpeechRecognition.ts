@@ -1,6 +1,18 @@
+/**
+ * useSpeechRecognition - Web Speech API hook (rewritten from scratch)
+ * 
+ * Key Design:
+ * - Only emits words from FINAL results (not interim duplicates)
+ * - Tracks the last emitted final transcript to detect truly new words
+ * - Handles browser auto-restart gracefully without double-counting
+ * - Interim text shown for UX only (never counted for WPM)
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Minimal types for the Web Speech API since they're not in the default lib.
+// ---------------------------------------------------------------------------
+// Web Speech API types
+// ---------------------------------------------------------------------------
 
 interface SpeechRecognitionAlternative {
   transcript: string;
@@ -55,19 +67,9 @@ const SpeechRecognitionCtor: SpeechRecognitionConstructor | null =
     ? window.SpeechRecognition || window.webkitSpeechRecognition || null
     : null;
 
-function describeError(code: string): string {
-  switch (code) {
-    case "audio-capture":
-      return "No microphone was found. Connect a mic and check Settings → Privacy → Microphone, then try again.";
-    case "not-allowed":
-    case "service-not-allowed":
-      return "Microphone access was blocked. Allow mic access for this site (click the padlock icon in the address bar) and try again.";
-    case "network":
-      return "A network error occurred. Speech recognition needs an internet connection in most browsers.";
-    default:
-      return `Speech recognition error: ${code}`;
-  }
-}
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface SpeechResult {
   newWords: string[];
@@ -87,6 +89,28 @@ export interface UseSpeechRecognition {
   stop: () => void;
 }
 
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+function describeError(code: string): string {
+  switch (code) {
+    case "audio-capture":
+      return "No microphone found. Check mic connection and browser permissions.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone access blocked. Click the padlock icon in the address bar to allow mic access.";
+    case "network":
+      return "Network error. Speech recognition needs internet connection in most browsers.";
+    default:
+      return `Speech recognition error: ${code}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
 export function useSpeechRecognition({
   onResult,
   lang = "en-US",
@@ -96,67 +120,74 @@ export function useSpeechRecognition({
   const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const listeningRef = useRef(false);
+  const wantListeningRef = useRef(false);
   const onResultRef = useRef(onResult);
-  const seenCountRef = useRef(0);
+  
+  // Track the cumulative final transcript to detect new words
+  const lastFinalIndexRef = useRef(0);
 
   useEffect(() => {
     onResultRef.current = onResult;
   }, [onResult]);
 
-  const ensureRecognition = useCallback((): SpeechRecognitionInstance | null => {
-    if (!SpeechRecognitionCtor) return null;
-    if (recognitionRef.current) return recognitionRef.current;
+  const start = useCallback(() => {
+    if (!SpeechRecognitionCtor) return;
+    setError(null);
+    wantListeningRef.current = true;
+    setIsListening(true);
+    lastFinalIndexRef.current = 0;
+
+    // Destroy old instance if any
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch { /* noop */ }
+      recognitionRef.current = null;
+    }
 
     const recognition = new SpeechRecognitionCtor();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.lang = lang;
-
-    recognition.onstart = () => {
-      seenCountRef.current = 0;
-    };
+    recognitionRef.current = recognition;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      // Web Speech API returns ALL results cumulatively in event.results.
-      // We track which results we've already processed (by index) to avoid
-      // counting words multiple times which inflates the WPM calculation.
-      const allNewWords: string[] = [];
-      let latestInterim = "";
+      const newWords: string[] = [];
+      let interim = "";
 
-      for (let i = seenCountRef.current; i < event.results.length; i++) {
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
-        const alternative = result[0];
-        const text = (alternative?.transcript ?? "").trim();
-        
+        const transcript = (result[0]?.transcript ?? "").trim();
+
         if (result.isFinal) {
-          // Final result - extract words and mark as processed
-          const words = text.split(/\s+/).filter((w) => w.length > 0);
-          allNewWords.push(...words);
-          seenCountRef.current = i + 1;
+          // Only process finals we haven't seen yet
+          if (i >= lastFinalIndexRef.current) {
+            const words = transcript.split(/\s+/).filter((w) => w.length > 0);
+            newWords.push(...words);
+            lastFinalIndexRef.current = i + 1;
+          }
         } else {
-          // Interim result - just show in UI, don't count as final
-          latestInterim = text;
+          // Latest interim (for display only)
+          interim = transcript;
         }
       }
 
-      setError(null);
-      if (allNewWords.length > 0 || latestInterim) {
-        onResultRef.current?.({ newWords: allNewWords, interim: latestInterim });
+      if (newWords.length > 0 || interim) {
+        onResultRef.current?.({ newWords, interim });
       }
+      setError(null);
     };
 
     recognition.onend = () => {
-      if (listeningRef.current) {
-        // Browser ended recognition (timeout, silence, etc.)
-        // Restart it BUT don't reset seenCountRef - results accumulate
-        // from index 0 again after restart, so we reset the counter.
-        seenCountRef.current = 0;
+      // Browser stops recognition after ~60s of silence or max duration
+      // Auto-restart if user still wants to listen
+      if (wantListeningRef.current) {
+        lastFinalIndexRef.current = 0; // Results reset on new session
         try {
           recognition.start();
         } catch {
-          /* already starting */
+          // If start fails, stop listening
+          wantListeningRef.current = false;
+          setIsListening(false);
         }
       } else {
         setIsListening(false);
@@ -164,60 +195,48 @@ export function useSpeechRecognition({
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // Ignore benign errors
       if (event.error === "no-speech" || event.error === "aborted") return;
-      console.error("Speech recognition error:", event.error);
+
+      console.warn("Speech recognition error:", event.error);
       setError(describeError(event.error));
+
+      // Fatal errors - stop listening
       if (
         event.error === "audio-capture" ||
         event.error === "not-allowed" ||
         event.error === "service-not-allowed"
       ) {
-        listeningRef.current = false;
+        wantListeningRef.current = false;
         setIsListening(false);
       }
     };
 
-    recognitionRef.current = recognition;
-    return recognition;
-  }, [lang]);
-
-  const start = useCallback(() => {
-    const recognition = ensureRecognition();
-    if (!recognition) return;
-    setError(null);
-    seenCountRef.current = 0;
-    listeningRef.current = true;
-    setIsListening(true);
     try {
       recognition.start();
-    } catch {
-      /* already started */
+    } catch (e) {
+      setError("Could not start speech recognition.");
+      wantListeningRef.current = false;
+      setIsListening(false);
     }
-  }, [ensureRecognition]);
+  }, [lang]);
 
   const stop = useCallback(() => {
-    listeningRef.current = false;
+    wantListeningRef.current = false;
     setIsListening(false);
     const recognition = recognitionRef.current;
     if (recognition) {
-      try {
-        recognition.stop();
-      } catch {
-        /* not running */
-      }
+      try { recognition.stop(); } catch { /* noop */ }
     }
   }, []);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      listeningRef.current = false;
+      wantListeningRef.current = false;
       const recognition = recognitionRef.current;
       if (recognition) {
-        try {
-          recognition.stop();
-        } catch {
-          /* noop */
-        }
+        try { recognition.abort(); } catch { /* noop */ }
       }
     };
   }, []);

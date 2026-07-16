@@ -1,45 +1,67 @@
+/**
+ * usePassageMatch - Tracks reading progress through a passage (rewritten)
+ * 
+ * Logic:
+ * - Sequential matching: user must read words in order
+ * - Fuzzy matching with Levenshtein distance ≤1 for typo tolerance
+ * - Lookahead of 2 words max (handles small recognition gaps)
+ * - Never marks "wrong" unless user clearly skipped ahead
+ * - Progress is one-directional (can't go backwards)
+ */
+
 import { useCallback, useMemo, useRef, useState } from "react";
 import { normalizeWord } from "../utils/paceZones";
 
 export type TokenStatus = "correct" | "wrong" | null;
 
-function levenshtein1(a: string, b: string): boolean {
-  if (a === b) return true;
-  const la = a.length;
-  const lb = b.length;
-  if (Math.abs(la - lb) > 1) return false;
-  let i = 0;
-  let j = 0;
-  let edits = 0;
-  while (i < la && j < lb) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-    } else {
-      if (++edits > 1) return false;
-      if (la > lb) i++;
-      else if (lb > la) j++;
-      else {
-        i++;
-        j++;
-      }
+// ---------------------------------------------------------------------------
+// Word matching helpers
+// ---------------------------------------------------------------------------
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  
+  const matrix: number[][] = [];
+  for (let i = 0; i <= a.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= b.length; j++) {
+    matrix[0][j] = j;
+  }
+  
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,      // deletion
+        matrix[i][j - 1] + 1,      // insertion
+        matrix[i - 1][j - 1] + cost // substitution
+      );
     }
   }
-  if (i < la || j < lb) edits++;
-  return edits <= 1;
+  
+  return matrix[a.length][b.length];
 }
 
-function wordsMatch(target: string, spoken: string): boolean {
-  if (!target || !spoken) return false;
-  if (target === spoken) return true;
-  if (target.length >= 4 && spoken.length >= 4) {
-    if (target.startsWith(spoken) || spoken.startsWith(target)) return true;
+function wordsMatch(expected: string, spoken: string): boolean {
+  if (!expected || !spoken) return false;
+  if (expected === spoken) return true;
+  
+  // Prefix match for long words (recognition might cut off)
+  if (expected.length >= 5 && spoken.length >= 4) {
+    if (expected.startsWith(spoken) || spoken.startsWith(expected)) return true;
   }
-  if (Math.abs(target.length - spoken.length) <= 1 && levenshtein1(target, spoken)) {
-    return true;
-  }
-  return false;
+  
+  // Levenshtein distance ≤1 for short words, ≤2 for longer words
+  const maxDist = Math.max(expected.length, spoken.length) >= 6 ? 2 : 1;
+  return levenshteinDistance(expected, spoken) <= maxDist;
 }
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 
 export interface UsePassageMatch {
   tokens: string[];
@@ -58,71 +80,80 @@ export function usePassageMatch(text: string): UsePassageMatch {
 
   const [matchedCount, setMatchedCount] = useState(0);
   const [statuses, setStatuses] = useState<TokenStatus[]>([]);
-  const matchedRef = useRef(0);
+  
+  // Use refs for the matching logic to avoid stale closure issues
+  const cursorRef = useRef(0); // Current position in passage
   const statusRef = useRef<TokenStatus[]>([]);
 
   const advance = useCallback(
     (spokenWords: string[]) => {
-      let count = matchedRef.current;
-      const status: TokenStatus[] = statusRef.current.slice();
+      if (normalized.length === 0) return;
+      
+      let cursor = cursorRef.current;
+      const status = statusRef.current.slice();
+      
+      // Ensure status array is long enough
       while (status.length < normalized.length) status.push(null);
 
-      spokenWords.forEach((sw) => {
+      for (const sw of spokenWords) {
         const norm = normalizeWord(sw);
-        if (!norm) return;
+        if (!norm || norm.length === 0) continue;
+        if (cursor >= normalized.length) break; // Done with passage
 
-        while (count < normalized.length && (normalized[count] ?? "").length === 0) {
-          status[count] = "correct";
-          count++;
+        // Try to match at current position
+        const expected = normalized[cursor] ?? "";
+        if (expected.length === 0) {
+          // Skip empty tokens
+          cursor++;
+          continue;
         }
-        if (count >= normalized.length) return;
 
-        const expected = normalized[count] ?? "";
         if (wordsMatch(expected, norm)) {
-          status[count] = "correct";
-          count++;
-          return;
-        }
-
-        // Look ahead max 3 words (reduced from 6 to prevent excessive skipping)
-        let found = -1;
-        for (let look = 1; look <= 3; look++) {
-          const idx = count + look;
-          if (idx < normalized.length && wordsMatch(normalized[idx] ?? "", norm)) {
-            found = idx;
-            break;
-          }
-        }
-        if (found >= 0) {
-          // Only mark skipped words as "wrong" if gap is small (≤2)
-          // Larger gaps are likely recognition errors, not user mistakes
-          if (found - count <= 2) {
-            for (let k = count; k < found; k++) status[k] = "wrong";
-          }
-          status[found] = "correct";
-          count = found + 1;
+          // Direct match at cursor position
+          status[cursor] = "correct";
+          cursor++;
         } else {
-          // Don't mark as wrong immediately - could be filler word or recognition error
-          // Just skip this spoken word without advancing
-          // Only mark wrong if we're confident the user skipped it
-        }
-      });
+          // Look ahead 1-2 positions (handles recognition gaps)
+          let foundAt = -1;
+          for (let look = 1; look <= 2 && cursor + look < normalized.length; look++) {
+            const ahead = normalized[cursor + look] ?? "";
+            if (ahead.length > 0 && wordsMatch(ahead, norm)) {
+              foundAt = cursor + look;
+              break;
+            }
+          }
 
+          if (foundAt >= 0) {
+            // Found a match ahead - mark skipped words as "wrong"
+            for (let k = cursor; k < foundAt; k++) {
+              if (status[k] === null) status[k] = "wrong";
+            }
+            status[foundAt] = "correct";
+            cursor = foundAt + 1;
+          }
+          // If no match found at all, just ignore this spoken word
+          // (likely a filler word, "um", recognition artifact, etc.)
+          // Don't advance cursor - wait for user to say the right word
+        }
+      }
+
+      // Update state
+      cursorRef.current = cursor;
       statusRef.current = status;
-      matchedRef.current = count;
       setStatuses(status.slice());
-      setMatchedCount(count);
+      setMatchedCount(cursor);
     },
     [normalized],
   );
 
   const reset = useCallback(() => {
-    matchedRef.current = 0;
+    cursorRef.current = 0;
     statusRef.current = [];
     setMatchedCount(0);
     setStatuses([]);
   }, []);
 
+  // Computed stats
   const totalWords = normalized.filter((w) => w.length > 0).length;
   const progressPct =
     totalWords === 0 ? 0 : Math.min(100, Math.round((matchedCount / totalWords) * 100));
