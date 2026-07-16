@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Award,
   Check,
-  Clock,
   Copy,
   Home,
   Loader2,
