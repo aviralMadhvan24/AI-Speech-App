@@ -84,8 +84,9 @@ export function usePassageMatch(text: string): UsePassageMatch {
           return;
         }
 
+        // Look ahead max 3 words (reduced from 6 to prevent excessive skipping)
         let found = -1;
-        for (let look = 1; look <= 6; look++) {
+        for (let look = 1; look <= 3; look++) {
           const idx = count + look;
           if (idx < normalized.length && wordsMatch(normalized[idx] ?? "", norm)) {
             found = idx;
@@ -93,12 +94,17 @@ export function usePassageMatch(text: string): UsePassageMatch {
           }
         }
         if (found >= 0) {
-          for (let k = count; k < found; k++) status[k] = "wrong";
+          // Only mark skipped words as "wrong" if gap is small (≤2)
+          // Larger gaps are likely recognition errors, not user mistakes
+          if (found - count <= 2) {
+            for (let k = count; k < found; k++) status[k] = "wrong";
+          }
           status[found] = "correct";
           count = found + 1;
         } else {
-          status[count] = "wrong";
-          count++;
+          // Don't mark as wrong immediately - could be filler word or recognition error
+          // Just skip this spoken word without advancing
+          // Only mark wrong if we're confident the user skipped it
         }
       });
 

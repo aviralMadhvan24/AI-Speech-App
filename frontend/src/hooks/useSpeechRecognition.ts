@@ -119,34 +119,40 @@ export function useSpeechRecognition({
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const allWords: string[] = [];
-      let interim = "";
+      // Web Speech API returns ALL results cumulatively in event.results.
+      // We track which results we've already processed (by index) to avoid
+      // counting words multiple times which inflates the WPM calculation.
+      const allNewWords: string[] = [];
+      let latestInterim = "";
 
-      for (let i = 0; i < event.results.length; i++) {
+      for (let i = seenCountRef.current; i < event.results.length; i++) {
         const result = event.results[i];
         const alternative = result[0];
-        const text = alternative?.transcript ?? "";
-        text
-          .trim()
-          .split(/\s+/)
-          .filter((w) => w.length > 0)
-          .forEach((w) => allWords.push(w));
-        if (!result.isFinal) interim += text;
-      }
-
-      const newWords = allWords.slice(seenCountRef.current);
-      if (allWords.length > seenCountRef.current) {
-        seenCountRef.current = allWords.length;
+        const text = (alternative?.transcript ?? "").trim();
+        
+        if (result.isFinal) {
+          // Final result - extract words and mark as processed
+          const words = text.split(/\s+/).filter((w) => w.length > 0);
+          allNewWords.push(...words);
+          seenCountRef.current = i + 1;
+        } else {
+          // Interim result - just show in UI, don't count as final
+          latestInterim = text;
+        }
       }
 
       setError(null);
-      if (newWords.length > 0 || interim) {
-        onResultRef.current?.({ newWords, interim });
+      if (allNewWords.length > 0 || latestInterim) {
+        onResultRef.current?.({ newWords: allNewWords, interim: latestInterim });
       }
     };
 
     recognition.onend = () => {
       if (listeningRef.current) {
+        // Browser ended recognition (timeout, silence, etc.)
+        // Restart it BUT don't reset seenCountRef - results accumulate
+        // from index 0 again after restart, so we reset the counter.
+        seenCountRef.current = 0;
         try {
           recognition.start();
         } catch {
