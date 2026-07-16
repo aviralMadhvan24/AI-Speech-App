@@ -106,7 +106,7 @@ export function MainMenuView({
         title: "Group Debate",
         tagline: "Phase 4 · Live",
         description:
-          "Join 4-6 classmates. Ek motion, ek turn each. AI scores, teacher can override.",
+          "Join 4-6 participants in a live debate. One motion, one turn each. AI-scored with teacher override.",
         icon: MessageSquareText,
         status: "live",
         accent: "text-violet-300",

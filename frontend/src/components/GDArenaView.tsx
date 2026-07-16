@@ -360,7 +360,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     try {
       await navigator.clipboard.writeText(roomCode);
       setCodeCopied(true);
-      toast.info("Code copied!", "Share with your classmates");
+      toast.info("Code copied!", "Share with your teammates");
       window.setTimeout(() => setCodeCopied(false), 1500);
     } catch {
       toast.error("Copy failed", "Please copy manually");
@@ -401,8 +401,8 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               </span>
             </h1>
             <p className="mt-2 text-zinc-400 text-sm md:text-base max-w-2xl leading-relaxed">
-              5-10 log ka real GD simulation. Push-to-talk mode - jab bolna ho tab
-              button dabao. 15 min discussion, phir individual scores + rankings.
+              Real group discussion with 5-10 participants. Push-to-talk mode —
+              hold the button to speak. 15 min discussion, then individual scores and rankings.
             </p>
           </div>
         </header>
@@ -421,12 +421,12 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-zinc-100">Create GD room</h2>
-                <p className="text-xs text-zinc-500">Naya room banao aur code share karo.</p>
+                <p className="text-xs text-zinc-500">Create a new room and share the code.</p>
               </div>
             </div>
             <p className="text-sm text-zinc-400">
-              Topic auto-assigned hoga. Min 5 aur max 10 log join kar sakte hain.
-              Sab ready ho jane par 2 min prep + 15 min discussion.
+              A topic will be auto-assigned. 5-10 participants can join.
+              Once everyone is ready: 2 min prep + 15 min discussion.
             </p>
             <button
               type="button"
@@ -455,7 +455,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-zinc-100">Join by code</h2>
-                <p className="text-xs text-zinc-500">Room code enter karo.</p>
+                <p className="text-xs text-zinc-500">Enter the room code.</p>
               </div>
             </div>
             <input
@@ -499,7 +499,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               Available Topics ({topics.length})
             </h2>
             <p className="text-xs text-zinc-500">
-              Random topic assign hoga room banane par.
+              A random topic is assigned on room creation.
             </p>
             <ul className="max-h-64 overflow-y-auto space-y-2 pr-1">
               {topics.slice(0, 10).map((t) => (
@@ -589,7 +589,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     content = (
       <section className="card-glass p-8 md:p-10 space-y-6 text-center">
         <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
-          Share this code with classmates
+          Share this code with teammates
         </div>
         <div className="text-5xl md:text-6xl font-mono font-bold tracking-[0.35em] gradient-text">
           {roomCode}
@@ -660,7 +660,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           </div>
         </div>
         <p className="text-center text-xs text-zinc-500">
-          Prep karo. Discussion 15 minutes ki hogi. Push-to-Talk mode.
+          Prepare your thoughts. Discussion lasts 15 minutes. Push-to-Talk mode.
         </p>
       </section>
     );
@@ -794,8 +794,8 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           AI is analyzing the discussion…
         </div>
         <p className="text-sm text-zinc-400 max-w-md">
-          {state.total_speeches} speeches ko process kar rahe hain.
-          Individual scores + rankings 30-60 seconds me aa jayenge.
+          Processing {state.total_speeches} speeches.
+          Individual scores and rankings will be ready in 30-60 seconds.
         </p>
       </section>
     );

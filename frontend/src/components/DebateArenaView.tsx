@@ -150,7 +150,7 @@ function PausedOverlay({
           {formatSeconds(reconnectRemaining)}
         </div>
         <p className="text-xs text-zinc-500">
-          Turn resume ho jayega jaise hi wo wapis aa jayen.
+          The turn will resume as soon as they reconnect.
         </p>
       </div>
     </div>
@@ -515,8 +515,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               </span>
             </h1>
             <p className="mt-2 text-zinc-400 text-sm md:text-base max-w-2xl leading-relaxed">
-              4-6 log ka live debate. Ek motion, ek turn each (120s), AI scores.
-              Winner sabse zyada effective score wale ka.
+              Live debate with 4-6 participants. One motion, one turn each (120s), AI-scored.
+              Highest effective score wins.
             </p>
           </div>
         </header>
@@ -538,13 +538,13 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
                   Create room
                 </h2>
                 <p className="text-xs text-zinc-500">
-                  Naya debate room banao aur code share karo.
+                  Create a new room and share the code.
                 </p>
               </div>
             </div>
             <p className="text-sm text-zinc-400">
-              Ek random motion room banate waqt assign hoga. Wait for at least
-              3 more players, sab ready ho jane par debate auto-start.
+              A random motion will be assigned when you create the room. Wait for
+              at least 3 more players — debate auto-starts when all are ready.
             </p>
             <button
               type="button"
@@ -576,7 +576,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
                   Join by code
                 </h2>
                 <p className="text-xs text-zinc-500">
-                  Friend ka 6-character room code enter karo.
+                  Enter your friend's 6-character room code.
                 </p>
               </div>
             </div>
@@ -627,7 +627,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             </span>
           </div>
           <p className="text-xs text-zinc-500">
-            Ek random motion room banate waqt assign hoga. Preview below.
+            A random motion is assigned on room creation. Preview below.
           </p>
           {motionsError && (
             <div className="text-sm text-rose-300">{motionsError}</div>
@@ -770,7 +770,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         </div>
         <p className="text-sm text-zinc-400 max-w-xl mx-auto">
           Motion: <span className="text-zinc-500 italic">hidden until prep phase</span>.
-          Debate 4-6 log ke saath auto-start hoga jab sab ready hon (min 4).
+          Debate auto-starts when all participants are ready (min 4).
         </p>
         <div className="flex flex-col items-center gap-2">
           <button
@@ -834,7 +834,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </div>
         </div>
         <p className="text-center text-xs text-zinc-500">
-          Ready ho jao. Har turn 120s ka hoga (+15s grace).
+          Get ready. Each turn is 120 seconds (+15s grace period).
         </p>
       </section>
     );
@@ -906,8 +906,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             )}
           </button>
           <p className="text-xs text-zinc-500 text-center max-w-md">
-            Timer 0 hit karte hi apna audio auto-submit ho jayega. Baaki
-            log iske baad turn lenge.
+            Your audio will auto-submit when the timer hits zero. Others
+            will take their turn after you.
           </p>
         </div>
       </section>
@@ -941,7 +941,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             danger={turnRemaining != null && turnRemaining <= 15}
           />
           <p className="text-xs text-zinc-500 text-center">
-            Sabke turn ke baad AI scoring hogi.
+            AI scoring will begin after all turns are complete.
           </p>
           {lastTurnResult && (
             <div className="card-glass p-4 space-y-2 text-center max-w-md">
@@ -992,7 +992,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           AI is finalising scores…
         </div>
         <p className="text-sm text-zinc-500 max-w-md">
-          Sab turns process ho rahe hain. Ek moment.
+          Processing all turns. One moment please.
         </p>
       </section>
     );
@@ -1018,7 +1018,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               {participantLabel(winner)}
             </div>
             <p className="text-xs text-zinc-400">
-              Sabse zyada effective score wale.
+              Highest effective score.
             </p>
           </div>
         ) : (
@@ -1066,7 +1066,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             ))}
           </ul>
           <p className="text-xs text-zinc-500 text-center">
-            Complete score card 'My Debates' me dikhega (coming soon).
+            Full scorecard available in 'My Debates' section.
           </p>
         </div>
 
