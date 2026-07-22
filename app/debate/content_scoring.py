@@ -47,40 +47,51 @@ class ContentScoreResult:
 
 def _build_scoring_prompt(transcript: str, motion_title: str, motion_text: str) -> str:
     """Build the LLM prompt for content scoring."""
-    return f"""You are a strict debate judge scoring a student's speech. Be fair but honest - students need real feedback to improve.
+    word_count = len(transcript.split())
+    return f"""You are a VERY STRICT debate judge. Students need honest feedback to improve - do NOT give high scores for mediocre speeches.
 
 DEBATE MOTION: {motion_title}
 "{motion_text}"
 
-STUDENT'S SPEECH TRANSCRIPT:
+STUDENT'S SPEECH TRANSCRIPT ({word_count} words):
 "{transcript}"
 
-Score the speech on these criteria:
+CRITICAL RULES:
+- A 2-minute debate turn should have 200-300 words minimum
+- Short speeches (under 100 words) should score LOW on all criteria
+- Generic statements without specific arguments = LOW scores
+- Repeating the motion without analysis = LOW scores  
+- Vague points without examples = LOW scores
 
-1. RELEVANCE (0-15): Does it directly address the motion? 
-   - 13-15: Fully on topic, strong connection to motion
-   - 9-12: Mostly relevant, minor tangents
-   - 5-8: Partially relevant, missing key aspects
-   - 0-4: Off topic or barely addresses motion
+Score STRICTLY on these criteria:
 
-2. ARGUMENTS (0-15): Are the points logical and supported?
-   - 13-15: Clear reasoning, good examples/evidence
-   - 9-12: Decent logic, some support
-   - 5-8: Weak arguments, unsupported claims
-   - 0-4: No clear arguments or illogical
+1. RELEVANCE (0-15): Does it directly address the motion with specific points?
+   - 13-15: Multiple specific points directly tied to motion
+   - 9-12: Addresses motion but lacks depth
+   - 5-8: Vague connection, generic statements
+   - 0-4: Off topic or just restates motion
 
-3. STRUCTURE (0-10): Is there clear organization?
-   - 8-10: Clear intro, body, conclusion
-   - 5-7: Some structure but disorganized
-   - 0-4: No clear structure, rambling
+2. ARGUMENTS (0-15): Are points logical with evidence/examples?
+   - 13-15: Clear reasoning WITH specific examples or evidence
+   - 9-12: Decent logic but weak support
+   - 5-8: Claims without support, weak logic
+   - 0-4: No real arguments, just opinions
 
-4. VOCABULARY (0-10): Word variety and appropriateness?
-   - 8-10: Rich vocabulary, no repetition
-   - 5-7: Adequate vocabulary
-   - 0-4: Repetitive, limited words
+3. STRUCTURE (0-10): Clear organization (intro, points, conclusion)?
+   - 8-10: Clear opening, organized points, strong conclusion
+   - 5-7: Some structure but weak transitions
+   - 0-4: Rambling, no clear flow
+
+4. VOCABULARY (0-10): Word variety, debate terminology?
+   - 8-10: Rich vocabulary, persuasive language
+   - 5-7: Adequate but repetitive
+   - 0-4: Very limited, colloquial only
+
+LENGTH PENALTY: If under 100 words, cap each category at 50% of max.
+If under 50 words, cap at 25% of max.
 
 Respond with ONLY valid JSON (no explanation, no markdown):
-{{"relevance": <0-15>, "arguments": <0-15>, "structure": <0-10>, "vocabulary": <0-10>, "total": <0-50>, "feedback": "<one sentence feedback in simple English or Hinglish>"}}"""
+{{"relevance": <0-15>, "arguments": <0-15>, "structure": <0-10>, "vocabulary": <0-10>, "total": <0-50>, "feedback": "<one honest sentence about what needs improvement>"}}"""
 
 
 def _create_unavailable_result(error: str) -> ContentScoreResult:
@@ -122,6 +133,9 @@ async def score_debate_content(
     if not llm.is_available:
         return _create_unavailable_result("LLM service not configured")
 
+    # Calculate word count for length penalty
+    word_count = len(transcript.strip().split())
+    
     try:
         prompt = _build_scoring_prompt(transcript.strip(), motion_title, motion_text)
         result = await llm.generate_json(prompt, max_tokens=300)
@@ -134,12 +148,45 @@ async def score_debate_content(
         arguments = max(0, min(15, int(result.get("arguments", 0))))
         structure = max(0, min(10, int(result.get("structure", 0))))
         vocabulary = max(0, min(10, int(result.get("vocabulary", 0))))
+        
+        # Apply programmatic length penalty (in case LLM is too lenient)
+        # A good 2-minute turn should be 200-300 words
+        # Under 100 words = cap at 60% of each score
+        # Under 50 words = cap at 30% of each score
+        # Under 30 words = cap at 15% of each score
+        if word_count < 30:
+            length_penalty = 0.15
+            penalty_reason = f"Very short ({word_count} words)"
+        elif word_count < 50:
+            length_penalty = 0.30
+            penalty_reason = f"Too short ({word_count} words)"
+        elif word_count < 100:
+            length_penalty = 0.60
+            penalty_reason = f"Short response ({word_count} words)"
+        elif word_count < 150:
+            length_penalty = 0.85
+            penalty_reason = None  # No penalty message for slightly short
+        else:
+            length_penalty = 1.0
+            penalty_reason = None
+        
+        if length_penalty < 1.0:
+            relevance = int(relevance * length_penalty)
+            arguments = int(arguments * length_penalty)
+            structure = int(structure * length_penalty)
+            vocabulary = int(vocabulary * length_penalty)
+            logger.info(f"Applied length penalty {length_penalty} for {word_count} words")
+        
         total = relevance + arguments + structure + vocabulary
         feedback = str(result.get("feedback", ""))[:200]
+        
+        # Append length warning to feedback if applicable
+        if penalty_reason:
+            feedback = f"{penalty_reason}. {feedback}"
 
         logger.info(
             f"Content scored: relevance={relevance}, arguments={arguments}, "
-            f"structure={structure}, vocabulary={vocabulary}, total={total}"
+            f"structure={structure}, vocabulary={vocabulary}, total={total}, words={word_count}"
         )
 
         return ContentScoreResult(
