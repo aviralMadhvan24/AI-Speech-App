@@ -244,6 +244,9 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
   const reconnectRemaining = state?.reconnect_deadline
     ? Math.max(0, state.reconnect_deadline - now)
     : null;
+  const autoStartRemaining = state?.auto_start_deadline
+    ? Math.max(0, state.auto_start_deadline - now)
+    : null;
 
   const disconnectedName = useMemo<string | null>(() => {
     // Best-effort: we don't get disconnected_at on public state, so any
@@ -760,6 +763,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     );
   } else if (roomState === "waiting") {
     const iAmReady = myParticipant?.is_ready ?? false;
+    const allReady = readyCount === totalParticipants && totalParticipants >= 1;
     content = (
       <section className="card-glass p-8 md:p-10 space-y-6 text-center">
         <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
@@ -770,8 +774,24 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         </div>
         <p className="text-sm text-zinc-400 max-w-xl mx-auto">
           Motion: <span className="text-zinc-500 italic">hidden until prep phase</span>.
-          Debate auto-starts when all participants are ready (min 4).
+          Debate auto-starts when all participants are ready.
         </p>
+        
+        {/* Auto-start countdown timer */}
+        {autoStartRemaining != null && autoStartRemaining > 0 && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-6 py-4 max-w-sm mx-auto">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-300 font-semibold mb-2">
+              All ready! Starting in…
+            </div>
+            <div className="font-mono text-4xl md:text-5xl tabular-nums font-bold text-emerald-200">
+              {formatSeconds(autoStartRemaining)}
+            </div>
+            <p className="text-xs text-emerald-300/70 mt-2">
+              More players can still join
+            </p>
+          </div>
+        )}
+        
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
@@ -798,7 +818,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </button>
           <div className="text-xs text-zinc-500 tabular-nums">
             {readyCount} / {totalParticipants} ready
-            {totalParticipants < 4 && " · need at least 4 players"}
+            {!allReady && totalParticipants < 4 && " · waiting for players"}
           </div>
         </div>
       </section>

@@ -47,6 +47,7 @@ export interface PublicDebateRoom {
   prep_deadline: number | null;
   turn_deadline: number | null;
   reconnect_deadline: number | null;
+  auto_start_deadline: number | null;  // 20s grace countdown before prep starts
   winner_participant_id: string | null;
   final_standings: FinalStanding[];
 }

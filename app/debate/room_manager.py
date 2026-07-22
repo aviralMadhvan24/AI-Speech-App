@@ -352,6 +352,7 @@ class DebateRoomManager:
             # If any participant un-readies, cancel pending auto-start timer
             if not participant.is_ready:
                 self._cancel_timer(code, "auto_start_grace")
+                room.auto_start_deadline = None  # Clear the deadline from UI
 
             # Auto-start conditions:
             # 1. All participants are ready AND
@@ -369,10 +370,12 @@ class DebateRoomManager:
                     p.turn_index = idx
                 room.state = "prep"
                 room.prep_deadline = time.time() + PREP_SECONDS
+                room.auto_start_deadline = None  # Clear grace timer
                 should_start_prep = True
             elif all_ready_condition:
                 # Below max + all ready → schedule delayed start (20s grace)
                 # so late joiners can still enter. Cancel if someone unready.
+                room.auto_start_deadline = time.time() + 20.0
                 self._spawn_timer(
                     code, "auto_start_grace",
                     self._delayed_auto_start(code, delay=20.0),
@@ -410,6 +413,7 @@ class DebateRoomManager:
                 p.turn_index = idx
             room.state = "prep"
             room.prep_deadline = time.time() + PREP_SECONDS
+            room.auto_start_deadline = None  # Clear grace timer
         
         self._spawn_timer(code, "prep", self._run_prep_timer(code))
         await self.broadcast(code)

@@ -81,6 +81,8 @@ class DebateRoom(BaseModel):
     prep_deadline: Optional[float] = None
     turn_deadline: Optional[float] = None
     reconnect_deadline: Optional[float] = None
+    # Auto-start grace deadline (20s countdown after all ready, before prep).
+    auto_start_deadline: Optional[float] = None
     created_at: float
     completed_at: Optional[float] = None
     winner_participant_id: Optional[str] = None
@@ -163,6 +165,8 @@ class PublicDebateRoom(BaseModel):
     prep_deadline: Optional[float] = None
     turn_deadline: Optional[float] = None
     reconnect_deadline: Optional[float] = None
+    # Auto-start grace deadline (20s countdown shown in waiting phase).
+    auto_start_deadline: Optional[float] = None
     winner_participant_id: Optional[str] = None
     # Populated only at completion so the results screen can explain the
     # outcome with ranked scores. Empty during the live debate.
@@ -200,6 +204,7 @@ def to_public(room: DebateRoom) -> PublicDebateRoom:
         prep_deadline=room.prep_deadline,
         turn_deadline=room.turn_deadline,
         reconnect_deadline=room.reconnect_deadline,
+        auto_start_deadline=room.auto_start_deadline,
         winner_participant_id=room.winner_participant_id,
         final_standings=room.final_standings,
     )
