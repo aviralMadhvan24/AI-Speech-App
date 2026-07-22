@@ -14,6 +14,7 @@ import {
 import type { PlayerRole, PlayerScore, RoomState } from "../battleApi";
 import { useBattleSocket } from "../hooks/useBattleSocket";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { getCurrentIdToken } from "../hooks/useAuth";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { MicButton } from "./MicButton";
 
@@ -45,7 +46,16 @@ async function analyzeRecording(
   formData.append("file", cleaned, `battle.${ext}`);
   formData.append("expected_text", expectedText);
 
-  const response = await fetch("/analyze", { method: "POST", body: formData });
+  // Attach the Firebase ID token — /analyze requires auth (401 without it).
+  const headers = new Headers();
+  const token = await getCurrentIdToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch("/analyze", {
+    method: "POST",
+    body: formData,
+    headers,
+  });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(`Scoring failed: ${response.status} ${detail.slice(0, 200)}`);
