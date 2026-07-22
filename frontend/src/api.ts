@@ -159,6 +159,12 @@ export async function scoreAudio(
         ...(heardDiffers ? { heard: heardRaw } : {}),
         ...(typeof score === "number" ? { score } : {}),
         ...(w.feedback ? { feedback: w.feedback } : {}),
+        ...(Array.isArray(w.expected_phonemes) && w.expected_phonemes.length > 0
+          ? { expectedPhonemes: w.expected_phonemes }
+          : {}),
+        ...(Array.isArray(w.observed_phonemes) && w.observed_phonemes.length > 0
+          ? { observedPhonemes: w.observed_phonemes }
+          : {}),
       };
     });
   } else {

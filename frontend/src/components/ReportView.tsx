@@ -174,10 +174,10 @@ export function ReportView({
               Word-by-Word Analysis
             </h3>
             <span className="text-xs text-zinc-500">
-              Hover a word for its score
+              Click a word for details
             </span>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 items-start">
             {report.wordResults.map((wordResult, index) => (
               <WordPill
                 key={`${wordResult.word}-${index}`}

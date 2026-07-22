@@ -27,12 +27,16 @@ export interface WordResult {
   word: string;
   /** What the model heard, when it differs from the expected word. */
   heard?: string;
-  /** True when score >= 70 (or backend has no scoring and we fall back to transcript match). */
+  /** True when score >= 80 (or backend has no scoring and we fall back to transcript match). */
   correct: boolean;
   /** Backend-provided per-word score, 0..100. */
   score?: number;
   /** Optional feedback string for the word. */
   feedback?: string;
+  /** Expected phonemes (how the word should sound). */
+  expectedPhonemes?: string[];
+  /** Observed phonemes (what was actually heard). */
+  observedPhonemes?: string[];
 }
 
 export interface ScoreResult {
