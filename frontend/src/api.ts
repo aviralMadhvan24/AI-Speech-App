@@ -147,8 +147,11 @@ export async function scoreAudio(
       const heardRaw = mistakeMap.get(expectedLc);
       const heardDiffers = !!heardRaw && heardRaw.toLowerCase() !== expectedLc;
       const score = typeof w.score === "number" ? w.score : undefined;
+      // Word is correct only if:
+      // 1. Phoneme score >= 80 (stricter threshold)
+      // 2. AND transcript didn't hear a different word
       const correct = pronunciationAvailable
-        ? (score ?? 0) >= 80  // Stricter: was 70, now 80 to be "correct"
+        ? (score ?? 0) >= 80 && !heardDiffers
         : !mistakeMap.has(expectedLc);
       return {
         word: w.word,
