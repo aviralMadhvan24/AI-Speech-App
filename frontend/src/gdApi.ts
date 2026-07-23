@@ -38,6 +38,7 @@ export interface PublicGDRoom {
   active_speakers: GDActiveSpeaker[];
   prep_deadline: number | null;
   discussion_deadline: number | null;
+  auto_start_deadline: number | null;
   scoring_started_at: number | null;
   total_speeches: number;
 }

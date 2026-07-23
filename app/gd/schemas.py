@@ -81,6 +81,7 @@ class GDRoom(BaseModel):
     active_speakers: list[str] = Field(default_factory=list)  # participant_ids currently speaking
     prep_deadline: Optional[float] = None
     discussion_deadline: Optional[float] = None
+    auto_start_deadline: Optional[float] = None  # Dev mode: countdown to auto-start
     created_at: float
     completed_at: Optional[float] = None
     scoring_started_at: Optional[float] = None
@@ -126,6 +127,7 @@ class PublicGDRoom(BaseModel):
     active_speakers: list[GDActiveSpeaker] = Field(default_factory=list)
     prep_deadline: Optional[float] = None
     discussion_deadline: Optional[float] = None
+    auto_start_deadline: Optional[float] = None  # Dev mode: countdown to auto-start
     scoring_started_at: Optional[float] = None
     total_speeches: int = 0
 
@@ -168,6 +170,7 @@ def to_public(room: GDRoom) -> PublicGDRoom:
         active_speakers=active,
         prep_deadline=room.prep_deadline,
         discussion_deadline=room.discussion_deadline,
+        auto_start_deadline=room.auto_start_deadline,
         scoring_started_at=room.scoring_started_at,
         total_speeches=len(room.speeches),
     )

@@ -41,6 +41,11 @@ DISCUSSION_SECONDS = 900  # 15 minutes discussion
 _DEV_MODE = os.getenv("GD_DEV_MODE", "").lower() in ("true", "1", "yes")
 MIN_PARTICIPANTS = 1 if _DEV_MODE else 5
 
+# Log dev mode status at startup
+import logging as _logging
+_startup_logger = _logging.getLogger("gd.room_manager")
+_startup_logger.info(f"GD_DEV_MODE={os.getenv('GD_DEV_MODE', 'NOT_SET')}, _DEV_MODE={_DEV_MODE}, MIN_PARTICIPANTS={MIN_PARTICIPANTS}")
+
 MAX_PARTICIPANTS = 10
 GC_TTL_SECONDS = 60 * 60
 MIN_SPEECH_DURATION = 2.0  # seconds
@@ -241,23 +246,32 @@ class GDRoomManager:
             # Cancel pending auto-start if anyone un-readies
             if not participant.is_ready:
                 self._cancel_timer(code, "auto_start_grace")
+                room.auto_start_deadline = None  # Clear the deadline from UI
 
             all_ready = (
                 room.state == "waiting"
                 and len(room.participants) >= MIN_PARTICIPANTS
                 and all(p.is_ready for p in room.participants)
             )
+            
+            logger.info(
+                f"flip_ready: code={code}, participants={len(room.participants)}, "
+                f"MIN_PARTICIPANTS={MIN_PARTICIPANTS}, all_ready={all(p.is_ready for p in room.participants)}, "
+                f"all_ready_condition={all_ready}"
+            )
 
             if all_ready and len(room.participants) >= MAX_PARTICIPANTS:
                 # Full room + all ready → start immediately
                 room.state = "prep"
                 room.prep_deadline = time.time() + PREP_SECONDS
+                room.auto_start_deadline = None
                 should_start_prep = True
             elif all_ready:
-                # Grace period for late joiners (30s for GD since bigger group)
+                # Grace period for late joiners (20s)
+                room.auto_start_deadline = time.time() + 20.0
                 self._spawn_timer(
                     code, "auto_start_grace",
-                    self._delayed_auto_start(code, delay=30.0),
+                    self._delayed_auto_start(code, delay=20.0),
                 )
 
         if should_start_prep:
@@ -265,7 +279,7 @@ class GDRoomManager:
         await self.broadcast(code)
         return self._rooms[code]
 
-    async def _delayed_auto_start(self, code: str, delay: float = 30.0) -> None:
+    async def _delayed_auto_start(self, code: str, delay: float = 20.0) -> None:
         """Wait delay seconds then start prep if still all-ready."""
         try:
             await asyncio.sleep(delay)
@@ -283,6 +297,7 @@ class GDRoomManager:
                 return
             room.state = "prep"
             room.prep_deadline = time.time() + PREP_SECONDS
+            room.auto_start_deadline = None  # Clear grace timer
         
         self._spawn_timer(code, "prep", self._run_prep_timer(code))
         await self.broadcast(code)

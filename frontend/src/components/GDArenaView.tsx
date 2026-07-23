@@ -586,6 +586,10 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     );
   } else if (roomState === "waiting") {
     const iAmReady = myParticipant?.is_ready ?? false;
+    const autoStartRemaining = state?.auto_start_deadline
+      ? Math.max(0, state.auto_start_deadline - now)
+      : null;
+    
     content = (
       <section className="card-glass p-8 md:p-10 space-y-6 text-center">
         <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
@@ -598,6 +602,22 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           Topic hidden until prep phase. Need 5-10 people. GD auto-starts when
           all ready (min 5).
         </p>
+        
+        {/* Countdown timer when all ready */}
+        {autoStartRemaining != null && autoStartRemaining > 0 && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-6 py-4 animate-pulse">
+            <div className="text-[10px] uppercase tracking-widest text-emerald-300 font-semibold mb-1">
+              All Ready! Starting in
+            </div>
+            <div className="font-mono text-4xl md:text-5xl font-bold text-emerald-300">
+              {Math.ceil(autoStartRemaining)}s
+            </div>
+            <p className="text-xs text-zinc-500 mt-2">
+              Late joiners can still enter before countdown ends
+            </p>
+          </div>
+        )}
+        
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
@@ -857,11 +877,21 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
                         </div>
                         <div className="text-xs text-zinc-500">
                           {score.speech_count} speeches · {Math.floor(score.total_speak_seconds)}s spoken
+                          {score.interruption_count > 0 && (
+                            <span className="text-amber-400 ml-1">
+                              · {score.interruption_count} interruption{score.interruption_count > 1 ? "s" : ""}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-2xl font-bold text-zinc-100">
+                      <div className={[
+                        "text-2xl font-bold",
+                        score.total_score >= 70 ? "text-emerald-300" :
+                        score.total_score >= 50 ? "text-zinc-100" :
+                        score.total_score >= 30 ? "text-amber-300" : "text-rose-300"
+                      ].join(" ")}>
                         {score.total_score.toFixed(1)}
                       </div>
                       <div className="text-[10px] text-zinc-500 uppercase">/ 100</div>
@@ -871,7 +901,11 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
                   <div className="grid grid-cols-5 gap-1 text-[10px]">
                     <div className="bg-zinc-800/50 rounded p-1 text-center">
                       <div className="text-zinc-500">Content</div>
-                      <div className="font-semibold text-zinc-200">{score.content_quality.toFixed(0)}/30</div>
+                      <div className={[
+                        "font-semibold",
+                        score.content_quality >= 20 ? "text-emerald-300" :
+                        score.content_quality >= 10 ? "text-zinc-200" : "text-rose-300"
+                      ].join(" ")}>{score.content_quality.toFixed(0)}/30</div>
                     </div>
                     <div className="bg-zinc-800/50 rounded p-1 text-center">
                       <div className="text-zinc-500">Comm.</div>
@@ -891,8 +925,20 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
                     </div>
                   </div>
                   
+                  {/* AI Feedback Section */}
                   {score.feedback && (
-                    <p className="text-xs text-zinc-400 italic mt-2">"{score.feedback}"</p>
+                    <div className="mt-3 p-3 bg-violet-500/5 border border-violet-500/20 rounded-lg">
+                      <div className="text-[10px] uppercase tracking-widest text-violet-300 font-semibold mb-1.5">
+                        🤖 AI Feedback
+                      </div>
+                      <div className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {score.feedback.split(" | ").map((part, idx) => (
+                          <div key={idx} className={idx > 0 ? "mt-1.5" : ""}>
+                            {part}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               );

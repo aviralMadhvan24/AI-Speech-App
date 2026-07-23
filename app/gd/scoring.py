@@ -49,11 +49,11 @@ async def score_gd_content(
     
     # Build combined context
     participants_text = "\n\n".join([
-        f"PARTICIPANT_{i+1} (id: {pid}):\n{transcript[:1000]}"
+        f"PARTICIPANT_{i+1} (id: {pid}):\n{transcript[:1500]}"
         for i, (pid, transcript) in enumerate(all_transcripts.items())
     ])
     
-    prompt = f"""You are a strict GD interview evaluator. Score each participant's content quality.
+    prompt = f"""You are a STRICT and CRITICAL GD evaluator for a professional interview setting. Score each participant's content quality.
 
 GD TOPIC: {topic_title}
 "{topic_text}"
@@ -61,21 +61,43 @@ GD TOPIC: {topic_title}
 PARTICIPANTS' CONTRIBUTIONS:
 {participants_text}
 
-Score each participant on CONTENT QUALITY (0-30):
-- Relevance to topic (10 pts)
-- Depth of ideas (10 pts)  
-- Structure and clarity (10 pts)
+SCORING CRITERIA (0-30 total, be STRICT):
+
+1. RELEVANCE (0-10):
+   - 0-2: Completely off-topic, irrelevant rambling
+   - 3-5: Somewhat related but misses key points
+   - 6-8: Good relevance with some tangents
+   - 9-10: Perfectly on-topic throughout
+
+2. DEPTH OF IDEAS (0-10):
+   - 0-2: Superficial, no examples or reasoning
+   - 3-5: Basic points with minimal elaboration
+   - 6-8: Good arguments with some examples
+   - 9-10: Deep insights, strong examples, logical reasoning
+
+3. STRUCTURE & CLARITY (0-10):
+   - 0-2: Incoherent, hard to follow
+   - 3-5: Somewhat organized but jumps around
+   - 6-8: Clear structure with good flow
+   - 9-10: Excellent organization and articulation
+
+IMPORTANT FEEDBACK RULES:
+- Quote 2-3 EXACT phrases from their transcript to justify your score
+- If content is OFF-TOPIC or IRRELEVANT, say "⚠️ OFF-TOPIC: [reason]"
+- Be specific about what was good or bad
+- For low scores (<15), explain clearly why they lost points
+- Compare participants to each other when relevant
 
 Respond with ONLY valid JSON:
-{{"scores": [{{"id": "<participant_id>", "score": <0-30>, "feedback": "<one sentence>"}}]}}"""
+{{"scores": [{{"id": "<participant_id>", "score": <0-30>, "feedback": "<detailed feedback with quotes>"}}]}}"""
 
     try:
-        result = await llm.generate_json(prompt, max_tokens=800)
+        result = await llm.generate_json(prompt, max_tokens=1200)
         if result and "scores" in result:
             for entry in result["scores"]:
                 pid = entry.get("id", "")
                 score = max(0, min(30, float(entry.get("score", 0))))
-                feedback = str(entry.get("feedback", ""))[:200]
+                feedback = str(entry.get("feedback", ""))[:400]
                 results[pid] = (score, feedback)
     except Exception as e:
         logger.warning(f"GD content scoring failed: {e}")
@@ -105,35 +127,39 @@ async def score_listening_skills(
         return results
     
     participants_text = "\n\n".join([
-        f"{display_names.get(pid, pid)} (id: {pid}):\n{transcript[:800]}"
+        f"{display_names.get(pid, pid)} (id: {pid}):\n{transcript[:1000]}"
         for pid, transcript in all_transcripts.items()
     ])
     
     prompt = f"""Evaluate LISTENING skills of each GD participant. Look for:
-- References to other participants' points
-- Building on others' ideas  
+- References to other participants' points ("As X said...", "Building on that...")
+- Building on others' ideas with new insights
 - Acknowledging different perspectives
-- Responding to what was said
+- Responding to what was said (not just monologuing)
 
 PARTICIPANTS:
 {participants_text}
 
 Score each on LISTENING (0-15):
-- Never references others: 0-3
-- Some references: 4-8
-- Actively builds on others: 9-12
-- Excellent engagement: 13-15
+- 0-3: Never references others, only monologues
+- 4-8: Some references but mostly own points
+- 9-12: Good engagement, builds on others' ideas
+- 13-15: Excellent - weaves others' points into arguments
+
+FEEDBACK RULES:
+- Quote EXACT phrases where they referenced others (or note absence)
+- Be specific: "Referenced X's point about..." or "Never acknowledged other speakers"
 
 Respond JSON only:
-{{"scores": [{{"id": "<participant_id>", "score": <0-15>, "feedback": "<one sentence>"}}]}}"""
+{{"scores": [{{"id": "<participant_id>", "score": <0-15>, "feedback": "<specific feedback with quotes>"}}]}}"""
 
     try:
-        result = await llm.generate_json(prompt, max_tokens=600)
+        result = await llm.generate_json(prompt, max_tokens=800)
         if result and "scores" in result:
             for entry in result["scores"]:
                 pid = entry.get("id", "")
                 score = max(0, min(15, float(entry.get("score", 0))))
-                feedback = str(entry.get("feedback", ""))[:200]
+                feedback = str(entry.get("feedback", ""))[:250]
                 results[pid] = (score, feedback)
     except Exception as e:
         logger.warning(f"Listening scoring failed: {e}")
@@ -288,6 +314,7 @@ async def compute_final_scores(
         # Listening (0-15)
         listen_result = listening_scores.get(p.participant_id, (0.0, ""))
         listen_score = listen_result[0]
+        listen_feedback = listen_result[1]
         
         # Leadership (0-15)
         lead_score = compute_leadership_score(p, room.participants)
@@ -295,10 +322,29 @@ async def compute_final_scores(
         total = content_score + comm_score + part_score + listen_score + lead_score
         total = round(min(100.0, max(0.0, total)), 2)
         
-        # Combined feedback
-        feedback = content_feedback
+        # Combined feedback with all details
         if p.speech_count == 0:
-            feedback = "Did not participate in the discussion."
+            feedback = "Did not participate in the discussion. No points can be awarded."
+        else:
+            feedback_parts = []
+            
+            # Content feedback (main)
+            if content_feedback:
+                feedback_parts.append(f"📝 Content: {content_feedback}")
+            
+            # Listening feedback
+            if listen_feedback and listen_feedback != "Score not available":
+                feedback_parts.append(f"👂 Listening: {listen_feedback}")
+            
+            # Leadership note
+            if p.is_first_speaker:
+                feedback_parts.append("🏆 Initiated the discussion (first speaker bonus)")
+            
+            # Interruption warning
+            if p.interruption_count > 2:
+                feedback_parts.append(f"⚠️ Too many interruptions ({p.interruption_count}x) - shows poor etiquette")
+            
+            feedback = " | ".join(feedback_parts) if feedback_parts else content_feedback
         
         final_scores.append(GDParticipantScore(
             participant_id=p.participant_id,
