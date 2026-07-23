@@ -145,6 +145,19 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     enabled: state?.state === "prep" || state?.state === "discussion",
   });
 
+  // Debug Daily audio state
+  useEffect(() => {
+    console.log("[Daily Debug]", {
+      roomUrl: state?.daily_room_url,
+      roomState: state?.state,
+      dailyAudioState: {
+        isJoined: dailyAudio.isJoined,
+        isConnecting: dailyAudio.isConnecting,
+        error: dailyAudio.error,
+      },
+    });
+  }, [state?.daily_room_url, state?.state, dailyAudio.isJoined, dailyAudio.isConnecting, dailyAudio.error]);
+
   // Load topics
   useEffect(() => {
     fetchGDTopics()
