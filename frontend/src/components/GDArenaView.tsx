@@ -262,33 +262,30 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     // If currently speaking, stop
     if (isSpeaking && currentSpeechId) {
       if (isStoppingSpeech) return; // Prevent double-click
-      setIsStoppingSpeech(true);
+      
+      // Immediately update UI - don't wait for anything
+      const speechIdToEnd = currentSpeechId;
+      const roomCodeCopy = roomCode;
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
       setSpeechError(null);
       
-      try {
-        // Stop recording first (fast)
-        const blob = await recorder.stop();
-        
-        // Immediately update UI - don't wait for upload
-        const speechIdToEnd = currentSpeechId;
-        setIsSpeaking(false);
-        setCurrentSpeechId(null);
-        setIsStoppingSpeech(false);
-        recorder.reset();
-        
-        // Upload in background (don't block UI)
-        endSpeech(roomCode, speechIdToEnd, blob).catch((err) => {
-          console.error("[GD] Background upload failed:", err);
-          setSpeechError("Upload failed, but speech ended");
-        });
-      } catch (err) {
-        setSpeechError(err instanceof Error ? err.message : "Failed to end speech");
-        // Force reset state on error
-        setIsSpeaking(false);
-        setCurrentSpeechId(null);
-        setIsStoppingSpeech(false);
-        recorder.reset();
-      }
+      // Show brief stopping indicator then clear
+      setIsStoppingSpeech(true);
+      setTimeout(() => setIsStoppingSpeech(false), 300);
+      
+      // Stop recording and upload in background (completely non-blocking)
+      (async () => {
+        try {
+          const blob = await recorder.stop();
+          recorder.reset();
+          await endSpeech(roomCodeCopy, speechIdToEnd, blob);
+        } catch (err) {
+          console.error("[GD] Background stop/upload failed:", err);
+          // Don't set error since UI already moved on
+        }
+      })();
+      
       return;
     }
     
