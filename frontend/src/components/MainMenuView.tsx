@@ -7,6 +7,7 @@ import {
   Mic,
   Sparkles,
   Swords,
+  User,
   Users2,
 } from "lucide-react";
 import type { AuthUser } from "../types";
@@ -21,6 +22,7 @@ interface MainMenuViewProps {
   onSelectDebate: () => void;
   onSelectGD: () => void;
   onSelectAdmin?: () => void;
+  onSelectProfile: () => void;
 }
 
 type FeatureStatus = "live" | "coming-soon";
@@ -49,10 +51,27 @@ export function MainMenuView({
   onSelectDebate,
   onSelectGD,
   onSelectAdmin,
+  onSelectProfile,
 }: MainMenuViewProps) {
   const features: Feature[] = useMemo(
     () => {
       const base: Feature[] = [
+      {
+        id: "profile",
+        title: "My Profile",
+        tagline: "Your Stats",
+        description:
+          "View your performance history, scores, and progress across all activities.",
+        icon: User,
+        status: "live",
+        accent: "text-violet-300",
+        gradient: "from-violet-600/20 via-purple-500/10 to-transparent",
+        ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(139,92,246,0.45)]",
+        iconGlow:
+          "bg-gradient-to-br from-violet-500 to-purple-600 shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
+        onClick: onSelectProfile,
+        ariaLabel: "Open my profile",
+      },
       {
         id: "pronunciation",
         title: "Pronunciation Drill",
@@ -163,6 +182,7 @@ export function MainMenuView({
       onSelectDebate,
       onSelectGD,
       onSelectAdmin,
+      onSelectProfile,
       showAdmin,
     ],
   );

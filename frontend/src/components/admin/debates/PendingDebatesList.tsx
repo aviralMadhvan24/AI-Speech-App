@@ -57,11 +57,14 @@ function relativeCompletedAt(unixSeconds: number): string {
   return `${days}d ago`;
 }
 
-export function PendingDebatesList() {
+export function PendingDebatesList({ onOpenDebate }: { onOpenDebate?: (debateId: string) => void }) {
   const [debates, setDebates] = useState<DebateSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedDebateId, setSelectedDebateId] = useState<string | null>(null);
+
+  // Use external handler if provided, otherwise internal state
+  const handleOpenDebate = onOpenDebate || setSelectedDebateId;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,8 +91,8 @@ export function PendingDebatesList() {
     void load();
   }, [load]);
 
-  // ---- Detail view ----
-  if (selectedDebateId) {
+  // ---- Detail view (only if using internal state) ----
+  if (!onOpenDebate && selectedDebateId) {
     return (
       <DebateReviewPanel
         debateId={selectedDebateId}
@@ -220,7 +223,7 @@ export function PendingDebatesList() {
 
               <button
                 type="button"
-                onClick={() => setSelectedDebateId(debate.debate_id)}
+                onClick={() => handleOpenDebate(debate.debate_id)}
                 className="btn-primary inline-flex items-center gap-1.5 px-4 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
                 aria-label={`Review debate ${debate.code}`}
               >

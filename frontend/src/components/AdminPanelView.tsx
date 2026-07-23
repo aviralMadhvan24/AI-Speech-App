@@ -16,7 +16,9 @@ import { AdminStudentsView } from "./admin/AdminStudentsView";
 import { AdminAnalyticsView } from "./admin/AdminAnalyticsView";
 import { AdminLeaderboardView } from "./admin/AdminLeaderboardView";
 import { PendingDebatesList } from "./admin/debates/PendingDebatesList";
+import { DebateReviewPanel } from "./admin/debates/DebateReviewPanel";
 import { PendingGDList } from "./admin/gd/PendingGDList";
+import { GDReviewPanel } from "./admin/gd/GDReviewPanel";
 import { ExportReports } from "./admin/ExportReports";
 import { StorageStats } from "./admin/StorageStats";
 
@@ -57,6 +59,28 @@ export function AdminPanelView({
   onOpenStudent,
 }: AdminPanelViewProps) {
   const [active, setActive] = useState<AdminTab>("pending");
+  const [selectedDebateId, setSelectedDebateId] = useState<string | null>(null);
+  const [selectedGDSessionId, setSelectedGDSessionId] = useState<string | null>(null);
+
+  // If viewing a specific debate, show the review panel
+  if (selectedDebateId) {
+    return (
+      <DebateReviewPanel
+        debateId={selectedDebateId}
+        onBack={() => setSelectedDebateId(null)}
+      />
+    );
+  }
+
+  // If viewing a specific GD session, show the review panel
+  if (selectedGDSessionId) {
+    return (
+      <GDReviewPanel
+        sessionId={selectedGDSessionId}
+        onBack={() => setSelectedGDSessionId(null)}
+      />
+    );
+  }
 
   return (
     <div key="admin-panel" className="space-y-5 animate-fade-in-up">
@@ -133,9 +157,9 @@ export function AdminPanelView({
         )}
         {active === "analytics" && <AdminAnalyticsView />}
         {active === "leaderboard" && <AdminLeaderboardView />}
-        {active === "debates" && <PendingDebatesList />}
+        {active === "debates" && <PendingDebatesList onOpenDebate={setSelectedDebateId} />}
         {active === "gd" && (
-          <PendingGDList onOpenSession={(id) => console.log("Open GD:", id)} />
+          <PendingGDList onOpenSession={setSelectedGDSessionId} />
         )}
         {active === "exports" && <ExportReports />}
         {active === "storage" && <StorageStats />}
