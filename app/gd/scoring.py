@@ -42,9 +42,9 @@ async def score_gd_content(
     results: dict[str, tuple[float, str]] = {}
     
     if not llm.is_available:
-        # Fallback: give everyone 15/30 if LLM unavailable
+        logger.warning("LLM not available for GD content scoring")
         for pid in all_transcripts:
-            results[pid] = (15.0, "Content scoring unavailable")
+            results[pid] = (15.0, "Content scoring unavailable - LLM not configured")
         return results
     
     # Build combined context
@@ -92,20 +92,27 @@ Respond with ONLY valid JSON:
 {{"scores": [{{"id": "<participant_id>", "score": <0-30>, "feedback": "<detailed feedback with quotes>"}}]}}"""
 
     try:
+        logger.info(f"Calling LLM for GD content scoring with {len(all_transcripts)} participants")
         result = await llm.generate_json(prompt, max_tokens=1200)
+        logger.info(f"LLM response: {result}")
+        
         if result and "scores" in result:
             for entry in result["scores"]:
                 pid = entry.get("id", "")
                 score = max(0, min(30, float(entry.get("score", 0))))
                 feedback = str(entry.get("feedback", ""))[:400]
                 results[pid] = (score, feedback)
+                logger.info(f"Scored {pid}: {score}/30")
+        else:
+            logger.warning(f"LLM returned invalid response structure: {result}")
     except Exception as e:
-        logger.warning(f"GD content scoring failed: {e}")
+        logger.error(f"GD content scoring failed: {type(e).__name__}: {e}")
     
-    # Fill in missing participants
+    # Fill in missing participants with appropriate message
     for pid in all_transcripts:
         if pid not in results:
-            results[pid] = (15.0, "Score not available")
+            logger.warning(f"No score for participant {pid}, using default")
+            results[pid] = (15.0, "Score not available - AI scoring error")
     
     return results
 
@@ -122,6 +129,7 @@ async def score_listening_skills(
     results: dict[str, tuple[float, str]] = {}
     
     if not llm.is_available:
+        logger.warning("LLM not available for listening scoring")
         for pid in all_transcripts:
             results[pid] = (7.5, "Listening scoring unavailable")
         return results
@@ -154,15 +162,20 @@ Respond JSON only:
 {{"scores": [{{"id": "<participant_id>", "score": <0-15>, "feedback": "<specific feedback with quotes>"}}]}}"""
 
     try:
+        logger.info(f"Calling LLM for listening scoring with {len(all_transcripts)} participants")
         result = await llm.generate_json(prompt, max_tokens=800)
+        logger.info(f"Listening LLM response: {result}")
+        
         if result and "scores" in result:
             for entry in result["scores"]:
                 pid = entry.get("id", "")
                 score = max(0, min(15, float(entry.get("score", 0))))
                 feedback = str(entry.get("feedback", ""))[:250]
                 results[pid] = (score, feedback)
+        else:
+            logger.warning(f"Listening LLM returned invalid response: {result}")
     except Exception as e:
-        logger.warning(f"Listening scoring failed: {e}")
+        logger.error(f"Listening scoring failed: {type(e).__name__}: {e}")
     
     for pid in all_transcripts:
         if pid not in results:

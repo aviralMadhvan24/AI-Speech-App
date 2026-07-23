@@ -95,13 +95,16 @@ class LLMClient:
         try:
             response = await self.generate(prompt, max_tokens)
             # Extract JSON from response (handle markdown code blocks)
-            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
+            json_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", response, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group(1))
-            # Try direct JSON parse
-            json_match = re.search(r"\{[^{}]*\}", response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
+            # Try to find JSON object with nested arrays/objects
+            # Find the first { and last } to capture the full JSON
+            start = response.find("{")
+            end = response.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_str = response[start:end + 1]
+                return json.loads(json_str)
             logger.warning(f"Could not extract JSON from LLM response: {response[:200]}")
             return None
         except json.JSONDecodeError as e:
