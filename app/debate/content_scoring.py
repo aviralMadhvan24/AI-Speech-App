@@ -48,7 +48,7 @@ class ContentScoreResult:
 def _build_scoring_prompt(transcript: str, motion_title: str, motion_text: str) -> str:
     """Build the LLM prompt for content scoring."""
     word_count = len(transcript.split())
-    return f"""You are a VERY STRICT debate judge. Students need honest feedback to improve - do NOT give high scores for mediocre speeches.
+    return f"""You are an EXTREMELY STRICT debate judge. Off-topic content is UNACCEPTABLE and must receive near-zero scores.
 
 DEBATE MOTION: {motion_title}
 "{motion_text}"
@@ -56,42 +56,57 @@ DEBATE MOTION: {motion_title}
 STUDENT'S SPEECH TRANSCRIPT ({word_count} words):
 "{transcript}"
 
-CRITICAL RULES:
-- A 2-minute debate turn should have 200-300 words minimum
-- Short speeches (under 100 words) should score LOW on all criteria
-- Generic statements without specific arguments = LOW scores
-- Repeating the motion without analysis = LOW scores  
-- Vague points without examples = LOW scores
+CRITICAL SCORING RULES (MUST FOLLOW):
 
-Score STRICTLY on these criteria:
+**OFF-TOPIC PENALTY (MOST IMPORTANT):**
+- If ANY sentence is completely unrelated to the motion → RELEVANCE must be 0-3
+- If speaker talks about random topics (food, weather, personal life) not connected to motion → ALL scores capped at 5 max each
+- Example: Motion about "technology in education" but speaker says "pizza is nice" → TOTAL SCORE should be under 15
 
-1. RELEVANCE (0-15): Does it directly address the motion with specific points?
-   - 13-15: Multiple specific points directly tied to motion
-   - 9-12: Addresses motion but lacks depth
-   - 5-8: Vague connection, generic statements
-   - 0-4: Off topic or just restates motion
+**LENGTH REQUIREMENTS:**
+- Under 50 words = max 25% of each category
+- Under 100 words = max 50% of each category
+- A proper 2-minute turn needs 200-300 words
 
-2. ARGUMENTS (0-15): Are points logical with evidence/examples?
-   - 13-15: Clear reasoning WITH specific examples or evidence
-   - 9-12: Decent logic but weak support
-   - 5-8: Claims without support, weak logic
-   - 0-4: No real arguments, just opinions
+**QUALITY REQUIREMENTS:**
+- Just restating the motion = relevance 0-4
+- Generic statements like "it's good/bad" without WHY = arguments 0-4
+- No examples or evidence = arguments capped at 8
 
-3. STRUCTURE (0-10): Clear organization (intro, points, conclusion)?
-   - 8-10: Clear opening, organized points, strong conclusion
-   - 5-7: Some structure but weak transitions
-   - 0-4: Rambling, no clear flow
+SCORING CRITERIA:
 
-4. VOCABULARY (0-10): Word variety, debate terminology?
-   - 8-10: Rich vocabulary, persuasive language
-   - 5-7: Adequate but repetitive
-   - 0-4: Very limited, colloquial only
+1. RELEVANCE (0-15): 
+   - 13-15: EVERY sentence directly addresses motion with specific points
+   - 9-12: Mostly relevant but 1-2 vague/generic statements
+   - 5-8: Partially relevant, some off-topic wandering
+   - 1-4: Mostly off-topic or just restates motion
+   - 0: Completely irrelevant to the motion
 
-LENGTH PENALTY: If under 100 words, cap each category at 50% of max.
-If under 50 words, cap at 25% of max.
+2. ARGUMENTS (0-15):
+   - 13-15: Clear reasoning WITH specific real-world examples/evidence
+   - 9-12: Decent logic but vague examples
+   - 5-8: Claims without support
+   - 0-4: No arguments, just random statements
 
-Respond with ONLY valid JSON (no explanation, no markdown):
-{{"relevance": <0-15>, "arguments": <0-15>, "structure": <0-10>, "vocabulary": <0-10>, "total": <0-50>, "feedback": "<one honest sentence about what needs improvement>"}}"""
+3. STRUCTURE (0-10):
+   - 8-10: Clear stance → organized points → strong conclusion
+   - 5-7: Some structure but weak
+   - 0-4: Rambling, no flow
+
+4. VOCABULARY (0-10):
+   - 8-10: Persuasive language, good word choice
+   - 5-7: Basic but acceptable
+   - 0-4: Poor vocabulary, slang, filler words
+
+**ALSO RETURN:** Set "off_topic" to true if ANY part of speech is completely unrelated to motion, false otherwise.
+
+FEEDBACK MUST:
+1. Quote specific problematic phrases in "quotation marks"
+2. Explain WHY they're wrong (off-topic, vague, unsupported)
+3. Give specific improvement suggestion
+
+Respond with ONLY valid JSON:
+{{"relevance": <0-15>, "arguments": <0-15>, "structure": <0-10>, "vocabulary": <0-10>, "total": <0-50>, "off_topic": <true/false>, "feedback": "<detailed feedback quoting specific problems>"}}"""""""""
 
 
 def _create_unavailable_result(error: str) -> ContentScoreResult:
@@ -138,7 +153,7 @@ async def score_debate_content(
     
     try:
         prompt = _build_scoring_prompt(transcript.strip(), motion_title, motion_text)
-        result = await llm.generate_json(prompt, max_tokens=300)
+        result = await llm.generate_json(prompt, max_tokens=500)
 
         if not result:
             return _create_unavailable_result("Could not parse LLM response")
@@ -148,6 +163,26 @@ async def score_debate_content(
         arguments = max(0, min(15, int(result.get("arguments", 0))))
         structure = max(0, min(10, int(result.get("structure", 0))))
         vocabulary = max(0, min(10, int(result.get("vocabulary", 0))))
+        is_off_topic = bool(result.get("off_topic", False))
+        
+        # Apply OFF-TOPIC penalty FIRST (most severe)
+        # If LLM detected off-topic content, cap ALL scores severely
+        if is_off_topic:
+            # Off-topic content: cap each category at ~30% of max
+            relevance = min(relevance, 4)  # max 4/15
+            arguments = min(arguments, 4)  # max 4/15
+            structure = min(structure, 3)  # max 3/10
+            vocabulary = min(vocabulary, 3)  # max 3/10
+            logger.info(f"Applied OFF-TOPIC penalty - content unrelated to motion")
+        
+        # Additional check: if relevance is very low (0-3), it means off-topic
+        # Cap other scores proportionally
+        if relevance <= 3:
+            # Very low relevance = cap everything else too
+            arguments = min(arguments, 5)
+            structure = min(structure, 4)
+            vocabulary = min(vocabulary, 4)
+            logger.info(f"Low relevance ({relevance}) - capping other scores")
         
         # Apply programmatic length penalty (in case LLM is too lenient)
         # A good 2-minute turn should be 200-300 words
@@ -178,11 +213,17 @@ async def score_debate_content(
             logger.info(f"Applied length penalty {length_penalty} for {word_count} words")
         
         total = relevance + arguments + structure + vocabulary
-        feedback = str(result.get("feedback", ""))[:200]
+        feedback = str(result.get("feedback", ""))[:500]  # Allow longer detailed feedback
         
-        # Append length warning to feedback if applicable
+        # Prepend warnings to feedback
+        warnings = []
+        if is_off_topic:
+            warnings.append("⚠️ OFF-TOPIC CONTENT DETECTED")
         if penalty_reason:
-            feedback = f"{penalty_reason}. {feedback}"
+            warnings.append(penalty_reason)
+        
+        if warnings:
+            feedback = f"{'. '.join(warnings)}. {feedback}"
 
         logger.info(
             f"Content scored: relevance={relevance}, arguments={arguments}, "
