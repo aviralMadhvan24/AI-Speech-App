@@ -266,24 +266,28 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
       setSpeechError(null);
       
       try {
-        // Stop recording first
+        // Stop recording first (fast)
         const blob = await recorder.stop();
         
-        // Upload to backend
-        await endSpeech(roomCode, currentSpeechId, blob);
-        
-        // Reset state
+        // Immediately update UI - don't wait for upload
+        const speechIdToEnd = currentSpeechId;
         setIsSpeaking(false);
         setCurrentSpeechId(null);
+        setIsStoppingSpeech(false);
         recorder.reset();
+        
+        // Upload in background (don't block UI)
+        endSpeech(roomCode, speechIdToEnd, blob).catch((err) => {
+          console.error("[GD] Background upload failed:", err);
+          setSpeechError("Upload failed, but speech ended");
+        });
       } catch (err) {
         setSpeechError(err instanceof Error ? err.message : "Failed to end speech");
         // Force reset state on error
         setIsSpeaking(false);
         setCurrentSpeechId(null);
-        recorder.reset();
-      } finally {
         setIsStoppingSpeech(false);
+        recorder.reset();
       }
       return;
     }
