@@ -9,8 +9,12 @@ import {
   Mic,
   MicOff,
   MessageCircle,
+  Phone,
+  PhoneOff,
   Trophy,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   Users2,
@@ -30,6 +34,7 @@ import {
 } from "../gdApi";
 import { useGDSocket } from "../hooks/useGDSocket";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { useDailyAudio } from "../hooks/useDailyAudio";
 import { useToast } from "./Toast";
 
 interface GDArenaViewProps {
@@ -125,6 +130,20 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   const { state, connected } = useGDSocket(roomCode, participantId);
   const recorder = useAudioRecorder();
   const toast = useToast();
+  
+  // Get participant's display name for Daily
+  const myDisplayName = useMemo(() => {
+    if (!state || !participantId) return "Participant";
+    const me = state.participants.find((p) => p.participant_id === participantId);
+    return me?.display_name || "Participant";
+  }, [state, participantId]);
+
+  // Daily.co live audio - enabled during prep and discussion phases
+  const dailyAudio = useDailyAudio({
+    roomUrl: state?.daily_room_url || null,
+    userName: myDisplayName,
+    enabled: state?.state === "prep" || state?.state === "discussion",
+  });
 
   // Load topics
   useEffect(() => {
@@ -702,6 +721,54 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
             {formatSeconds(prepRemaining)}
           </div>
         </div>
+        
+        {/* Live Audio Status */}
+        <div className="flex justify-center">
+          <div className={[
+            "inline-flex items-center gap-3 px-4 py-2 rounded-full border",
+            dailyAudio.isJoined
+              ? "bg-emerald-500/10 border-emerald-500/30"
+              : dailyAudio.isConnecting
+              ? "bg-amber-500/10 border-amber-500/30"
+              : "bg-zinc-800/60 border-zinc-700/50"
+          ].join(" ")}>
+            {dailyAudio.isConnecting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                <span className="text-sm text-amber-300">Connecting to audio...</span>
+              </>
+            ) : dailyAudio.isJoined ? (
+              <>
+                <Volume2 className="w-4 h-4 text-emerald-300" />
+                <span className="text-sm text-emerald-300">Live audio connected</span>
+                <button
+                  type="button"
+                  onClick={dailyAudio.toggleMute}
+                  className={[
+                    "p-1.5 rounded-full transition-all",
+                    dailyAudio.isMuted
+                      ? "bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
+                      : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                  ].join(" ")}
+                  title={dailyAudio.isMuted ? "Unmute" : "Mute"}
+                >
+                  {dailyAudio.isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+              </>
+            ) : dailyAudio.error ? (
+              <>
+                <WifiOff className="w-4 h-4 text-rose-300" />
+                <span className="text-sm text-rose-300">Audio unavailable</span>
+              </>
+            ) : (
+              <>
+                <VolumeX className="w-4 h-4 text-zinc-500" />
+                <span className="text-sm text-zinc-500">No live audio</span>
+              </>
+            )}
+          </div>
+        </div>
+        
         <p className="text-center text-xs text-zinc-500">
           Prepare your thoughts. Discussion lasts 15 minutes. Push-to-Talk mode.
         </p>
@@ -736,6 +803,63 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
             ].join(" ")}
           >
             {formatSeconds(discussionRemaining)}
+          </div>
+        </div>
+
+        {/* Live Audio Controls */}
+        <div className="flex justify-center">
+          <div className={[
+            "inline-flex items-center gap-3 px-4 py-2 rounded-full border",
+            dailyAudio.isJoined
+              ? "bg-emerald-500/10 border-emerald-500/30"
+              : dailyAudio.isConnecting
+              ? "bg-amber-500/10 border-amber-500/30"
+              : "bg-zinc-800/60 border-zinc-700/50"
+          ].join(" ")}>
+            {dailyAudio.isConnecting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                <span className="text-sm text-amber-300">Connecting...</span>
+              </>
+            ) : dailyAudio.isJoined ? (
+              <>
+                <Phone className="w-4 h-4 text-emerald-300" />
+                <span className="text-sm text-emerald-300">Live Audio</span>
+                <div className="h-4 w-px bg-zinc-600" />
+                <button
+                  type="button"
+                  onClick={dailyAudio.toggleMute}
+                  className={[
+                    "flex items-center gap-1.5 px-2 py-1 rounded-full transition-all text-xs font-medium",
+                    dailyAudio.isMuted
+                      ? "bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
+                      : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                  ].join(" ")}
+                >
+                  {dailyAudio.isMuted ? (
+                    <>
+                      <VolumeX className="w-3.5 h-3.5" />
+                      Muted
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-3.5 h-3.5" />
+                      Listening
+                    </>
+                  )}
+                </button>
+              </>
+            ) : dailyAudio.error ? (
+              <>
+                <PhoneOff className="w-4 h-4 text-rose-300" />
+                <span className="text-sm text-rose-300">Audio failed</span>
+              </>
+            ) : (
+              <>
+                <VolumeX className="w-4 h-4 text-zinc-500" />
+                <span className="text-sm text-zinc-500">No live audio</span>
+              </>
+            )}
           </div>
         </div>
 

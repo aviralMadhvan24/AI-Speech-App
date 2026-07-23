@@ -16,6 +16,7 @@ from typing import Dict, Optional
 from fastapi import HTTPException, WebSocket
 
 from app.auth import User
+from app.core.daily_client import daily
 from app.gd.schemas import (
     GDParticipantInternal,
     GDRoom,
@@ -266,6 +267,8 @@ class GDRoomManager:
                 room.prep_deadline = time.time() + PREP_SECONDS
                 room.auto_start_deadline = None
                 should_start_prep = True
+                # Create Daily audio room
+                asyncio.create_task(self._create_daily_room(code))
             elif all_ready:
                 # Grace period for late joiners (20s)
                 room.auto_start_deadline = time.time() + 20.0
@@ -299,8 +302,40 @@ class GDRoomManager:
             room.prep_deadline = time.time() + PREP_SECONDS
             room.auto_start_deadline = None  # Clear grace timer
         
+        # Create Daily audio room (outside lock)
+        asyncio.create_task(self._create_daily_room(code))
+        
         self._spawn_timer(code, "prep", self._run_prep_timer(code))
         await self.broadcast(code)
+
+    async def _create_daily_room(self, code: str) -> None:
+        """Create Daily.co audio room for live discussion."""
+        try:
+            room = self._rooms.get(code)
+            if room is None:
+                return
+            
+            # Create unique room name
+            room_name = f"gd-{code.lower()}-{room.session_id[:8]}"
+            
+            result = await daily.create_room(
+                name=room_name,
+                exp_minutes=30,  # Room expires 30 min after creation
+                enable_chat=False,
+            )
+            
+            if result:
+                async with self._lock_for(code):
+                    room = self._rooms.get(code)
+                    if room:
+                        room.daily_room_url = result["url"]
+                        room.daily_room_name = result["name"]
+                        logger.info(f"Daily room created for GD {code}: {result['url']}")
+                await self.broadcast(code)
+            else:
+                logger.warning(f"Failed to create Daily room for GD {code}")
+        except Exception as e:
+            logger.error(f"Daily room creation error for {code}: {e}")
 
     async def _run_prep_timer(self, code: str) -> None:
         try:

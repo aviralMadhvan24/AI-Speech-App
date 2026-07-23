@@ -82,6 +82,8 @@ class GDRoom(BaseModel):
     prep_deadline: Optional[float] = None
     discussion_deadline: Optional[float] = None
     auto_start_deadline: Optional[float] = None  # Dev mode: countdown to auto-start
+    daily_room_url: Optional[str] = None  # Daily.co audio room URL
+    daily_room_name: Optional[str] = None  # Daily.co room name for cleanup
     created_at: float
     completed_at: Optional[float] = None
     scoring_started_at: Optional[float] = None
@@ -128,6 +130,7 @@ class PublicGDRoom(BaseModel):
     prep_deadline: Optional[float] = None
     discussion_deadline: Optional[float] = None
     auto_start_deadline: Optional[float] = None  # Dev mode: countdown to auto-start
+    daily_room_url: Optional[str] = None  # Daily.co audio room URL (shared after prep)
     scoring_started_at: Optional[float] = None
     total_speeches: int = 0
 
@@ -171,6 +174,7 @@ def to_public(room: GDRoom) -> PublicGDRoom:
         prep_deadline=room.prep_deadline,
         discussion_deadline=room.discussion_deadline,
         auto_start_deadline=room.auto_start_deadline,
+        daily_room_url=room.daily_room_url if room.state in ("prep", "discussion") else None,
         scoring_started_at=room.scoring_started_at,
         total_speeches=len(room.speeches),
     )

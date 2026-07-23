@@ -10,6 +10,7 @@
     "lint": "tsc -b --pretty"
   },
   "dependencies": {
+    "@daily-co/daily-js": "^0.91.0",
     "chart.js": "^4.4.4",
     "firebase": "^12.15.0",
     "lucide-react": "^0.460.0",

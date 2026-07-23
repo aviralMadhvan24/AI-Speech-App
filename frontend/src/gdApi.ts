@@ -39,6 +39,7 @@ export interface PublicGDRoom {
   prep_deadline: number | null;
   discussion_deadline: number | null;
   auto_start_deadline: number | null;
+  daily_room_url: string | null;
   scoring_started_at: number | null;
   total_speeches: number;
 }
