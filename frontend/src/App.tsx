@@ -15,6 +15,7 @@ import { LoginView } from "./components/LoginView";
 import { MainMenuView } from "./components/MainMenuView";
 import { PracticeView } from "./components/PracticeView";
 import { ProcessingView } from "./components/ProcessingView";
+import { ProfileView } from "./components/ProfileView";
 import { ReportView } from "./components/ReportView";
 import { fetchSentences, fetchSessions, scoreAudio } from "./api";
 import type { PlayerRole, RoomState } from "./battleApi";
@@ -41,7 +42,8 @@ type View =
   | "gd-arena"
   | "admin-panel"
   | "admin-review"
-  | "admin-student";
+  | "admin-student"
+  | "profile";
 
 interface BattleSession {
   roomCode: string;
@@ -203,6 +205,10 @@ export default function App() {
     setActiveSubmissionId(null);
     setActiveStudentEmail(null);
     setView("admin-panel");
+  }, []);
+
+  const handleSelectProfile = useCallback(() => {
+    setView("profile");
   }, []);
 
   const handleOpenReview = useCallback((submissionId: string) => {
@@ -432,6 +438,7 @@ export default function App() {
             onSelectDebate={handleSelectDebate}
             onSelectGD={handleSelectGD}
             onSelectAdmin={handleSelectAdmin}
+            onSelectProfile={handleSelectProfile}
           />
         )}
 
@@ -533,6 +540,10 @@ export default function App() {
             email={activeStudentEmail}
             onBack={handleBackToAdminPanel}
           />
+        )}
+
+        {view === "profile" && (
+          <ProfileView user={user} onBack={handleBackToMenu} />
         )}
       </main>
 
