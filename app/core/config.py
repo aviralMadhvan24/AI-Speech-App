@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # an "analyzing" spinner.
     CSA_ANALYZE_TIMEOUT_SECONDS: int = 120
 
+    # --- LLM (content scoring) ---
+    # Read through Settings rather than os.getenv so a local `.env` works the
+    # same way it does for every other setting. pydantic-settings still picks
+    # these up from real environment variables, which is how systemd supplies
+    # them in production.
+    GROQ_API_KEY: str | None = None
+    OLLAMA_URL: str = "http://localhost:11434"
+
     # --- Auth ---
     # When true, the backend skips Firebase token verification entirely and
     # treats every request as a fake `dev@kiet.edu` user. Pair with

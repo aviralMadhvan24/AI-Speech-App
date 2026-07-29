@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 import httpx
 
+from app.core.config import settings
+
 logger = logging.getLogger("llm_client")
 
 
@@ -21,9 +23,17 @@ class LLMClient:
     """Unified LLM client - uses Groq in production, Ollama locally."""
 
     def __init__(self):
-        self.groq_key = os.getenv("GROQ_API_KEY")
-        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        # Prefer Settings (which reads both real env vars and `.env`) and fall
+        # back to os.getenv so anything exported at runtime still wins.
+        self.groq_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY")
+        self.ollama_url = (
+            os.getenv("OLLAMA_URL") or settings.OLLAMA_URL or "http://localhost:11434"
+        )
         self.timeout = 45.0  # seconds
+        logger.info(
+            "LLM client initialised: provider=%s",
+            "groq" if self.groq_key else f"ollama({self.ollama_url})",
+        )
 
     @property
     def provider(self) -> str:
