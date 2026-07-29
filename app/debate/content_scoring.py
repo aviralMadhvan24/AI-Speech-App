@@ -31,6 +31,7 @@ class ContentScoreResult:
     feedback: str  # One-line feedback
     available: bool  # Whether scoring succeeded
     error: Optional[str] = None  # Error message if failed
+    off_topic: bool = False  # Speech did not address the motion at all
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +43,7 @@ class ContentScoreResult:
             "feedback": self.feedback,
             "available": self.available,
             "error": self.error,
+            "off_topic": self.off_topic,
         }
 
 
@@ -212,6 +214,9 @@ async def score_debate_content(
             f"structure={structure}, vocabulary={vocabulary}, total={total}, words={word_count}"
         )
 
+        # A speech is treated as off-topic when the judge says so outright, or
+        # when relevance collapsed to near-zero. Surfaced on the result so the
+        # final score can gate on it rather than relying on the total alone.
         return ContentScoreResult(
             relevance=relevance,
             arguments=arguments,
@@ -220,6 +225,7 @@ async def score_debate_content(
             total=total,
             feedback=feedback or "Score computed successfully",
             available=True,
+            off_topic=is_off_topic or relevance <= 3,
         )
 
     except Exception as e:

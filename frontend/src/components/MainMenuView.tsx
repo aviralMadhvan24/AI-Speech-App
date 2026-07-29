@@ -122,10 +122,10 @@ export function MainMenuView({
       },
       {
         id: "debate",
-        title: "Group Debate",
+        title: "Debate",
         tagline: "Phase 4 · Live",
         description:
-          "Join 4-6 participants in a live debate. One motion, one turn each. AI-scored with teacher override.",
+          "Head-to-head debate with one opponent. One motion, one turn each. AI-scored with teacher override.",
         icon: MessageSquareText,
         status: "live",
         accent: "text-violet-300",
@@ -134,7 +134,7 @@ export function MainMenuView({
         iconGlow:
           "bg-gradient-to-br from-violet-500 to-fuchsia-600 shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
         onClick: onSelectDebate,
-        ariaLabel: "Open group debate",
+        ariaLabel: "Open debate",
       },
       {
         id: "gd",

@@ -195,6 +195,22 @@ async def run(
             f"was_interrupted_count={participant_by_key['gd_strong'].was_interrupted_count}",
         )
 
+        # --- host permissions ----------------------------------------------
+        section.record(
+            "room creator is marked host",
+            participant_by_key["gd_strong"].is_host,
+            f"is_host={participant_by_key['gd_strong'].is_host}",
+        )
+        section.record(
+            "joiners are not hosts",
+            not any(
+                participant_by_key[key].is_host
+                for key in ("gd_moderate", "gd_off_topic", "gd_short")
+            ),
+            "only one host in the room",
+        )
+        await _assert_end_is_host_only(section, code, users)
+
         # --- end + score (mirrors the route's background scoring task) ------
         await mgr.end_discussion(code)
         section.record(
@@ -271,6 +287,42 @@ async def run(
             mgr._rooms.pop(code, None)
 
 
+async def _assert_end_is_host_only(
+    section: Section, code: str, users: list[User]
+) -> None:
+    """A non-host calling the end-discussion route must be rejected.
+
+    The route guard is called directly because AUTH_BYPASS collapses every HTTP
+    request onto one dev user, so distinct callers cannot be simulated over
+    HTTP. The host path is deliberately not exercised here: it would spawn the
+    real background scoring task and race this test's own scoring.
+    """
+    from fastapi import HTTPException
+
+    from app.gd.routes import end_discussion_manually
+
+    try:
+        await end_discussion_manually(code, current_user=users[1])
+    except HTTPException as exc:
+        section.record(
+            "non-host cannot end the discussion",
+            exc.status_code == 403 and exc.detail == "host_only",
+            f"{exc.status_code} {exc.detail}",
+        )
+    else:
+        section.record(
+            "non-host cannot end the discussion",
+            False,
+            "call succeeded for a non-host",
+        )
+
+    section.record(
+        "rejected call left the discussion running",
+        mgr._rooms[code].state == "discussion",
+        mgr._rooms[code].state,
+    )
+
+
 def _print_table(section: Section, by_key: dict[str, GDParticipantScore]) -> None:
     section.note("")
     section.note("component scores (content/30 comm/20 part/20 listen/15 lead/15):")
@@ -343,6 +395,25 @@ def _assert_gd_scores(
         by_key["gd_short"].leadership < by_key["gd_strong"].leadership,
         f"short={by_key['gd_short'].leadership} vs strong={by_key['gd_strong'].leadership}",
     )
+
+    # Hard: the content gate. Delivery and speak time must not carry a speaker
+    # who never engaged with the topic.
+    off_topic = by_key["gd_off_topic"]
+    if off_topic.content_quality <= 0:
+        section.record(
+            "zero-content speaker is gated to 25/100 or below",
+            off_topic.total_score <= 25.0,
+            (
+                f"total={off_topic.total_score} "
+                f"(comm={off_topic.communication}, part={off_topic.participation})"
+            ),
+        )
+    elif off_topic.content_quality <= 5:
+        section.record(
+            "very-low-content speaker is gated to 40/100 or below",
+            off_topic.total_score <= 40.0,
+            f"total={off_topic.total_score}, content={off_topic.content_quality}",
+        )
 
     # Soft: LLM judgement. Without a provider the scorer returns a flat
     # fallback for everyone, so these comparisons carry no signal.

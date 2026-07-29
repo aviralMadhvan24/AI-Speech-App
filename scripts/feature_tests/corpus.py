@@ -168,8 +168,12 @@ GIBBERISH = Sample(
 
 DEBATE_SAMPLES: tuple[Sample, ...] = (STRONG, MODERATE, SHORT, OFF_TOPIC, GIBBERISH)
 
-# The four speakers used in the full debate run, in turn order.
-DEBATE_LINEUP: tuple[Sample, ...] = (STRONG, MODERATE, OFF_TOPIC, SHORT)
+# Debate is head-to-head (2 speakers per room), so the four content types are
+# covered across two matches instead of one four-way room.
+DEBATE_MATCHES: tuple[tuple[Sample, Sample], ...] = (
+    (STRONG, OFF_TOPIC),   # strong argument vs fluent but off-topic
+    (MODERATE, SHORT),     # vague but on-topic vs far too short
+)
 
 
 # --- GD samples (all judged against GD_TOPIC) ----------------------------

@@ -989,23 +989,29 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           </div>
         </div>
 
-        {/* End button */}
+        {/* End button - host only */}
         <div className="text-center">
-          <button
-            type="button"
-            onClick={handleEndDiscussion}
-            disabled={isEndingDiscussion}
-            className="btn-primary px-4 py-2"
-          >
-            {isEndingDiscussion ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Ending...
-              </>
-            ) : (
-              "End Discussion & Get Scores"
-            )}
-          </button>
+          {myParticipant?.is_host ? (
+            <button
+              type="button"
+              onClick={handleEndDiscussion}
+              disabled={isEndingDiscussion}
+              className="btn-primary px-4 py-2"
+            >
+              {isEndingDiscussion ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Ending...
+                </>
+              ) : (
+                "End Discussion & Get Scores"
+              )}
+            </button>
+          ) : (
+            <p className="text-xs text-zinc-500">
+              Only the host can end the discussion.
+            </p>
+          )}
         </div>
       </section>
     );

@@ -265,7 +265,7 @@ async def end_discussion_manually(
     code: str,
     current_user: User = Depends(require_user),
 ) -> EndDiscussionResponse:
-    """End discussion manually (host action) - starts scoring."""
+    """End discussion manually - host only, starts scoring."""
     normalized = code.strip().upper()
     room = gd_room_manager.get_state(normalized)
     if room is None:
@@ -278,6 +278,10 @@ async def end_discussion_manually(
     )
     if participant is None:
         raise HTTPException(status_code=403, detail="not_a_participant")
+
+    # Only the room creator may end the discussion for everyone.
+    if not participant.is_host:
+        raise HTTPException(status_code=403, detail="host_only")
     
     await gd_room_manager.end_discussion(normalized)
     

@@ -73,10 +73,11 @@ TURN_SECONDS = 120
 TURN_GRACE_SECONDS = 15
 RECONNECT_GRACE_SECONDS = 30
 
+# Debate is head-to-head: exactly two speakers, one turn each.
 # Dev mode allows single-player testing (set DEBATE_DEV_MODE=true in .env)
 _DEV_MODE = os.getenv("DEBATE_DEV_MODE", "").lower() in ("true", "1", "yes")
-MIN_PARTICIPANTS = 1 if _DEV_MODE else 4
-MAX_PARTICIPANTS = 6
+MIN_PARTICIPANTS = 1 if _DEV_MODE else 2
+MAX_PARTICIPANTS = 2
 GC_TTL_SECONDS = 60 * 60
 
 # Log dev mode status at startup
@@ -1004,8 +1005,11 @@ class DebateRoomManager:
             )
 
     async def _maybe_abandon(self, code: str) -> None:
-        """If the connected non-forfeit count fell below 2, transition
-        the room to ``abandoned`` without persisting a ``DebateRecord``.
+        """If too few connected non-forfeit speakers remain, transition the
+        room to ``abandoned`` without persisting a ``DebateRecord``.
+
+        Threshold follows ``MIN_PARTICIPANTS`` so a 1v1 debate ends when either
+        side drops, while a dev-mode solo run is not killed instantly.
         """
         async with self._lock_for(code):
             room = self._rooms.get(code)
@@ -1013,7 +1017,7 @@ class DebateRoomManager:
                 return
             if room.state in ("complete", "abandoned", "waiting"):
                 return
-            if self._connected_non_forfeit_count(room) >= 2:
+            if self._connected_non_forfeit_count(room) >= MIN_PARTICIPANTS:
                 return
             room.state = "abandoned"
             room.completed_at = time.time()

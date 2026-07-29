@@ -359,6 +359,23 @@ async def compute_final_scores(
         
         total = content_score + comm_score + part_score + listen_score + lead_score
         total = round(min(100.0, max(0.0, total)), 2)
+
+        # Content gate: participation and delivery alone must not carry someone
+        # who never engaged with the topic. Without this, an off-topic speaker
+        # scoring 0/30 on content still finished in the mid-30s on the strength
+        # of speak time and clarity.
+        is_off_topic = "OFF-TOPIC" in (content_feedback or "").upper()
+        if p.speech_count > 0:
+            if content_score <= 0 or is_off_topic:
+                total = round(min(total, 25.0), 2)
+                logger.info(
+                    f"Off-topic/zero-content gate for {p.display_name}: capped at 25"
+                )
+            elif content_score <= 5:
+                total = round(min(total, 40.0), 2)
+                logger.info(
+                    f"Low content ({content_score}/30) for {p.display_name}: capped at 40"
+                )
         
         # Combined feedback with all details
         if p.speech_count == 0:

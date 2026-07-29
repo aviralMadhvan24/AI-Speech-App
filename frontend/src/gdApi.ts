@@ -19,6 +19,7 @@ export interface GDParticipantPublic {
   participant_id: string;
   display_name: string;
   avatar_url: string | null;
+  is_host?: boolean;
   is_ready: boolean;
   is_currently_speaking: boolean;
   speech_count: number;

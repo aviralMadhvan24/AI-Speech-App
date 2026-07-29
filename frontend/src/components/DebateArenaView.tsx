@@ -610,7 +610,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </button>
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-violet-300 bg-violet-500/10 border border-violet-500/30 px-3 py-1 rounded-full">
             <MessageSquareText className="w-3.5 h-3.5" />
-            <span>Group Debate · Live</span>
+            <span>Debate · Live</span>
           </div>
         </div>
 
@@ -621,14 +621,13 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           />
           <div className="relative">
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-              Group{" "}
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-fuchsia-400 to-pink-400 animate-gradient-shift bg-[length:200%_200%]">
                 Debate
               </span>
             </h1>
             <p className="mt-2 text-zinc-400 text-sm md:text-base max-w-2xl leading-relaxed">
-              Live debate with 4-6 participants. One motion, one turn each (120s), AI-scored.
-              Highest effective score wins.
+              Head-to-head debate against one opponent. One motion, one turn each
+              (120s), AI-scored. Higher effective score wins.
             </p>
           </div>
         </header>
@@ -655,8 +654,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               </div>
             </div>
             <p className="text-sm text-zinc-400">
-              A random motion will be assigned when you create the room. Wait for
-              at least 3 more players — debate auto-starts when all are ready.
+              A random motion will be assigned when you create the room. Share the
+              code with your opponent — the debate starts once you are both ready.
             </p>
             <button
               type="button"
@@ -793,7 +792,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
       <div className="flex items-center gap-2">
         <span className="chip bg-violet-500/10 text-violet-300 border border-violet-500/30">
           <MessageSquareText className="w-3 h-3" />
-          Group Debate
+          Debate
         </span>
         <span className="text-zinc-500 text-sm">
           Room{" "}
@@ -876,7 +875,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     content = (
       <section className="card-glass p-8 md:p-10 space-y-6 text-center">
         <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
-          Share this code with your classmates
+          Share this code with your opponent
         </div>
         <div className="text-5xl md:text-6xl font-mono font-bold tracking-[0.35em] gradient-text">
           {roomCode}
@@ -927,7 +926,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </button>
           <div className="text-xs text-zinc-500 tabular-nums">
             {readyCount} / {totalParticipants} ready
-            {!allReady && totalParticipants < 4 && " · waiting for players"}
+            {!allReady && totalParticipants < 2 && " · waiting for opponent"}
           </div>
         </div>
       </section>

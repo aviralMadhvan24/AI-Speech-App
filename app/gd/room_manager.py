@@ -181,6 +181,7 @@ class GDRoomManager:
                 display_name=user.name or user.email,
                 avatar_url=users_store.avatar_url_for(user.uid),
                 joined_at=now,
+                is_host=True,
             )
             room = GDRoom(
                 session_id=uuid.uuid4().hex,
