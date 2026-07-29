@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from app.core.config import settings
 
-from .harness import Report
+from .harness import Report, Section
 
 
 def _client():
@@ -108,9 +108,113 @@ def run(report: Report) -> None:
             str(response.status_code),
         )
 
+        _check_topic_catalog(section, client, "debate motion", "/admin/debate-motions", "/debate/motions")
+        _check_topic_catalog(section, client, "GD topic", "/admin/gd-topics", "/gd/topics")
+
+        # Role gate on the catalog endpoints, checked as a student.
+        settings.TEACHER_EMAILS = "someone.else@kiet.edu"
+        for admin_path in ("/admin/debate-motions", "/admin/gd-topics"):
+            blocked = client.get(admin_path).status_code == 403 and (
+                client.post(
+                    admin_path,
+                    json={"title": "Blocked attempt", "text": "x" * 40},
+                ).status_code
+                == 403
+            )
+            section.record(
+                f"student cannot read or write {admin_path}",
+                blocked,
+                "403 on GET and POST",
+            )
+
     except Exception as exc:  # noqa: BLE001
         section.error = f"{type(exc).__name__}: {exc}"
     finally:
         settings.AUTH_BYPASS = original_bypass
         settings.TEACHER_EMAILS = original_teachers
         client.close()
+
+
+def _check_topic_catalog(
+    section: Section,
+    client,
+    label: str,
+    admin_path: str,
+    student_path: str,
+) -> None:
+    """Add a catalog entry, confirm students see it, then remove it.
+
+    Runs against the real store, so it deletes what it creates. Built-in
+    catalog entries are asserted to stay read-only.
+    """
+    before = client.get(admin_path)
+    if before.status_code != 200:
+        section.record(f"GET {admin_path}", False, str(before.status_code))
+        return
+    baseline = len(before.json())
+
+    created = client.post(
+        admin_path,
+        json={
+            "title": f"Feature test {label}",
+            "text": (
+                f"Automated feature-test {label} body, long enough to pass validation "
+                "and removed again at the end of this check."
+            ),
+            "category": "feature-test",
+        },
+    )
+    if created.status_code != 201:
+        section.record(
+            f"teacher can add a {label}",
+            False,
+            f"{created.status_code} {created.text[:120]}",
+        )
+        return
+    entry_id = created.json()["id"]
+    section.record(f"teacher can add a {label}", True, f"id={entry_id}")
+
+    try:
+        catalog = client.get(admin_path).json()
+        section.record(
+            f"added {label} appears in the admin catalog",
+            len(catalog) == baseline + 1
+            and any(e["id"] == entry_id and e["is_custom"] for e in catalog),
+            f"{len(catalog)} entries, was {baseline}",
+        )
+
+        student_view = client.get(student_path)
+        section.record(
+            f"added {label} is offered to students",
+            student_view.status_code == 200
+            and any(e["id"] == entry_id for e in student_view.json()),
+            f"{student_path} -> {len(student_view.json())} entries",
+        )
+
+        short = client.post(admin_path, json={"title": "x", "text": "too short"})
+        section.record(
+            f"{label} validation rejects thin input",
+            short.status_code == 422,
+            str(short.status_code),
+        )
+
+        builtin = next((e["id"] for e in catalog if not e["is_custom"]), None)
+        if builtin:
+            readonly = client.delete(f"{admin_path}/{builtin}")
+            section.record(
+                f"built-in {label} cannot be deleted",
+                readonly.status_code == 403,
+                f"{readonly.status_code} {readonly.json().get('detail')}",
+            )
+    finally:
+        removed = client.delete(f"{admin_path}/{entry_id}")
+        section.record(
+            f"added {label} can be deleted",
+            removed.status_code == 200,
+            str(removed.status_code),
+        )
+        section.record(
+            f"{label} catalog returns to its original size",
+            len(client.get(admin_path).json()) == baseline,
+            f"{len(client.get(admin_path).json())} vs {baseline} baseline",
+        )

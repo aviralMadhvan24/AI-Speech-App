@@ -17,7 +17,7 @@ from fastapi import HTTPException, WebSocket
 
 from app.auth import User
 from app.core.livekit_client import livekit
-from app.storage import users_store
+from app.storage import custom_topics, users_store
 from app.gd.schemas import (
     GDParticipantInternal,
     GDRoom,
@@ -58,11 +58,23 @@ TOPICS_PATH = Path("app/data/gd_topics.json")
 _topics_cache: Optional[list[GDTopic]] = None
 
 
+def invalidate_topics_cache() -> None:
+    """Drop the cached catalog so the next load picks up teacher edits."""
+    global _topics_cache
+    _topics_cache = None
+
+
 def _load_topics() -> list[GDTopic]:
-    """Load topics from JSON file."""
+    """Load the shipped catalog plus any teacher-authored topics, and cache.
+
+    A broken shipped file is logged but does not take the feature down if
+    custom topics exist; only an empty combined catalog is fatal.
+    """
     global _topics_cache
     if _topics_cache is not None:
         return _topics_cache
+
+    topics: list[GDTopic] = []
     try:
         with open(TOPICS_PATH, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -71,8 +83,20 @@ def _load_topics() -> list[GDTopic]:
         topics = [GDTopic.model_validate(entry) for entry in raw]
     except Exception as exc:
         logger.error(f"Failed to load GD topics: {exc}")
-        raise HTTPException(status_code=500, detail="topics_unavailable") from exc
-    _topics_cache = topics
+
+    for entry in custom_topics.list_topics():
+        try:
+            topics.append(GDTopic.model_validate(entry))
+        except Exception as exc:  # noqa: BLE001 - skip the bad row, keep the rest
+            logger.warning(f"Invalid custom GD topic {entry.get('id')}: {exc}")
+
+    # Later entries win on duplicate ids so a custom topic can shadow a
+    # shipped one deliberately.
+    deduped = {topic.id: topic for topic in topics}
+    if not deduped:
+        raise HTTPException(status_code=500, detail="topics_unavailable")
+
+    _topics_cache = list(deduped.values())
     return _topics_cache
 
 

@@ -6,6 +6,7 @@ import {
   Download,
   HardDrive,
   LayoutDashboard,
+  ListPlus,
   MessagesSquare,
   Trophy,
   Users,
@@ -21,6 +22,7 @@ import { PendingGDList } from "./admin/gd/PendingGDList";
 import { GDReviewPanel } from "./admin/gd/GDReviewPanel";
 import { ExportReports } from "./admin/ExportReports";
 import { StorageStats } from "./admin/StorageStats";
+import { TopicManager } from "./admin/TopicManager";
 
 type AdminTab =
   | "pending"
@@ -29,6 +31,7 @@ type AdminTab =
   | "leaderboard"
   | "debates"
   | "gd"
+  | "topics"
   | "exports"
   | "storage";
 
@@ -49,6 +52,7 @@ const TABS: Array<{
   { id: "leaderboard", label: "Leaderboard", icon: Trophy },
   { id: "debates", label: "Debates", icon: MessagesSquare },
   { id: "gd", label: "Group Discussions", icon: Users2 },
+  { id: "topics", label: "Topics", icon: ListPlus },
   { id: "exports", label: "Exports", icon: Download },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
@@ -161,6 +165,7 @@ export function AdminPanelView({
         {active === "gd" && (
           <PendingGDList onOpenSession={setSelectedGDSessionId} />
         )}
+        {active === "topics" && <TopicManager />}
         {active === "exports" && <ExportReports />}
         {active === "storage" && <StorageStats />}
       </div>

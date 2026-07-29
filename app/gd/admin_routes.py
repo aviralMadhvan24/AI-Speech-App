@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import User, require_teacher
 from app.gd.schemas import GDSessionRecord, GDSpeechRecord
+from app.storage import custom_topics
 from app.storage import gd_sessions as gd_sessions_store
 from app.storage import gd_speeches as gd_speeches_store
 
@@ -237,3 +238,105 @@ async def delete_gd_session(
         overwrite_jsonl(speech_path, speech_out)
     
     return {"deleted": True, "session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Topic catalog management (teacher-authored topics)
+#
+# Deliberately its own router/prefix: the review router already owns
+# ``/admin/gd/{session_id}``, which would swallow ``/admin/gd/topics`` because
+# FastAPI matches routes in registration order.
+# ---------------------------------------------------------------------------
+
+topics_router = APIRouter(prefix="/admin/gd-topics", tags=["admin-gd"])
+
+
+class TopicEntry(BaseModel):
+    """One row in the GD topic catalog, with its provenance."""
+
+    id: str
+    title: str
+    text: str
+    category: str
+    is_custom: bool
+    created_by: Optional[str] = None
+
+
+class CreateTopicRequest(BaseModel):
+    title: str = Field(min_length=4, max_length=120)
+    text: str = Field(min_length=20, max_length=1000)
+    category: str = Field(default="general", max_length=40)
+
+
+@topics_router.get("", response_model=List[TopicEntry])
+async def list_topic_catalog(
+    current_user: User = Depends(require_teacher),
+) -> List[TopicEntry]:
+    """Full GD topic catalog: shipped entries plus teacher-authored ones."""
+    del current_user
+    from app.gd.room_manager import _load_topics
+
+    custom_by_id = {row["id"]: row for row in custom_topics.list_topics()}
+    return [
+        TopicEntry(
+            id=topic.id,
+            title=topic.title,
+            text=topic.text,
+            category=topic.category,
+            is_custom=custom_topics.is_custom(topic.id),
+            created_by=(custom_by_id.get(topic.id) or {}).get("created_by"),
+        )
+        for topic in _load_topics()
+    ]
+
+
+@topics_router.post("", response_model=TopicEntry, status_code=201)
+async def create_topic(
+    body: CreateTopicRequest,
+    current_user: User = Depends(require_teacher),
+) -> TopicEntry:
+    """Add a topic that students can be assigned in GD rooms."""
+    from app.gd.room_manager import invalidate_topics_cache
+
+    title = body.title.strip()
+    text = body.text.strip()
+    category = (body.category or "general").strip() or "general"
+    if not title or not text:
+        raise HTTPException(status_code=422, detail="title_and_text_required")
+
+    record = custom_topics.add_topic(
+        title=title,
+        text=text,
+        category=category,
+        created_by=current_user.email,
+    )
+    # Rooms pick topics from the cached catalog, so refresh it now.
+    invalidate_topics_cache()
+
+    return TopicEntry(
+        id=record["id"],
+        title=record["title"],
+        text=record["text"],
+        category=record["category"],
+        is_custom=True,
+        created_by=record.get("created_by"),
+    )
+
+
+@topics_router.delete("/{topic_id}")
+async def delete_topic(
+    topic_id: str,
+    current_user: User = Depends(require_teacher),
+) -> dict:
+    """Delete a teacher-authored topic. Shipped topics are read-only."""
+    from app.gd.room_manager import invalidate_topics_cache
+
+    if not custom_topics.is_custom(topic_id):
+        raise HTTPException(status_code=403, detail="builtin_topic_readonly")
+
+    if not custom_topics.delete_topic(topic_id):
+        raise HTTPException(status_code=404, detail="topic_not_found")
+
+    logger.info(f"Teacher {current_user.email} deleted GD topic {topic_id}")
+    invalidate_topics_cache()
+    return {"deleted": True, "id": topic_id}

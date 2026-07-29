@@ -49,6 +49,7 @@ from app.debate.schemas import (
     to_public,
 )
 from app.debate.scoring import compute_effective_score, compute_winner
+from app.storage import custom_topics
 from app.debate.service import compute_ai_score, compute_ai_score_with_content
 from app.fluency.schemas import FluencyResult
 from app.schemas.pronunciation_schema import PronunciationResult
@@ -94,15 +95,24 @@ MOTIONS_PATH = Path("app/data/debate_motions.json")
 _motions_cache: Optional[list[Motion]] = None
 
 
-def _load_motions() -> list[Motion]:
-    """Load motions once and cache them.
+def invalidate_motions_cache() -> None:
+    """Drop the cached catalog so the next load picks up teacher edits."""
+    global _motions_cache
+    _motions_cache = None
 
-    Raises ``HTTPException(500, "motions_unavailable")`` on parse
-    failure or empty catalog per Req 12.4.
+
+def _load_motions() -> list[Motion]:
+    """Load the shipped catalog plus any teacher-authored motions, and cache.
+
+    Raises ``HTTPException(500, "motions_unavailable")`` when the combined
+    catalog ends up empty per Req 12.4. A broken shipped file is logged but
+    does not take the feature down if custom motions exist.
     """
     global _motions_cache
     if _motions_cache is not None:
         return _motions_cache
+
+    motions: list[Motion] = []
     try:
         with open(MOTIONS_PATH, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -115,8 +125,24 @@ def _load_motions() -> list[Motion]:
             MOTIONS_PATH,
             type(exc).__name__,
         )
-        raise HTTPException(status_code=500, detail="motions_unavailable") from exc
-    _motions_cache = motions
+
+    for entry in custom_topics.list_motions():
+        try:
+            motions.append(Motion.model_validate(entry))
+        except Exception as exc:  # noqa: BLE001 - skip the bad row, keep the rest
+            logger.warning(
+                "custom_motion_invalid id=%s err=%s",
+                entry.get("id"),
+                type(exc).__name__,
+            )
+
+    # Later entries win on duplicate ids so a custom motion can shadow a
+    # shipped one deliberately.
+    deduped = {motion.id: motion for motion in motions}
+    if not deduped:
+        raise HTTPException(status_code=500, detail="motions_unavailable")
+
+    _motions_cache = list(deduped.values())
     return _motions_cache
 
 
