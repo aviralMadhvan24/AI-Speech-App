@@ -6,6 +6,7 @@ import {
   Calendar,
   Camera,
   Check,
+  ChevronDown,
   Loader2,
   MessageSquareText,
   Mic,
@@ -18,6 +19,8 @@ import {
 } from "lucide-react";
 import type { AuthUser } from "../types";
 import { getCurrentIdToken } from "../hooks/useAuth";
+import { getDebateDetail, type DebateTurnAudioRef } from "../debateApi";
+import { DebateTurnsAudio } from "./DebateTurnsAudio";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,6 +171,56 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Per-debate playback: which "Recent Debates" row is expanded, plus a cache of
+  // the per-turn audio refs fetched on demand from the debate-detail endpoint.
+  // We fetch lazily (on expand) instead of widening /profile/summary, keeping
+  // profile_routes.py untouched and reusing the participant-authorized endpoint.
+  const [expandedDebateId, setExpandedDebateId] = useState<string | null>(null);
+  const [turnAudioByDebate, setTurnAudioByDebate] = useState<
+    Record<string, DebateTurnAudioRef[]>
+  >({});
+  const [loadingDebateId, setLoadingDebateId] = useState<string | null>(null);
+  const [debateAudioError, setDebateAudioError] = useState<
+    Record<string, string>
+  >({});
+
+  const toggleDebateAudio = useCallback(
+    async (debateId: string) => {
+      // Collapse if already open.
+      if (expandedDebateId === debateId) {
+        setExpandedDebateId(null);
+        return;
+      }
+      setExpandedDebateId(debateId);
+
+      // Only fetch once per debate; subsequent expands use the cache.
+      if (turnAudioByDebate[debateId]) return;
+
+      setLoadingDebateId(debateId);
+      setDebateAudioError((prev) => {
+        const next = { ...prev };
+        delete next[debateId];
+        return next;
+      });
+      try {
+        const detail = await getDebateDetail(debateId);
+        setTurnAudioByDebate((prev) => ({
+          ...prev,
+          [debateId]: detail.turn_audio ?? [],
+        }));
+      } catch (err) {
+        setDebateAudioError((prev) => ({
+          ...prev,
+          [debateId]:
+            err instanceof Error ? err.message : "Failed to load turn audio",
+        }));
+      } finally {
+        setLoadingDebateId((cur) => (cur === debateId ? null : cur));
+      }
+    },
+    [expandedDebateId, turnAudioByDebate],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -437,23 +490,74 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
                 Recent Debates
               </h2>
               <ul className="space-y-2">
-                {data.recent_debates.map((d) => (
-                  <li key={d.debate_id} className="bg-zinc-800/50 rounded-lg p-3 flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-zinc-100 truncate">{d.motion_title}</div>
-                      <div className="text-xs text-zinc-500">
-                        {d.code} · {d.participant_count} participants · {formatDate(d.completed_at)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-zinc-100">{Math.round(d.your_score)}</div>
-                      <div className="text-xs text-zinc-500">Rank #{d.your_rank}</div>
-                    </div>
-                    {d.is_winner && (
-                      <Trophy className="w-5 h-5 text-amber-300" />
-                    )}
-                  </li>
-                ))}
+                {data.recent_debates.map((d) => {
+                  const isExpanded = expandedDebateId === d.debate_id;
+                  const isLoading = loadingDebateId === d.debate_id;
+                  const turnAudio = turnAudioByDebate[d.debate_id];
+                  const audioError = debateAudioError[d.debate_id];
+                  const panelId = `debate-audio-${d.debate_id}`;
+                  return (
+                    <li
+                      key={d.debate_id}
+                      className="bg-zinc-800/50 rounded-lg overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void toggleDebateAudio(d.debate_id)}
+                        aria-expanded={isExpanded}
+                        aria-controls={panelId}
+                        className="w-full p-3 flex items-center gap-3 text-left hover:bg-zinc-800/70 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-zinc-100 truncate">{d.motion_title}</div>
+                          <div className="text-xs text-zinc-500">
+                            {d.code} · {d.participant_count} participants · {formatDate(d.completed_at)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-lg font-bold text-zinc-100">{Math.round(d.your_score)}</div>
+                          <div className="text-xs text-zinc-500">Rank #{d.your_rank}</div>
+                        </div>
+                        {d.is_winner && (
+                          <Trophy className="w-5 h-5 text-amber-300" aria-hidden />
+                        )}
+                        <ChevronDown
+                          className={[
+                            "w-4 h-4 text-zinc-400 transition-transform",
+                            isExpanded ? "rotate-180" : "",
+                          ].join(" ")}
+                          aria-hidden
+                        />
+                      </button>
+
+                      {isExpanded && (
+                        <div id={panelId} className="px-3 pb-3">
+                          {isLoading && (
+                            <div className="flex items-center gap-2 py-2 text-xs text-zinc-400">
+                              <Loader2 className="w-4 h-4 animate-spin text-brand-300" />
+                              Loading turn audio…
+                            </div>
+                          )}
+                          {!isLoading && audioError && (
+                            <p className="py-2 text-xs text-rose-300">{audioError}</p>
+                          )}
+                          {!isLoading && !audioError && turnAudio && (
+                            turnAudio.length > 0 ? (
+                              <DebateTurnsAudio
+                                turns={turnAudio}
+                                title="Turn Playback"
+                              />
+                            ) : (
+                              <p className="py-2 text-xs text-zinc-500">
+                                No turn audio available for this debate.
+                              </p>
+                            )
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}

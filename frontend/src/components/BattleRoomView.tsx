@@ -11,13 +11,17 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import type { PlayerRole, PlayerScore, RoomState } from "../battleApi";
+import { fetchRoomState } from "../battleApi";
 import { useBattleSocket } from "../hooks/useBattleSocket";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { getCurrentIdToken } from "../hooks/useAuth";
+import { clearRoomSession, readRoomSession } from "../lib/roomSession";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { MicButton } from "./MicButton";
 import { Avatar } from "./Avatar";
+import { useToast } from "./Toast";
 
 interface BattleRoomViewProps {
   roomCode: string;
@@ -583,6 +587,103 @@ export function BattleRoomView({
         </div>
       )}
       {content}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BattleRehydrator — recover a battle on reload / deep-link (Req 2.3, 2.10)
+//
+// The battle room mounts from `/battle/:code`, but a reload discards the
+// in-memory battle session held by `App`. The room `code` still lives in the
+// URL; the server-issued identity (`playerId` + `role`) is recovered from the
+// per-room session store, and the room snapshot is re-fetched via
+// `fetchRoomState(code)`. Once recovered, `onRehydrated` hands the pieces back
+// to `App`, which reseeds its `battleSession` so the real `BattleRoomView`
+// mounts and the battle socket reconnects.
+//
+// Two graceful-degrade paths (never crash / never fall back to main-menu):
+//   • No stored identity → battle join is NOT idempotent-by-uid, so the player
+//     cannot be safely reconstructed → redirect to `/battle` with a message.
+//   • `fetchRoomState` fails (404 / room gone) → clear the stale identity and
+//     redirect to `/battle` with a stale-room message (Req 2.10).
+// ---------------------------------------------------------------------------
+
+export interface RehydratedBattle {
+  roomCode: string;
+  playerId: string;
+  role: PlayerRole;
+  state: RoomState;
+}
+
+export function BattleRehydrator({
+  code,
+  onRehydrated,
+  requireComplete = false,
+}: {
+  code: string;
+  onRehydrated: (data: RehydratedBattle) => void;
+  /** When true (result route), only rehydrate a finished match; otherwise send
+   *  the user to the live room `/battle/:code`. */
+  requireComplete?: boolean;
+}) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    const stored = readRoomSession("battle", code);
+    if (!stored) {
+      toast.warning(
+        "Battle session expired",
+        "Rejoin from the lobby to continue this battle.",
+      );
+      navigate("/battle", { replace: true });
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const state = await fetchRoomState(code);
+        if (cancelled) return;
+        if (requireComplete && state.status !== "complete") {
+          // Match isn't finished — the live room is the right place to be.
+          navigate(`/battle/${code}`, { replace: true });
+          return;
+        }
+        onRehydrated({
+          roomCode: code,
+          playerId: stored.playerId,
+          role: stored.role as PlayerRole,
+          state,
+        });
+      } catch {
+        if (cancelled) return;
+        clearRoomSession("battle", code);
+        toast.warning(
+          "Battle room unavailable",
+          "That room no longer exists. Start or join a new battle.",
+        );
+        navigate("/battle", { replace: true });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
+
+  return (
+    <div key="battle-rehydrate" className="animate-fade-in-up">
+      <section className="card-glass p-8 md:p-12 flex flex-col items-center gap-4 text-center">
+        <Loader2 className="w-6 h-6 animate-spin text-brand-300" />
+        <div className="text-zinc-300">Reconnecting to your battle…</div>
+      </section>
     </div>
   );
 }

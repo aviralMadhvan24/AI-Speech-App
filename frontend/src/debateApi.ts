@@ -47,6 +47,23 @@ export interface CompletedTurnPublic {
   is_forfeit: boolean;
 }
 
+// LiveKit connection info returned by GET /debate/rooms/{code}/livekit-token.
+export interface LiveKitTokenResponse {
+  token: string;
+  url: string;
+  room: string;
+}
+
+// Self-contained per-turn audio reference for post-debate playback.
+// PII-safe: carries only a display label, never email/uid.
+export interface DebateTurnAudioRef {
+  turn_index: number;
+  participant_id: string;
+  display_name: string;
+  audio_url: string | null;
+  is_forfeit: boolean;
+}
+
 export interface PublicDebateRoom {
   code: string;
   state: DebateState;
@@ -61,6 +78,7 @@ export interface PublicDebateRoom {
   winner_participant_id: string | null;
   completed_turns: CompletedTurnPublic[];  // Audio playback for completed turns
   final_standings: FinalStanding[];
+  livekit_room: string | null;  // Present only while state is prep or speaking
 }
 
 export interface CreateRoomResponse {
@@ -105,6 +123,16 @@ export interface MyDebateEntry {
   teacher_override_score: number | null;
   teacher_comment: string | null;
   winner_participant_id: string | null;
+  turn_audio: DebateTurnAudioRef[];  // Per-turn audio + speaker labels
+}
+
+export interface DebateDetailResponse {
+  debate_id: string;
+  code: string;
+  motion: MotionPublic;
+  completed_at: number;
+  winner_participant_id: string | null;
+  turn_audio: DebateTurnAudioRef[];
 }
 
 import { getCurrentIdToken } from "./hooks/useAuth";
@@ -259,4 +287,22 @@ export async function fetchMyDebates(): Promise<MyDebateEntry[]> {
   const data = await fetchJson<unknown>("/debate/my-debates");
   if (!Array.isArray(data)) return [];
   return data as MyDebateEntry[];
+}
+
+// Fetch a LiveKit token to join the debate's live-audio room. Callers should
+// handle a `503 livekit_not_configured` by degrading gracefully (no live audio).
+export async function getDebateLiveKitToken(
+  code: string,
+): Promise<LiveKitTokenResponse> {
+  const cleaned = code.trim().toUpperCase();
+  return fetchJson<LiveKitTokenResponse>(
+    `/debate/rooms/${cleaned}/livekit-token`,
+  );
+}
+
+// Fetch the detail (incl. per-turn audio refs) for a completed debate.
+export async function getDebateDetail(
+  debateId: string,
+): Promise<DebateDetailResponse> {
+  return fetchJson<DebateDetailResponse>(`/debate/debates/${debateId}`);
 }

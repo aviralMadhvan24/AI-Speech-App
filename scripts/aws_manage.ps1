@@ -85,7 +85,9 @@ switch ($Action) {
     }
     "update" {
         Write-Host "Deploying latest code..." -ForegroundColor Cyan
-        Run-SSH "cd ~/softskills; git fetch; git reset --hard origin/main; cd frontend; npm run build; cd ..; sudo systemctl restart softskills-backend softskills-ss3"
+        # `npm install` before build so newly-added deps (e.g. react-router-dom)
+        # are present on the server; otherwise `vite build` fails on a missing module.
+        Run-SSH "cd ~/softskills; git fetch; git reset --hard origin/main; cd frontend; npm install; npm run build; cd ..; sudo systemctl restart softskills-backend softskills-ss3"
         Write-Host "✓ Deployment updated" -ForegroundColor Green
     }
 }

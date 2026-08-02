@@ -25,7 +25,6 @@ import logging
 import os
 import random
 import secrets
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -36,11 +35,14 @@ from fastapi import HTTPException, WebSocket
 from app.asr.schemas import TranscriptionResult
 from app.audio.schemas import AudioAsset
 from app.auth import User
+from app.core.livekit_client import livekit
+from app.debate.audio_store import _content_type_for_ext, get_audio_store
 from app.debate.schemas import (
     CompletedTurnPublic,
     DebateRecord,
     DebateRoom,
     DebateTurn,
+    DebateTurnAudioRef,
     EffectiveScoreEntry,
     FinalStanding,
     Motion,
@@ -426,6 +428,8 @@ class DebateRoomManager:
 
         if should_start_prep:
             self._spawn_timer(code, "prep", self._run_prep_timer(code))
+            # Set up LiveKit live audio for the prep/speaking phases.
+            asyncio.create_task(self._create_livekit_room(code))
         await self.broadcast(code)
         return self._rooms[code]
 
@@ -459,6 +463,8 @@ class DebateRoomManager:
             room.auto_start_deadline = None  # Clear grace timer
         
         self._spawn_timer(code, "prep", self._run_prep_timer(code))
+        # Set up LiveKit live audio for the prep/speaking phases.
+        asyncio.create_task(self._create_livekit_room(code))
         await self.broadcast(code)
 
     async def _run_prep_timer(self, code: str) -> None:
@@ -483,6 +489,51 @@ class DebateRoomManager:
         except asyncio.CancelledError:
             return
         await self.advance_or_forfeit(code, reason="timeout")
+
+    # ------------------------------------------------------------------
+    # LiveKit live-audio lifecycle
+    # ------------------------------------------------------------------
+
+    async def _create_livekit_room(self, code: str) -> None:
+        """Assign the LiveKit room name for live debate audio.
+
+        Best-effort and idempotent (mirrors GD's ``_create_livekit_room``):
+
+        - Computes a stable ``debate-{code}-{debate_id[:8]}`` name.
+        - Only when ``livekit.is_available``, sets ``room.livekit_room`` under
+          the room lock IFF it is not already set, then broadcasts so clients
+          can fetch a token and connect.
+        - When LiveKit is unavailable, logs a warning and sets nothing so the
+          debate proceeds unchanged (graceful degradation).
+
+        Any exception is caught and logged and never propagated — live audio is
+        strictly additive and must never break the debate.
+        """
+        try:
+            room = self._rooms.get(code)
+            if room is None:
+                return
+
+            room_name = f"debate-{code.lower()}-{room.debate_id[:8]}"
+
+            if livekit.is_available:
+                async with self._lock_for(code):
+                    room = self._rooms.get(code)
+                    if room and not room.livekit_room:  # idempotent
+                        room.livekit_room = room_name
+                        logger.info(
+                            "livekit_room set for debate %s: %s", code, room_name
+                        )
+                await self.broadcast(code)
+            else:
+                logger.warning(
+                    "LiveKit not configured for debate %s (live audio disabled)",
+                    code,
+                )
+        except Exception as exc:  # noqa: BLE001 - never break the debate
+            logger.error(
+                "livekit_room setup error for %s: %s", code, type(exc).__name__
+            )
 
     # ------------------------------------------------------------------
     # Turn submission
@@ -550,13 +601,42 @@ class DebateRoomManager:
             if participant.turn_index != room.active_turn_index:
                 raise ValueError("not_your_turn")
 
+            # Persist the turn's recording through the AudioBlobStore under a
+            # stable, debate-scoped key. On any storage failure, keep the turn
+            # (with its scoring) but null out both audio_key and audio_url.
+            turn_id = uuid.uuid4().hex
+            store = get_audio_store()
+            ext = "webm"
+            content_type = "audio/webm"
+            audio_key: Optional[str] = None
+            if audio_asset and audio_asset.processed_path:
+                src = audio_asset.processed_path
+                ext = src.rsplit(".", 1)[-1] if "." in src else "webm"
+                content_type = _content_type_for_ext(ext)
+                audio_key = store.key_for(room.debate_id, turn_id, ext)
+                try:
+                    store.put(audio_key, src)
+                except Exception as exc:  # noqa: BLE001 - never lose scoring
+                    logger.warning(
+                        "audio_persist_failed turn=%s err=%s",
+                        turn_id,
+                        type(exc).__name__,
+                    )
+                    audio_key = None
+
+            audio_url = (
+                f"/debate/rooms/{code}/audio/{turn_id}" if audio_key else None
+            )
+
             turn = DebateTurn(
-                turn_id=uuid.uuid4().hex,
+                turn_id=turn_id,
                 debate_id=room.debate_id,
                 participant_id=participant.participant_id,
                 turn_index=room.active_turn_index,
                 analysis_id=analysis_id,
-                audio_url=f"/debate/rooms/{code}/audio/{uuid.uuid4().hex[:16]}",
+                audio_url=audio_url,
+                audio_key=audio_key,
+                audio_content_type=content_type if audio_key else None,
                 ai_score=float(ai_score),
                 scoring_unavailable=bool(scoring_unavailable),
                 submitted_at=time.time(),
@@ -565,22 +645,7 @@ class DebateRoomManager:
                 content_feedback=content_feedback,
                 score_breakdown=score_breakdown,
             )
-            
-            # Copy audio file with turn_id as filename for playback
-            if audio_asset and audio_asset.processed_path:
-                import shutil
-                src_path = audio_asset.processed_path
-                # Extract extension from original file
-                ext = src_path.rsplit(".", 1)[-1] if "." in src_path else "webm"
-                dst_path = f"uploads/{turn.turn_id}.{ext}"
-                try:
-                    shutil.copy2(src_path, dst_path)
-                    # Update audio_url with correct turn_id
-                    turn = turn.model_copy(update={"audio_url": f"/debate/rooms/{code}/audio/{turn.turn_id}"})
-                except Exception as e:
-                    logger.warning(f"Failed to copy audio for playback: {e}")
-                    turn = turn.model_copy(update={"audio_url": None})
-            
+
             debate_turns_store.save_turn(turn)
             
             # Add to completed turns cache for broadcast
@@ -946,6 +1011,10 @@ class DebateRoomManager:
         self._cancel_timer(room.code, "turn")
 
         turns = debate_turns_store.list_turns_for_debate(room.debate_id)
+        # Draw-on-tie (Req 9): winner_id is None when two or more participants
+        # share the highest rounded Effective_Score (a draw) OR when there are
+        # no scorable turns. On a draw no standing is flagged is_winner below,
+        # and the debate counts as a win for no participant.
         winner_id = compute_winner(turns, room.participants)
         room.winner_participant_id = winner_id
         room.state = "complete"
@@ -968,9 +1037,11 @@ class DebateRoomManager:
                 )
             )
 
-        # Build ranked standings for the completion screen. Order matches
-        # compute_winner's cascade: effective_score DESC, then submitted_at
-        # ASC, turn_index ASC, participant_id ASC as deterministic tiebreaks.
+        # Build ranked standings for the completion screen. This ordering
+        # (effective_score DESC, then submitted_at ASC, turn_index ASC,
+        # participant_id ASC) is DISPLAY-ONLY and never crowns a winner —
+        # is_winner is driven solely by compute_winner's draw-on-tie result,
+        # so on a draw (winner_id is None) no standing is flagged winner.
         display_by_pid = {p.participant_id: p.display_name for p in room.participants}
         forfeit_by_pid = {p.participant_id: p.is_forfeit for p in room.participants}
         ranked = sorted(
@@ -998,6 +1069,20 @@ class DebateRoomManager:
             for idx, t in enumerate(ranked)
         ]
 
+        # Self-contained per-turn audio index (ordered by turn_index) so
+        # post-debate playback survives room eviction / turn-store scans.
+        name_by_pid = {p.participant_id: p.display_name for p in room.participants}
+        turn_audio = [
+            DebateTurnAudioRef(
+                turn_index=t.turn_index,
+                participant_id=t.participant_id,
+                display_name=name_by_pid.get(t.participant_id, "Speaker"),
+                audio_url=t.audio_url,
+                is_forfeit=t.forfeit_reason is not None,
+            )
+            for t in turns
+        ]
+
         record = DebateRecord(
             debate_id=room.debate_id,
             code=room.code,
@@ -1017,6 +1102,7 @@ class DebateRoomManager:
             turn_ids=[t.turn_id for t in turns],
             winner_participant_id=winner_id,
             effective_scores=effective_scores,
+            turn_audio=turn_audio,
             created_at=room.created_at,
             completed_at=room.completed_at,
         )

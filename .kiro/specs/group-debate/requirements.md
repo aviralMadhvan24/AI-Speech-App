@@ -20,7 +20,7 @@ Feature backend me new modules (`app/debate/`, `app/storage/debates.py`, `app/st
 - **Forfeit**: The state assigned to a Participant who fails to reconnect within Reconnect_Grace or fails to upload audio within the 120s + 15s grace deadline; forfeited Turn receives AI score 0.
 - **AI_Score**: Per-Turn score computed as `avg(pronunciation.overall_score, fluency.clarity_score)` from the existing `AnalyzeResponse`; falls back to `fluency.clarity_score` alone if pronunciation is unavailable; 0 with `scoring_unavailable` marker if neither is available.
 - **Teacher_Override_Score**: An integer 0–100 set by a `require_teacher` user via the admin review endpoint, optionally accompanied by a comment.
-- **Effective_Score**: Teacher_Override_Score if present for a Turn, otherwise AI_Score. Used for winner selection and leaderboard display.
+- **Effective_Score**: Teacher_Override_Score if present for a Turn, otherwise AI_Score. Used for winner selection and leaderboard display. For winner selection, Effective_Score values are compared after rounding each value to 1 decimal place, matching the rounded value shown to users in final standings.
 - **Room_State**: One of `waiting`, `ready`, `prep`, `speaking`, `scoring`, `complete`, `abandoned`; with orthogonal `paused` overlay applicable during `prep`, `speaking`, or `scoring`.
 
 ## Requirements
@@ -122,17 +122,17 @@ Feature backend me new modules (`app/debate/`, `app/storage/debates.py`, `app/st
 5. WHEN a Forfeit is applied to the currently active Speaker, THE Debate_System SHALL advance the active turn index by 1 and broadcast the updated room state.
 6. IF the Participant count of connected non-forfeited Participants drops below 2, THEN THE Debate_System SHALL transition the Debate_Room to `abandoned`.
 
-### Requirement 9: Winner Selection and Tiebreaker
+### Requirement 9: Winner Selection and Ties
 
-**User Story:** As a participant, I want a clear, deterministic winner, so that the outcome is unambiguous.
+**User Story:** As a participant, I want a clear outcome that reflects debate merit, so that no winner is crowned on factors unrelated to the debate.
 
 #### Acceptance Criteria
 
 1. WHEN a Debate_Room enters `complete`, THE Debate_System SHALL compute each Participant's total as their single Turn's Effective_Score.
-2. WHEN computing the winner, THE Debate_System SHALL select the Participant with the highest Effective_Score total.
-3. IF two or more Participants are tied on Effective_Score, THEN THE Debate_System SHALL break the tie by selecting the Participant with the earliest Turn `submitted_at` timestamp.
-4. IF a tie remains after the `submitted_at` tiebreaker (identical timestamps), THEN THE Debate_System SHALL break the remaining tie by selecting the Participant with the smallest `turn_index`.
-5. WHEN the winner is selected, THE Debate_System SHALL persist the winner's `participant_id` on the debate record and include it in the `complete` state broadcast.
+2. WHEN exactly one Participant holds the strictly highest Effective_Score after each Participant's Effective_Score is rounded to 1 decimal place, THE Debate_System SHALL select that Participant as the winner.
+3. WHEN two or more Participants share the highest Effective_Score after each Effective_Score is rounded to 1 decimal place, THE Debate_System SHALL declare a draw by setting `winner_participant_id` to null, marking no Participant as `is_winner` in the final standings, and including the draw outcome in the `complete` state broadcast so the results screen can display a tie result.
+4. WHEN a single winner is selected, THE Debate_System SHALL persist the winner's `participant_id` on the debate record and include the winner's `participant_id` in the `complete` state broadcast.
+5. WHERE the outcome is a draw, THE Debate_System SHALL count the debate as a win for no Participant in participant win statistics.
 
 ### Requirement 10: Teacher Review and Score Override
 
@@ -143,7 +143,7 @@ Feature backend me new modules (`app/debate/`, `app/storage/debates.py`, `app/st
 1. WHEN an authenticated `require_teacher` user GETs `/admin/debates?status=pending_review`, THE Debate_System SHALL return the list of debates in state `complete` that have at least one Turn without a Teacher_Override_Score.
 2. WHEN a `require_teacher` user GETs `/admin/debates/{debate_id}`, THE Debate_System SHALL return the full debate record including every Turn's `ai_score`, `scoring_unavailable`, existing Teacher_Override_Score, and comment (if any).
 3. WHEN a `require_teacher` user POSTs to `/admin/debates/{debate_id}/turns/{turn_id}/review` with an integer `score` in [0, 100] and an optional `comment` string, THE Debate_System SHALL persist those values on the Turn as Teacher_Override_Score and teacher_comment.
-4. WHEN a Teacher_Override_Score is persisted for a Turn, THE Debate_System SHALL recompute that Debate_Room's winner using Effective_Score and update the persisted winner id if it changes.
+4. WHEN a Teacher_Override_Score is persisted for a Turn, THE Debate_System SHALL recompute that Debate_Room's winner using the draw-on-tie rule in Requirement 9 and update the persisted `winner_participant_id`, which SHALL become null WHERE the recomputed outcome is a draw and SHALL become the new winner's `participant_id` WHERE exactly one Participant holds the highest rounded Effective_Score.
 5. IF a non-teacher user calls any `/admin/debates*` endpoint, THEN THE Debate_System SHALL reject the request with the standard `require_teacher` failure response.
 6. IF the submitted `score` is outside the range [0, 100] or not an integer, THEN THE Debate_System SHALL reject the review with error code `invalid_score`.
 

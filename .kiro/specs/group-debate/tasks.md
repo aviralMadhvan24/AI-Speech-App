@@ -58,18 +58,24 @@ Test sub-tasks marked with `*` are optional. Property tests reference their desi
 - [ ] 3. Debate scoring pure functions
   - [x] 3.1 Create `app/debate/scoring.py`
     - Implement `compute_effective_score(turn: DebateTurn) -> float` per Section "Winner Selection" of `design.md`. Returns `float(turn.teacher_override_score)` when present, else `float(turn.ai_score)`.
-    - Implement `compute_winner(turns, participants) -> Optional[str]` per the same section. Sort key: `(-effective_score, submitted_at ASC, turn_index ASC, participant_id)`. Return `None` when no eligible turns.
-    - _Requirements: 9.2, 9.3, 9.4, 10.4_
+    - Implement `compute_winner(turns, participants) -> Optional[str]` per the same section using the **draw-on-tie** rule: round each eligible participant's `Effective_Score` to 1 decimal place (`EFFECTIVE_SCORE_DP = 1`), find the maximum rounded score, and return that participant's `participant_id` ONLY when exactly one participant holds that maximum (unique argmax). Return `None` (a draw) when two or more participants tie for the highest rounded score, and `None` when there are no scorable turns.
+    - There are NO `submitted_at` / `turn_index` / `participant_id` tiebreakers — a tie is a draw. The winner MUST be independent of participant order and of any turn timing fields.
+    - _Requirements: 9.2, 9.3, 9.4, 9.5, 10.4_
 
   - [ ] 3.2 Write property test for effective score priority
     - In `tests/test_debate_scoring.py`, randomized test (N=100) that generates `DebateTurn` instances with random `ai_score` in `[0, 100]` and `teacher_override_score` drawn from `{None, random int in [0, 100]}`. Assert `compute_effective_score(turn)` equals `float(teacher_override_score)` when present, `float(ai_score)` otherwise.
     - **Property 4: Effective_Score priority**
     - **Validates: Requirements 10.3, 10.4**
 
-  - [ ] 3.3 Write property test for winner determinism and cascade
-    - In `tests/test_debate_scoring.py`, randomized test (N=100) that generates a random participant list (size 4–6) and one turn per participant with random `ai_score`, `teacher_override_score`, `submitted_at`, and `turn_index`. Assert (a) two calls with equal inputs return equal ids, (b) the returned participant's effective score `>=` every other's, (c) tiebreakers unfold as documented (verify by re-sorting a mirror of the tuple key).
-    - **Property 5: Winner determinism and tiebreaker cascade**
-    - **Validates: Requirements 9.2, 9.3, 9.4**
+  - [ ] 3.3 Write property test for winner draw-on-tie rule
+    - In `tests/test_debate_scoring.py`, randomized test (N=100) that generates a random participant list (size 4–6) and one turn per participant with random `ai_score`, `teacher_override_score`, `submitted_at`, and `turn_index`. Cover these cases:
+      - (a) **Unique highest → single winner**: when exactly one participant has the strictly highest 1-decimal-rounded `Effective_Score`, `compute_winner` returns that participant's `participant_id` and its rounded score `>` every other's.
+      - (b) **Two-or-more tied top → `None` (draw)**: construct inputs where at least two participants share the highest rounded score and assert `compute_winner` returns `None`.
+      - (c) **No scorable turns → `None`**: empty turns list (and all-forfeit) returns `None`.
+      - (d) **Order / timing independence**: shuffling the participant list and/or perturbing `submitted_at` and `turn_index` (without changing rounded effective scores) never changes the result — same winner id or same draw.
+      - (e) **Rounding boundary**: verify tie/near-tie boundaries such as `87.44` vs `87.45` (both round to distinct/equal 1-dp values as appropriate) resolve consistently with the 1-decimal rounding rule.
+    - **Property 5: Winner is unique argmax of 1-dp Effective_Score, else draw**
+    - **Validates: Requirements 9.2, 9.3, 9.4, 9.5**
 
   - [ ] 3.4 Write property test for forfeit turn shape
     - In `tests/test_debate_scoring.py`, randomized test (N=100) that generates `DebateTurn` instances with `forfeit_reason` drawn from `{"timeout", "reconnect_timeout"}`. Assert every such turn satisfies `ai_score == 0.0` AND `scoring_unavailable is False` (this is an invariant the room manager must uphold; the property doubles as a contract check).
@@ -146,9 +152,10 @@ Test sub-tasks marked with `*` are optional. Property tests reference their desi
   - [x] 6.4 Implement turn submission and state advance
     - `submit_turn(code, user, audio_asset, transcription, pronunciation, fluency, analysis_id)` acquires the room lock, re-validates state (`speaking`, `not paused`, caller's `turn_index == active_turn_index`), computes `(ai_score, scoring_unavailable) = compute_ai_score(pronunciation, fluency)`, builds a `DebateTurn`, calls `debate_turns.save_turn(turn)`, then either increments `active_turn_index` + resets `turn_deadline`, or transitions to `scoring` if it was the last participant.
     - When entering `scoring`, wait for outstanding analyses (in this design they are already synchronous, so scoring transitions immediately to `complete`).
-    - On transition to `complete`, load all turns for the debate, compute the winner via `debate.scoring.compute_winner`, build a `DebateRecord` with `effective_scores` list, persist via `debates.save_debate`, and set `winner_participant_id` on the room.
+    - On transition to `complete`, load all turns for the debate, compute the winner via `debate.scoring.compute_winner` (draw-on-tie rule), build a `DebateRecord` with `effective_scores` list, persist via `debates.save_debate`, and set `winner_participant_id` on the room.
+    - On a **draw** (`compute_winner` returns `None` because two or more participants tie for the highest rounded `Effective_Score`), set `winner_participant_id = null` and flag NO standing as `is_winner`; the draw counts as a win for no participant. `effective_scores` / final standings MAY still be sorted for display only, but sort order MUST NOT crown a winner. A `None` from no scorable turns is likewise persisted as `winner_participant_id = null`.
     - Race between pre-check and lock re-check MUST raise `ValueError("not_your_turn")` / `ValueError("debate_paused")` for the route to translate into 409.
-    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 6.4, 7.1, 7.2, 7.3, 9.1, 9.2, 9.5_
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 6.4, 7.1, 7.2, 7.3, 9.1, 9.2, 9.3, 9.4, 9.5_
 
   - [x] 6.5 Implement WebSocket attach/detach and pause overlay
     - `attach_socket(code, participant_id, ws)` and `detach_socket(code, participant_id, ws)` register/unregister sockets in `self._sockets[code]`.
@@ -210,7 +217,7 @@ Test sub-tasks marked with `*` are optional. Property tests reference their desi
     - **Validates: Requirements 11.3, 11.4**
 
   - [ ] 7.5 Write integration test for the full HTTP round-trip
-    - In `tests/test_debate_routes.py`, monkey-patch `analyze_turn_audio` to return a synthetic 5-tuple. Drive four fake users through create → join → ready → auto-start → prep-timer-tick → speaking → four turn uploads → complete. Assert every intermediate `GET /debate/rooms/{code}` returns the expected state and the final response includes a non-null `winner_participant_id`.
+    - In `tests/test_debate_routes.py`, monkey-patch `analyze_turn_audio` to return synthetic 5-tuples whose scores yield a single strictly-highest 1-decimal-rounded `Effective_Score` (distinct per user) so a unique winner emerges. Drive four fake users through create → join → ready → auto-start → prep-timer-tick → speaking → four turn uploads → complete. Assert every intermediate `GET /debate/rooms/{code}` returns the expected state and the final response includes a non-null `winner_participant_id`.
     - _Requirements: 5.1, 5.3, 7.1, 7.3, 11.1_
 
   - [ ] 7.6 Write integration test for room_full and race errors
@@ -224,12 +231,14 @@ Test sub-tasks marked with `*` are optional. Property tests reference their desi
     - _Requirements: 10.1, 10.2, 10.3, 10.5, 10.6_
 
   - [x] 8.2 Implement winner recompute on override
-    - Inside `review_turn`, after `apply_teacher_review` succeeds, load all turns for the debate, load the debate record, call `debate.scoring.compute_winner(turns, participants)`, and if the returned id differs from the persisted `winner_participant_id` call `debates.update_winner(debate_id, new_winner_id)`.
+    - Inside `review_turn`, after `apply_teacher_review` succeeds, load all turns for the debate, load the debate record, call `debate.scoring.compute_winner(turns, participants)` (same draw-on-tie rule as finalize), and if the returned value differs from the persisted `winner_participant_id` call `debates.update_winner(debate_id, new_winner_id)`.
+    - The recomputed winner MAY become `null` when the override produces a draw (two or more participants tie for the highest rounded `Effective_Score`); `update_winner` MUST accept and persist `null` in that case, and a draw counts as a win for no participant.
     - Return the updated `DebateTurn` as the response body.
     - _Requirements: 10.4_
 
   - [ ] 8.3 Write integration test for teacher override + winner recompute
     - In `tests/test_debate_admin_routes.py`, seed a debate with 4 completed turns where participant A has the highest `ai_score`. As a teacher, POST a review that gives participant B a `teacher_override_score` strictly greater than A's `ai_score`. Assert (a) the returned turn has the new score/comment, (b) `debates.load_debate(debate_id).winner_participant_id == B.participant_id`.
+    - Add a draw case: POST an override that makes B's rounded `Effective_Score` exactly tie A's highest, then assert `debates.load_debate(debate_id).winner_participant_id is None` (recompute → draw counts as a win for no participant).
     - _Requirements: 10.3, 10.4_
 
   - [ ] 8.4 Write integration test for auth guard
@@ -273,9 +282,9 @@ Test sub-tasks marked with `*` are optional. Property tests reference their desi
   - [x] 12.1 Create `frontend/src/components/DebateArenaView.tsx`
     - Implement the sub-screen router per the "State → sub-screen mapping" table in Section "`frontend/src/components/DebateArenaView.tsx`" of `design.md`. Screens: Lobby, WaitingReady, Prep, Speaking, WaitingForOthers, Scoring, Results, PausedOverlay, Abandoned.
     - Speaking sub-screen uses the existing `useAudioRecorder` hook (unchanged) and calls `uploadTurn(code, blob)` when `active_turn_index === myTurnIndex`. Auto-stop recording on `now >= turn_deadline`.
-    - Results sub-screen renders per-participant `effective_score` and highlights `winner_participant_id`.
+    - Results sub-screen renders per-participant `effective_score` and highlights `winner_participant_id`. WHEN `winner_participant_id` is `null` but standings exist (a draw), render a "It's a tie" state — no participant highlighted as winner — reusing the existing winner-null fallback path rather than adding a separate branch. (An empty/no-scorable-turns result renders through the same null path.)
     - Accept a single prop `onBack: () => void` to route back to the main menu.
-    - _Requirements: 14.1, 14.4_
+    - _Requirements: 14.1, 14.4, 9.3, 9.5_
 
   - [x] 12.2 Additive change to `frontend/src/components/MainMenuView.tsx`
     - Add a new "Group Debate" entry to the existing features array per the design snippet (icon `MessageSquareText` from `lucide-react`, `status: "live"`, violet/fuchsia gradient). Add a new prop `onSelectDebate: () => void` to `MainMenuViewProps` and use it in the entry's `onClick`.

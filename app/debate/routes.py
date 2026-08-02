@@ -20,7 +20,6 @@ manager's ``ValueError`` sentinels into HTTP status codes.
 from __future__ import annotations
 
 import logging
-import os
 from typing import List, Optional
 
 from fastapi import (
@@ -33,13 +32,19 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.auth import User, require_user, verify_token_string
+from app.core.livekit_client import livekit
+from app.debate.audio_store import get_audio_store
 from app.debate.room_manager import _load_motions, debate_room_manager
 from app.debate.schemas import (
     CreateRoomResponse,
+    DebateDetailResponse,
+    DebateRecord,
+    DebateTurn,
+    DebateTurnAudioRef,
     JoinRoomResponse,
     Motion,
     PublicDebateRoom,
@@ -78,6 +83,78 @@ class MyDebateEntry(BaseModel):
     teacher_override_score: Optional[int] = None
     teacher_comment: Optional[str] = None
     winner_participant_id: Optional[str] = None
+    # Per-turn audio references + speaker labels for post-debate playback.
+    # PII-safe (no email/uid); ordered by ascending turn_index.
+    turn_audio: list[DebateTurnAudioRef] = []
+
+
+# ---------------------------------------------------------------------------
+# Audio-reference helpers
+# ---------------------------------------------------------------------------
+
+
+def _turn_audio_for_record(record: DebateRecord) -> list[DebateTurnAudioRef]:
+    """Return the ordered per-turn audio references for a completed debate.
+
+    Prefers the self-contained ``record.turn_audio`` populated at finalize.
+    Falls back to projecting the persisted turns (for older records written
+    before ``turn_audio`` existed), labelling each turn from the record's
+    participant snapshot. Always ordered by ascending ``turn_index`` and
+    PII-safe (no email / uid).
+    """
+    if record.turn_audio:
+        return sorted(record.turn_audio, key=lambda ref: ref.turn_index)
+
+    name_by_pid: dict[str, str] = {}
+    for participant in record.participants:
+        if isinstance(participant, dict):
+            pid = participant.get("participant_id")
+            if pid is not None:
+                name_by_pid[pid] = participant.get("display_name") or "Speaker"
+
+    turns = debate_turns_store.list_turns_for_debate(record.debate_id)
+    refs = [
+        DebateTurnAudioRef(
+            turn_index=turn.turn_index,
+            participant_id=turn.participant_id,
+            display_name=name_by_pid.get(turn.participant_id, "Speaker"),
+            audio_url=turn.audio_url,
+            is_forfeit=turn.forfeit_reason is not None,
+        )
+        for turn in turns
+    ]
+    refs.sort(key=lambda ref: ref.turn_index)
+    return refs
+
+
+def _may_access_debate_audio(user: User, *, code: str, turn: DebateTurn) -> bool:
+    """Return ``True`` iff ``user`` may access ``turn``'s audio.
+
+    Teachers/admins may review any student audio. Otherwise the caller must be
+    a participant of the turn's *own* ``debate_id`` — evaluated against the
+    turn's stored ``debate_id``, never the path ``code`` — so a caller cannot
+    fetch another debate's audio by swapping the path code.
+    """
+    if getattr(user, "is_teacher", False) or getattr(user, "role", "") in (
+        "teacher",
+        "admin",
+    ):
+        return True
+
+    # Live room: must be a current participant.
+    room = debate_room_manager.get_state(code)
+    if room is not None:
+        return any(p.user_id == user.uid for p in room.participants)
+
+    # Completed/evicted room: must appear in the persisted participant snapshot,
+    # resolved against the turn's own debate_id.
+    record = debates_store.load_debate(turn.debate_id)
+    if record is not None:
+        return any(
+            isinstance(p, dict) and p.get("user_id") == user.uid
+            for p in record.participants
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -196,60 +273,92 @@ async def upload_turn(
     )
 
 
+@router.get("/rooms/{code}/livekit-token")
+async def get_livekit_token(
+    code: str,
+    current_user: User = Depends(require_user),
+) -> dict:
+    """Issue a LiveKit access token for live debate audio.
+
+    Mirrors the GD token endpoint exactly: membership + configuration +
+    room-readiness checks with the same status-code contract. The
+    participant is identified by the opaque ``participant_id`` only — the
+    response carries no email / uid (Requirement 4.4).
+    """
+    normalized = code.strip().upper()
+    room = debate_room_manager.get_state(normalized)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room_not_found")
+
+    participant = next(
+        (p for p in room.participants if p.user_id == current_user.uid),
+        None,
+    )
+    if participant is None:
+        raise HTTPException(status_code=403, detail="not_a_participant")
+
+    if not livekit.is_available:
+        raise HTTPException(status_code=503, detail="livekit_not_configured")
+
+    if not room.livekit_room:
+        raise HTTPException(status_code=400, detail="audio_not_ready")
+
+    token = livekit.create_token(
+        room_name=room.livekit_room,
+        participant_name=participant.display_name,
+        participant_identity=participant.participant_id,
+        ttl_seconds=3600,
+    )
+    if not token:
+        raise HTTPException(status_code=500, detail="token_generation_failed")
+
+    return {"token": token, "url": livekit.url, "room": room.livekit_room}
+
+
 @router.get("/rooms/{code}/audio/{turn_id}")
 async def get_turn_audio(
     code: str,
     turn_id: str,
     current_user: User = Depends(require_user),
-) -> FileResponse:
-    """Serve the audio file for a specific turn.
-    
-    Only participants in the debate can access the audio.
+):
+    """Serve the audio blob for a specific turn.
+
+    Access is restricted to participants of the turn's own debate and to
+    teachers/admins. The turn is resolved directly (works for live,
+    completed, and evicted rooms), access is evaluated against the turn's
+    stored ``debate_id`` (never the path ``code``), and the bytes are
+    served through the storage abstraction — a ``302`` to a signed URL when
+    an object-storage backend is active, otherwise a local stream.
     """
     normalized = code.strip().upper()
-    room = debate_room_manager.get_state(normalized)
-    
-    # Check room exists (either in-memory or completed)
-    if room is None:
-        # Try to find in completed debates
-        turns = debate_turns_store.list_turns_for_debate_by_code(normalized)
-        if not turns:
-            raise HTTPException(status_code=404, detail="room_not_found")
-    else:
-        # Verify caller is a participant
-        participant = next(
-            (p for p in room.participants if p.user_id == current_user.uid),
-            None,
-        )
-        if participant is None:
-            raise HTTPException(status_code=403, detail="not_a_participant")
-    
-    # Find the turn
-    turns = debate_turns_store.list_turns_for_debate_by_turn_id(turn_id)
-    if not turns:
-        raise HTTPException(status_code=404, detail="turn_not_found")
-    
-    turn = turns[0]
-    if not turn.audio_url:
+
+    # 1) Resolve the turn (works for live, completed, and evicted rooms).
+    turn = debate_turns_store.load_turn(turn_id)
+    if turn is None or not turn.audio_key:
         raise HTTPException(status_code=404, detail="audio_not_available")
-    
-    # Extract file path from URL (URL is like /debate/rooms/{code}/audio/{turn_id})
-    # The actual file is stored in uploads/
-    audio_path = f"uploads/{turn_id}.webm"
-    if not os.path.exists(audio_path):
-        # Try other extensions
-        for ext in ["wav", "mp3", "ogg", "m4a"]:
-            alt_path = f"uploads/{turn_id}.{ext}"
-            if os.path.exists(alt_path):
-                audio_path = alt_path
-                break
-        else:
-            raise HTTPException(status_code=404, detail="audio_file_not_found")
-    
-    return FileResponse(
-        audio_path,
-        media_type="audio/webm",
-        filename=f"turn_{turn.turn_index + 1}.webm",
+
+    # 2) Access control: participant of THIS debate OR a teacher/admin.
+    if not _may_access_debate_audio(current_user, code=normalized, turn=turn):
+        raise HTTPException(status_code=403, detail="not_authorized")
+
+    # 3) Serve via the storage abstraction.
+    store = get_audio_store()
+    if not store.exists(turn.audio_key):
+        raise HTTPException(status_code=404, detail="audio_file_not_found")
+
+    signed = store.signed_url(turn.audio_key, ttl_seconds=300)
+    if signed:  # object-storage future: redirect to an expiring URL
+        return RedirectResponse(url=signed, status_code=302)
+
+    stream, content_type = store.open(turn.audio_key)
+    return StreamingResponse(
+        stream,
+        media_type=turn.audio_content_type or content_type or "audio/webm",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="turn_{turn.turn_index + 1}.webm"'
+            )
+        },
     )
 
 
@@ -317,9 +426,48 @@ async def my_debates(
                 teacher_override_score=teacher_override_score,
                 teacher_comment=teacher_comment,
                 winner_participant_id=record.winner_participant_id,
+                turn_audio=_turn_audio_for_record(record),
             )
         )
     return entries
+
+
+@router.get("/debates/{debate_id}", response_model=DebateDetailResponse)
+async def get_debate_detail(
+    debate_id: str,
+    current_user: User = Depends(require_user),
+) -> DebateDetailResponse:
+    """Return the completed-debate detail with ordered per-turn audio refs.
+
+    The caller must be a participant of the debate (from the persisted
+    participant snapshot) or a teacher/admin. Response-safe: no email / uid.
+    """
+    record = debates_store.load_debate(debate_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="debate_not_found")
+
+    is_teacher = getattr(current_user, "is_teacher", False) or getattr(
+        current_user, "role", ""
+    ) in ("teacher", "admin")
+    is_participant = any(
+        isinstance(p, dict) and p.get("user_id") == current_user.uid
+        for p in record.participants
+    )
+    if not (is_teacher or is_participant):
+        raise HTTPException(status_code=403, detail="not_authorized")
+
+    return DebateDetailResponse(
+        debate_id=record.debate_id,
+        code=record.code,
+        motion=Motion(
+            id=record.motion_id,
+            title=record.motion_title,
+            text=record.motion_text,
+        ),
+        completed_at=record.completed_at,
+        winner_participant_id=record.winner_participant_id,
+        turn_audio=_turn_audio_for_record(record),
+    )
 
 
 # ---------------------------------------------------------------------------

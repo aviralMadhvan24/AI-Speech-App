@@ -167,6 +167,10 @@ async def review_turn(
         for p in record.participants
         if isinstance(p, dict)
     ]
+    # Draw-on-tie recompute (Req 10.4): new_winner_id may be None when the
+    # override produces a draw (two or more tied on the highest rounded
+    # Effective_Score). update_winner accepts and persists None, so a
+    # transition from a crowned winner to a draw is persisted correctly.
     new_winner_id = compute_winner(all_turns, participants)
     if new_winner_id != record.winner_participant_id:
         debates_store.update_winner(debate_id, new_winner_id)

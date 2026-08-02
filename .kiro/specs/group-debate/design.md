@@ -2,7 +2,7 @@
 
 ## Overview
 
-Group Debate ek naya multi-player mode hai jahan 4–6 authenticated students ek shared 6-char room code ke through ek Debate_Room me judte hain, ek shared 60s Prep_Phase ke baad round-robin turn order me har participant apni 120s (+15s grace) speaking turn record karta hai, aur har turn ke audio par existing `/analyze` pipeline chalti hai. Highest Effective_Score wala participant winner declare hota hai, aur teachers har turn ka score override kar sakte hain.
+Group Debate ek naya multi-player mode hai jahan 4–6 authenticated students ek shared 6-char room code ke through ek Debate_Room me judte hain, ek shared 60s Prep_Phase ke baad round-robin turn order me har participant apni 120s (+15s grace) speaking turn record karta hai, aur har turn ke audio par existing `/analyze` pipeline chalti hai. Winner sirf tab declare hota hai jab exactly ek participant ka rounded (1 decimal place) Effective_Score strictly highest ho; agar do ya zyada participants top rounded Effective_Score share karte hain to koi winner nahi chuna jata aur ek **draw** declare hoti hai (`winner_participant_id = null`). Teachers har turn ka score override kar sakte hain, aur override recompute bhi wahi draw-on-tie rule use karta hai (winner null ban sakta hai).
 
 ### Reuse strategy
 
@@ -134,7 +134,7 @@ stateDiagram-v2
 | `speaking` | `POST /turn` accepted, not last speaker | `speaking` | Persist turn, active_turn_index++, reset turn_deadline, broadcast |
 | `speaking` | `POST /turn` accepted, last speaker | `scoring` | Persist turn, wait for outstanding analyses (already sync in this design), broadcast |
 | `speaking` | Turn timer elapsed | `speaking` or `scoring` | Persist forfeit turn (ai_score=0, forfeit_reason="timeout"), advance turn index or move to `scoring` if last |
-| `scoring` | All non-forfeit turn records persisted | `complete` | Compute winner, persist `DebateRecord`, broadcast, close timers |
+| `scoring` | All non-forfeit turn records persisted | `complete` | Compute winner via draw-on-tie rule (unique argmax of rounded Effective_Score, else `winner_participant_id = null`), persist `DebateRecord`, broadcast, close timers |
 | `prep|speaking|scoring` | WS close for participant P | (same) + `paused=true` | Set `reconnect_deadline=now+30`, pause turn timer, broadcast |
 | paused | Same P reconnects within 30s | (same) + `paused=false` | Clear reconnect_deadline, resume turn timer with remaining budget, broadcast |
 | paused | 30s elapsed | (same) + `paused=false` | Mark P `is_forfeit=true`; if P was active speaker, persist forfeit turn (forfeit_reason="reconnect_timeout") and advance |
@@ -247,6 +247,11 @@ class DebateRecord(BaseModel):
     motion_text: str
     participants: list[dict]            # snapshot: participant_id, user_id, display_name, turn_index, is_forfeit
     turn_ids: list[str]                 # ordering by turn_index
+    # None has TWO distinct meanings (both render as "no winner"):
+    #   (a) no scorable turns (abandoned-ish / all forfeit) — effective_scores empty, OR
+    #   (b) a DRAW: two or more participants tie on the highest rounded
+    #       Effective_Score. effective_scores is populated but no entry is
+    #       flagged winner. A draw counts as a win for no participant.
     winner_participant_id: Optional[str] = None
     effective_scores: list[EffectiveScoreEntry] = Field(default_factory=list)
     created_at: float
@@ -614,32 +619,45 @@ def compute_effective_score(turn: DebateTurn) -> float:
     return float(turn.ai_score)
 
 
+EFFECTIVE_SCORE_DP = 1   # decimal places used for winner comparison + display
+
+
 def compute_winner(
     turns: list[DebateTurn],
     participants: list[ParticipantInternal],
 ) -> Optional[str]:
-    """Requirement 9 cascade.
+    """Requirement 9 draw-on-tie rule.
 
-    Order participants by (highest effective_score DESC, earliest submitted_at ASC,
-    smallest turn_index ASC). Return the first participant_id, or None if
-    there are no scorable turns.
+    Round each eligible participant's Effective_Score to 1 decimal place
+    (the same rounded value shown in final standings), find the maximum
+    rounded score, and:
+      * return that participant's participant_id when EXACTLY ONE
+        participant holds the maximum (strict unique argmax), OR
+      * return None (a DRAW) when two or more participants share the
+        maximum rounded score.
+    Also returns None when there are no scorable turns.
+
+    NOTE: participant ordering, submitted_at, and turn_index do NOT
+    influence the winner. There are no tiebreakers — a tie is a draw.
+    This is a pure function with no I/O.
     """
     if not turns:
         return None
     turn_by_pid: dict[str, DebateTurn] = {t.participant_id: t for t in turns}
-    scored: list[tuple[float, float, int, str]] = []
+    scored: list[tuple[str, float]] = []
     for p in participants:
         t = turn_by_pid.get(p.participant_id)
         if t is None:
             continue
-        eff = compute_effective_score(t)
-        # Sort key: negative effective score (max first), then submitted_at asc,
-        # then turn_index asc.
-        scored.append((-eff, t.submitted_at, t.turn_index, p.participant_id))
+        rounded_eff = round(compute_effective_score(t), EFFECTIVE_SCORE_DP)
+        scored.append((p.participant_id, rounded_eff))
     if not scored:
         return None
-    scored.sort()
-    return scored[0][3]
+    max_score = max(s for _, s in scored)
+    leaders = [pid for pid, s in scored if s == max_score]
+    if len(leaders) == 1:
+        return leaders[0]          # unique highest → single winner
+    return None                    # two or more tied → draw
 ```
 
 ### `app/storage/debates.py`
@@ -814,7 +832,8 @@ State → sub-screen mapping:
 | `state=speaking`, you are active speaker | Speaking (MediaRecorder starts, timer to `turn_deadline`) |
 | `state=speaking`, you NOT active speaker | WaitingForOthers (who's speaking + timer) |
 | `state=scoring` | Scoring (spinner while last analyses finish) |
-| `state=complete` | Results (per-participant scores + winner) |
+| `state=complete`, `winner_participant_id` set | Results (per-participant scores + highlighted winner) |
+| `state=complete`, `winner_participant_id` null with populated standings | Results showing "It's a tie" / draw messaging (reuses the existing winner-null fallback path in `DebateArenaView.tsx`; no participant highlighted as winner) |
 | `paused=true` overlay on any of prep/speaking/scoring | Overlay with reconnect_deadline countdown + which participant we're waiting for |
 | `state=abandoned` | Abandoned view with "Back to menu" |
 
@@ -900,18 +919,20 @@ Edge cases:
 - Negative scores from downstream pipeline (shouldn't happen, defensive) are clamped to 0.
 - Scores > 100 (also shouldn't happen) are clamped to 100.
 - Forfeited turns bypass this function entirely — the room manager sets `ai_score = 0.0`, `scoring_unavailable = False`, and `forfeit_reason ∈ {"timeout", "reconnect_timeout"}` (Req 8.3).
-- Round to 2 decimals for stable comparison in tiebreakers.
+- AI_Score is rounded to 2 decimals for stable storage. Winner comparison separately rounds each Effective_Score to 1 decimal place (see Winner Selection) — there are no tiebreakers; equal rounded top scores produce a draw.
 
 ## Winner Selection
 
-Requirement 9 cascade, verbatim pseudocode:
+Requirement 9 uses a **draw-on-tie** rule: the winner is the *unique argmax* of the rounded Effective_Score, else there is no winner (a draw). No arbitrary tiebreakers (submitted_at, turn_index, participant ordering) are ever consulted for the winner. Verbatim pseudocode:
 
 ```python
+EFFECTIVE_SCORE_DP = 1   # decimal places for comparison + final standings display
+
 def compute_winner(turns, participants):
     if not turns:
         return None
     turn_by_pid = {t.participant_id: t for t in turns}
-    ranked = []
+    scored = []
     for p in participants:
         t = turn_by_pid.get(p.participant_id)
         if t is None:
@@ -919,16 +940,24 @@ def compute_winner(turns, participants):
         effective = (float(t.teacher_override_score)
                      if t.teacher_override_score is not None
                      else float(t.ai_score))
-        # Tuple sort: higher effective wins (negate), then earlier submit,
-        # then smaller turn_index. All ascending, so the first entry wins.
-        ranked.append((-effective, t.submitted_at, t.turn_index, p.participant_id))
-    if not ranked:
+        # Compare on the SAME rounded value shown to users in standings.
+        scored.append((p.participant_id, round(effective, EFFECTIVE_SCORE_DP)))
+    if not scored:
         return None
-    ranked.sort()
-    return ranked[0][3]
+    max_score = max(s for _, s in scored)
+    leaders = [pid for pid, s in scored if s == max_score]
+    return leaders[0] if len(leaders) == 1 else None   # tie ⇒ draw ⇒ None
 ```
 
-Winner recomputation on teacher review (Req 10.4): after `apply_teacher_review` writes the new override to `debate_turns.jsonl`, admin route reloads all turns for the debate, calls `compute_winner`, and calls `debates.update_winner(debate_id, new_winner_id)`. If the winner changed, the change is visible on the next `/debate/my-debates` fetch by every affected participant.
+### Display ordering vs. winner determination
+
+Final standings (results screen, `/debate/my-debates`, teacher review) MAY still be sorted for a deterministic, stable presentation order — e.g. by rounded Effective_Score descending, then `submitted_at` ascending, then `turn_index` ascending. This secondary ordering is **display-only** and has **no** bearing on who wins: only the top rounded Effective_Score decides winner-vs-draw, and `is_winner` is set on the single top participant *only when there is no tie*. When the top rounded score is shared, every standing row has `is_winner = false` and the outcome is a draw.
+
+### Distinguishing a draw from other null cases
+
+`winner_participant_id == null` can mean either (a) no scorable turns, or (b) a draw. The completion broadcast / results screen distinguishes them by inspecting `effective_scores`: a **draw** has a populated `effective_scores` list (participants with scores) but no entry flagged `is_winner`, whereas the no-scorable-turns case has an empty `effective_scores` list. Clients render "It's a tie" for case (b) and a neutral "no result" for case (a). A draw counts as a win for no participant in win statistics (Req 9.5).
+
+Winner recomputation on teacher review (Req 10.4): after `apply_teacher_review` writes the new override to `debate_turns.jsonl`, the admin route reloads all turns for the debate, calls `compute_winner` (the same draw-on-tie rule), and calls `debates.update_winner(debate_id, new_winner_id)` — where `new_winner_id` becomes `null` when the recomputed outcome is a draw, or the new winner's `participant_id` when exactly one participant holds the highest rounded Effective_Score. If the outcome changed, it is visible on the next `/debate/my-debates` fetch by every affected participant.
 
 ## Correctness Properties
 
@@ -958,11 +987,11 @@ Winner recomputation on teacher review (Req 10.4): after `apply_teacher_review` 
 
 **Validates: Requirements 10.3, 10.4**
 
-### Property 5: Winner determinism and tiebreaker cascade
+### Property 5: Winner is the unique argmax of rounded Effective_Score, else a draw
 
-*For any* set of turns and participants, `compute_winner(turns, participants)` returns the same participant_id whenever called with equal inputs, and the selected participant satisfies the cascade: (a) their effective score is `>=` every other eligible participant's, (b) among ties on effective score their `submitted_at` is `<=` every tied participant's, (c) among ties on both their `turn_index` is `<=` every remaining tied participant's.
+*For any* set of turns and participants, `compute_winner(turns, participants)` returns the same result whenever called with equal inputs, and: (a) when exactly one eligible participant has a rounded (1 d.p.) Effective_Score strictly greater than every other eligible participant's rounded Effective_Score, it returns that participant's `participant_id`; (b) when two or more eligible participants share the maximum rounded Effective_Score, it returns `None` (a draw); (c) when no participant has a scorable turn, it returns `None`. Participant ordering, `submitted_at`, and `turn_index` never influence the result.
 
-**Validates: Requirements 9.2, 9.3, 9.4**
+**Validates: Requirements 9.2, 9.3, 9.4, 9.5, 10.4**
 
 ### Property 6: Forfeit turn has ai_score 0
 
@@ -1033,7 +1062,7 @@ WebSocket close codes:
 
 ### Unit tests
 
-- `tests/test_debate_scoring.py` — `compute_ai_score` clamping + fallback behavior; `compute_effective_score` override priority; `compute_winner` deterministic tiebreaker cascade.
+- `tests/test_debate_scoring.py` — `compute_ai_score` clamping + fallback behavior; `compute_effective_score` override priority; `compute_winner` draw-on-tie rule (unique argmax of rounded Effective_Score returns single winner; shared top rounded score returns `None`; no scorable turns returns `None`; winner independent of participant order / submitted_at / turn_index).
 - `tests/test_debate_room_manager.py` — code generation alphabet, per-room lock isolation, state transition table, reconnect-grace timers, forfeit-on-timeout behavior.
 - `tests/test_debate_service.py` — `analyze_turn_audio` calls all five pipeline stages in the documented order (using mocks); return tuple shape.
 - `tests/test_debate_storage.py` — round-trip `save_debate` / `load_debate`, `save_turn` / `load_turn`, `apply_teacher_review` overwrite correctness, `list_pending_review_debates` filtering.

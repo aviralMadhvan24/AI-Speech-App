@@ -8,8 +8,8 @@ import {
   Loader2,
   MessageSquareText,
   Mic,
+  MicOff,
   Pause,
-  Play,
   Trophy,
   Users,
   Volume2,
@@ -20,16 +20,25 @@ import {
   createDebateRoom,
   fetchMotions,
   flipReady,
+  getDebateLiveKitToken,
   joinDebateRoom,
   uploadTurn,
-  type CompletedTurnPublic,
+  type LiveKitTokenResponse,
   type MotionPublic,
   type ParticipantPublic,
   type TurnUploadResponse,
 } from "../debateApi";
+import { useNavigate, useParams } from "react-router-dom";
 import { useDebateSocket } from "../hooks/useDebateSocket";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { useLiveKitAudio } from "../hooks/useLiveKitAudio";
+import {
+  clearRoomSession,
+  readRoomSession,
+  saveRoomSession,
+} from "../lib/roomSession";
 import { Avatar } from "./Avatar";
+import { DebateTurnsAudio } from "./DebateTurnsAudio";
 
 interface DebateArenaViewProps {
   onBack: () => void;
@@ -163,107 +172,57 @@ function PausedOverlay({
   );
 }
 
-function CompletedTurnsAudio({
-  completedTurns,
-  avatarByParticipant = {},
+function LiveAudioIndicator({
+  joined,
+  connecting,
+  unavailable,
+  participantCount,
 }: {
-  completedTurns: CompletedTurnPublic[];
-  /** participant_id -> avatar URL, so turns can show the speaker's photo. */
-  avatarByParticipant?: Record<string, string | null>;
+  joined: boolean;
+  connecting: boolean;
+  unavailable: boolean;
+  participantCount: number;
 }) {
-  const [playingTurnId, setPlayingTurnId] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  const handlePlay = (turn: CompletedTurnPublic) => {
-    if (!turn.audio_url) return;
-    
-    // If already playing this turn, pause it
-    if (playingTurnId === turn.participant_id) {
-      audioRef.current?.pause();
-      setPlayingTurnId(null);
-      return;
-    }
-    
-    // Stop any current playback
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    
-    // Create new audio element and play
-    const apiBase = import.meta.env.VITE_API_URL || "";
-    const audioUrl = `${apiBase}${turn.audio_url}`;
-    const audio = new Audio(audioUrl);
-    audioRef.current = audio;
-    
-    audio.onended = () => setPlayingTurnId(null);
-    audio.onerror = () => setPlayingTurnId(null);
-    
-    audio.play().then(() => {
-      setPlayingTurnId(turn.participant_id);
-    }).catch(() => {
-      setPlayingTurnId(null);
-    });
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-    };
-  }, []);
-
-  if (completedTurns.length === 0) return null;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
-        <Volume2 className="w-3 h-3" />
-        Completed Turns
+  if (joined) {
+    return (
+      <div
+        role="status"
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+      >
+        <span className="relative flex h-2.5 w-2.5" aria-hidden>
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+        </span>
+        <Volume2 className="w-3.5 h-3.5" aria-hidden />
+        <span className="text-xs font-medium">
+          Live audio · {participantCount}
+        </span>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {completedTurns.map((turn) => (
-          <div
-            key={`${turn.participant_id}-${turn.turn_index}`}
-            className="card-glass px-3 py-2 flex items-center gap-2"
-          >
-            <Avatar
-              src={avatarByParticipant[turn.participant_id]}
-              name={turn.display_name}
-              className="w-8 h-8 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white"
-            />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-zinc-100 truncate">
-                {turn.display_name}
-              </div>
-              <div className="text-[10px] text-zinc-500">
-                Speaker {turn.turn_index + 1} · {turn.ai_score.toFixed(0)}/100
-              </div>
-            </div>
-            {turn.audio_url && !turn.is_forfeit ? (
-              <button
-                type="button"
-                onClick={() => handlePlay(turn)}
-                className="btn-ghost p-2 text-zinc-400 hover:text-zinc-100"
-                aria-label={playingTurnId === turn.participant_id ? "Pause audio" : "Play audio"}
-              >
-                {playingTurnId === turn.participant_id ? (
-                  <Pause className="w-4 h-4 text-brand-300" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-              </button>
-            ) : (
-              <span className="text-[10px] text-zinc-600 px-2">
-                {turn.is_forfeit ? "Forfeit" : "No audio"}
-              </span>
-            )}
-          </div>
-        ))}
+    );
+  }
+  if (connecting) {
+    return (
+      <div
+        role="status"
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300"
+      >
+        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+        <span className="text-xs font-medium">Connecting to live audio…</span>
       </div>
-    </div>
-  );
+    );
+  }
+  if (unavailable) {
+    return (
+      <div
+        role="status"
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border bg-zinc-800/40 border-zinc-700/60 text-zinc-400"
+      >
+        <MicOff className="w-3.5 h-3.5" aria-hidden />
+        <span className="text-xs">Live audio unavailable</span>
+      </div>
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +230,10 @@ function CompletedTurnsAudio({
 // ---------------------------------------------------------------------------
 
 export function DebateArenaView({ onBack }: DebateArenaViewProps) {
+  // ------- Routing: room code travels in the URL (/debate/:code) -------
+  const { code: codeParam } = useParams<{ code?: string }>();
+  const navigate = useNavigate();
+
   // ------- Local state -------
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [participantId, setParticipantId] = useState<string | null>(null);
@@ -288,12 +251,36 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   const [codeCopied, setCodeCopied] = useState(false);
 
+  // ------- LiveKit live-audio state -------
+  const [liveKitToken, setLiveKitToken] = useState<LiveKitTokenResponse | null>(
+    null,
+  );
+  const [liveKitError, setLiveKitError] = useState<string | null>(null);
+  // True only when the token fetch reported `livekit_not_configured` (503),
+  // so the arena can show an unobtrusive "unavailable" state without blocking
+  // recording, upload, scoring, or playback.
+  const [liveAudioUnavailable, setLiveAudioUnavailable] = useState(false);
+
   const { state, connected, error: socketError } = useDebateSocket(
     roomCode,
     participantId,
   );
   const recorder = useAudioRecorder();
   const autoUploadRef = useRef(false);
+
+  // ------- Stale room: socket closed 4404 → lobby + message (Req 2.10) -------
+  // `useDebateSocket` surfaces a 4404 close as "…no longer exists" (4401/auth is
+  // left to RequireAuth). On that signal, clear the stored identity and redirect
+  // to the debate lobby with an explanatory message.
+  useEffect(() => {
+    if (!socketError || !roomCode) return;
+    if (!socketError.includes("no longer exists")) return;
+    clearRoomSession("debate", roomCode);
+    setRoomCode(null);
+    setParticipantId(null);
+    setJoinError("This debate room no longer exists.");
+    navigate("/debate", { replace: true });
+  }, [socketError, roomCode, navigate]);
 
   // ------- Load motions for the lobby -------
   useEffect(() => {
@@ -320,6 +307,55 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     return () => window.clearInterval(id);
   }, []);
 
+  // ------- Rehydrate + rejoin from /debate/:code on reload (Req 2.2) -------
+  // On mount with a `code` in the URL but no in-memory identity, seed `roomCode`
+  // from the param and recover `participantId` from the per-room store. If the
+  // store has no id (e.g. a deep-link or a cleared tab), fall back to the
+  // idempotent-by-uid `joinDebateRoom` — it returns the SAME participant for a
+  // prior participant (no duplicate) — then persist it. Once both are set the
+  // existing `useDebateSocket` connects and rejoins.
+  const rehydratedRef = useRef(false);
+  useEffect(() => {
+    if (!codeParam) return;
+    if (roomCode && participantId) return;
+    if (rehydratedRef.current) return;
+    rehydratedRef.current = true;
+
+    const normalized = codeParam.toUpperCase();
+    const stored = readRoomSession("debate", normalized);
+    if (stored?.participantId) {
+      setRoomCode(normalized);
+      setParticipantId(stored.participantId);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await joinDebateRoom(normalized);
+        if (cancelled) return;
+        saveRoomSession("debate", response.room_code, {
+          participantId: response.participant_id,
+          savedAt: Date.now(),
+        });
+        setRoomCode(response.room_code);
+        setParticipantId(response.participant_id);
+      } catch (err) {
+        if (cancelled) return;
+        // Room gone / not joinable — clear any stale identity and drop to the
+        // lobby with an explanatory message (Req 2.10).
+        clearRoomSession("debate", normalized);
+        setJoinError(
+          err instanceof Error ? err.message : "Could not rejoin the room.",
+        );
+        navigate("/debate", { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [codeParam, roomCode, participantId, navigate]);
+
   // ------- Derived data -------
   const myParticipant = useMemo<ParticipantPublic | null>(() => {
     if (!state || !participantId) return null;
@@ -334,6 +370,63 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     typeof state.active_turn_index === "number" &&
     state.active_turn_index === myParticipant.turn_index
   );
+
+  // ------- LiveKit live audio: token fetch + active-speaker mic gating -------
+  // Publish gating uses a speaking-only variant of "my turn" (distinct from the
+  // recorder's `isMyTurn`, which is gated separately by phase in its effects).
+  const isMyTurnToSpeak = !!(
+    state &&
+    state.state === "speaking" &&
+    myParticipant &&
+    typeof state.active_turn_index === "number" &&
+    state.active_turn_index === myParticipant.turn_index
+  );
+
+  // Fetch a LiveKit token only while the room advertises a livekit_room and is
+  // in an active audio phase (mirror GDArenaView). A 503 (livekit_not_configured)
+  // degrades silently; other errors surface as a non-blocking message.
+  useEffect(() => {
+    if (!roomCode || !state?.livekit_room) return;
+    if (state.state !== "prep" && state.state !== "speaking") return;
+    if (liveKitToken) return; // already have a token
+    getDebateLiveKitToken(roomCode)
+      .then((token) => {
+        setLiveKitToken(token);
+        setLiveKitError(null);
+        setLiveAudioUnavailable(false);
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("livekit_not_configured")) {
+          // LiveKit isn't set up: feature simply unavailable, no error banner.
+          setLiveKitError(null);
+          setLiveAudioUnavailable(true);
+        } else {
+          setLiveKitError(msg);
+        }
+      });
+  }, [roomCode, state?.livekit_room, state?.state, liveKitToken]);
+
+  // Everyone joins to HEAR; only the active speaker publishes a mic.
+  const liveKitAudio = useLiveKitAudio({
+    serverUrl: liveKitToken?.url ?? null,
+    token: liveKitToken?.token ?? null,
+    enabled:
+      (state?.state === "prep" || state?.state === "speaking") && !!liveKitToken,
+  });
+
+  // Publish gating: keep the mic muted unless it's my turn to speak (including
+  // all of prep). Driven via the hook's mute toggle to match the desired publish
+  // state. The MediaRecorder recording path stays fully independent — we never
+  // stop() a shared MediaStreamTrack here.
+  useEffect(() => {
+    if (!liveKitAudio.isJoined) return;
+    const shouldPublish = isMyTurnToSpeak;
+    if (liveKitAudio.isMuted === shouldPublish) {
+      void liveKitAudio.toggleMute(); // flip to match desired publish state
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKitAudio.isJoined, isMyTurnToSpeak]);
 
   const activeSpeaker = useMemo<ParticipantPublic | null>(() => {
     if (!state || typeof state.active_turn_index !== "number") return null;
@@ -482,8 +575,13 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     setJoinError(null);
     try {
       const response = await createDebateRoom();
+      saveRoomSession("debate", response.room_code, {
+        participantId: response.participant_id,
+        savedAt: Date.now(),
+      });
       setRoomCode(response.room_code);
       setParticipantId(response.participant_id);
+      navigate(`/debate/${response.room_code}`);
     } catch (err) {
       setJoinError(
         err instanceof Error ? err.message : "Could not create room.",
@@ -491,7 +589,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, []);
+  }, [navigate]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -505,14 +603,19 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     setJoinError(null);
     try {
       const response = await joinDebateRoom(cleaned);
+      saveRoomSession("debate", response.room_code, {
+        participantId: response.participant_id,
+        savedAt: Date.now(),
+      });
       setRoomCode(response.room_code);
       setParticipantId(response.participant_id);
+      navigate(`/debate/${response.room_code}`);
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Could not join room.");
     } finally {
       setJoining(false);
     }
-  }, [joinCodeInput]);
+  }, [joinCodeInput, navigate]);
 
   const handleFlipReady = useCallback(async () => {
     if (!roomCode) return;
@@ -533,16 +636,22 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     if (recorder.isRecording) {
       void recorder.stop();
     }
+    if (roomCode) {
+      clearRoomSession("debate", roomCode);
+    }
     setRoomCode(null);
     setParticipantId(null);
     setLastTurnResult(null);
     setUploadError(null);
     setJoinError(null);
     setJoinCodeInput("");
+    setLiveKitToken(null);
+    setLiveKitError(null);
+    setLiveAudioUnavailable(false);
     autoUploadRef.current = false;
-    onBack();
+    navigate("/debate");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onBack]);
+  }, [navigate, roomCode]);
 
   const handleManualStop = useCallback(async () => {
     // Early return checks with better logging
@@ -778,6 +887,14 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
   const roomState = state?.state ?? "waiting";
   const paused = state?.paused ?? false;
   const motion = state?.motion ?? null;
+
+  // Show the live-audio indicator only during active phases and only when there
+  // is something meaningful to report (connected, connecting, or unavailable).
+  const showLiveAudio =
+    (roomState === "prep" || roomState === "speaking") &&
+    (liveKitAudio.isJoined ||
+      liveKitAudio.isConnecting ||
+      liveAudioUnavailable);
 
   // Show motion only from prep onwards (Requirement 4.1 — hidden until then).
   const motionRevealed =
@@ -1113,8 +1230,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         
         {/* Audio playback for completed turns */}
         {state?.completed_turns && state.completed_turns.length > 0 && (
-          <CompletedTurnsAudio
-            completedTurns={state.completed_turns}
+          <DebateTurnsAudio
+            turns={state.completed_turns}
             avatarByParticipant={Object.fromEntries(
               state.participants.map((p) => [p.participant_id, p.avatar_url]),
             )}
@@ -1170,9 +1287,33 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               );
             })()}
           </div>
+        ) : state?.final_standings && state.final_standings.length > 0 ? (
+          (() => {
+            // Draw: populated standings but no single winner (Req 9.3).
+            // Reuse the winner-null fallback path — show a clear tie result
+            // with the shared top score. No participant is crowned.
+            const topScore = Math.max(
+              ...state.final_standings.map((s) => s.effective_score),
+            );
+            return (
+              <div className="card-glass border-zinc-600/60 p-6 text-center space-y-2">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-300 font-semibold">
+                  It's a tie
+                </div>
+                <div className="text-2xl font-bold text-zinc-100">Draw</div>
+                <p className="text-xs text-zinc-400">
+                  Two or more speakers shared the highest score:{" "}
+                  <span className="text-zinc-200 font-semibold">
+                    {Math.round(topScore)}/100
+                  </span>
+                  . No single winner this round.
+                </p>
+              </div>
+            );
+          })()
         ) : (
           <div className="card-glass border-zinc-700/60 border-dashed p-6 text-center text-sm text-zinc-400">
-            No winner could be determined for this debate.
+            No result could be determined for this debate.
           </div>
         )}
 
@@ -1305,6 +1446,16 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </div>
         )}
 
+        {/* Post-debate playback: per-speaker audio for each completed turn. */}
+        {state?.completed_turns && state.completed_turns.length > 0 && (
+          <DebateTurnsAudio
+            turns={state.completed_turns}
+            avatarByParticipant={Object.fromEntries(
+              state.participants.map((p) => [p.participant_id, p.avatar_url]),
+            )}
+          />
+        )}
+
         <div className="flex justify-center">
           <button
             type="button"
@@ -1343,6 +1494,21 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     <div key="debate-arena" className="animate-fade-in-up space-y-5">
       {banner}
       {participantsGrid}
+      {showLiveAudio && (
+        <div className="flex justify-center">
+          <LiveAudioIndicator
+            joined={liveKitAudio.isJoined}
+            connecting={liveKitAudio.isConnecting}
+            unavailable={liveAudioUnavailable}
+            participantCount={liveKitAudio.participantCount}
+          />
+        </div>
+      )}
+      {liveKitError && (roomState === "prep" || roomState === "speaking") && (
+        <div className="card-glass px-4 py-3 text-sm text-amber-200 border-amber-500/40">
+          Live audio issue: {liveKitError}
+        </div>
+      )}
       {socketError && roomState !== "abandoned" && roomState !== "complete" && (
         <div className="card-glass px-4 py-3 text-sm text-amber-200 border-amber-500/40">
           {socketError}

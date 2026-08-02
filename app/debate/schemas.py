@@ -77,6 +77,9 @@ class DebateRoom(BaseModel):
     motion_text: str
     state: DebateState = "waiting"
     paused: bool = False
+    # LiveKit room name for live audio; set around prep/speaking. Idempotent
+    # once assigned (see room_manager `_create_livekit_room`).
+    livekit_room: Optional[str] = None
     participants: list[ParticipantInternal] = Field(default_factory=list)
     active_turn_index: Optional[int] = None
     prep_deadline: Optional[float] = None
@@ -177,6 +180,10 @@ class PublicDebateRoom(BaseModel):
     code: str
     state: DebateState
     paused: bool = False
+    # LiveKit room name, exposed ONLY while the room state is `prep` or
+    # `speaking`. `to_public` gates this so the name never leaks outside
+    # active audio phases (Requirement 1.1).
+    livekit_room: Optional[str] = None
     motion: Optional[MotionPublic] = None
     participants: list[ParticipantPublic] = Field(default_factory=list)
     active_turn_index: Optional[int] = None
@@ -229,6 +236,12 @@ def to_public(room: DebateRoom) -> PublicDebateRoom:
         winner_participant_id=room.winner_participant_id,
         completed_turns=room.completed_turns_cache,
         final_standings=room.final_standings,
+        # Phase-gated: the LiveKit room name is exposed only during the
+        # active audio phases (prep/speaking); None otherwise so it never
+        # leaks in waiting/scoring/complete/abandoned states.
+        livekit_room=(
+            room.livekit_room if room.state in ("prep", "speaking") else None
+        ),
     )
 
 
@@ -267,6 +280,11 @@ class DebateTurn(BaseModel):
     turn_index: int
     analysis_id: Optional[str] = None  # links to /analyze pipeline output
     audio_url: Optional[str] = None  # URL to play back this turn's audio
+    # Storage-abstraction key (new source of truth for locating the blob).
+    # Format: debate-audio/{debate_id}/{turn_id}.{ext}
+    audio_key: Optional[str] = None
+    # MIME type so the serve route sets the correct Content-Type.
+    audio_content_type: Optional[str] = None
     ai_score: float  # 0..100, clamped upstream by compute_ai_score
     scoring_unavailable: bool = False
     teacher_override_score: Optional[int] = Field(default=None, ge=0, le=100)
@@ -294,6 +312,22 @@ class EffectiveScoreEntry(BaseModel):
     effective_score: float
 
 
+class DebateTurnAudioRef(BaseModel):
+    """Self-contained per-turn audio reference for post-debate playback.
+
+    Carries a display label (speaker name) so the personal panel and
+    results screen can render a per-speaker player list without
+    re-joining participant data. Broadcast / response-safe: no email /
+    uid (see Requirement 3.1 / 4.4).
+    """
+
+    turn_index: int
+    participant_id: str
+    display_name: str
+    audio_url: Optional[str] = None  # app route URL (or None for forfeit)
+    is_forfeit: bool = False
+
+
 class DebateRecord(BaseModel):
     """Final durable record of a completed debate.
 
@@ -316,6 +350,10 @@ class DebateRecord(BaseModel):
     turn_ids: list[str]  # ordered by turn_index
     winner_participant_id: Optional[str] = None
     effective_scores: list[EffectiveScoreEntry] = Field(default_factory=list)
+    # Ordered by turn_index; self-contained audio index for the completed
+    # debate so playback survives room eviction. Empty entries allowed for
+    # forfeits. Populated at finalize (see room_manager).
+    turn_audio: list[DebateTurnAudioRef] = Field(default_factory=list)
     created_at: float
     completed_at: float
 
@@ -331,6 +369,21 @@ class Motion(BaseModel):
     id: str
     title: str
     text: str
+
+
+class DebateDetailResponse(BaseModel):
+    """Response body for `GET /debate/debates/{debate_id}` (detail endpoint).
+
+    Response-safe: carries no email / uid. Surfaces the ordered per-turn
+    audio references for post-debate playback (Requirement 3.4).
+    """
+
+    debate_id: str
+    code: str
+    motion: Motion
+    completed_at: float
+    winner_participant_id: Optional[str] = None
+    turn_audio: list[DebateTurnAudioRef] = []
 
 # ---------------------------------------------------------------------------
 # Request / response shapes

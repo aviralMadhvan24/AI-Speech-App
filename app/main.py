@@ -5,8 +5,35 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes import router
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles that falls back to ``index.html`` for unmatched paths.
+
+    The React app uses client-side (URL) routing, so deep links like
+    ``/debate/ABC234`` or a browser refresh on ``/report/<id>`` have no
+    corresponding file on disk. Plain ``StaticFiles`` would return 404 for
+    those. This subclass serves ``index.html`` instead so the SPA router can
+    resolve the route in the browser. Real asset requests (JS/CSS/images) that
+    genuinely don't exist still 404, because those requests carry a file
+    extension and we only fall back for extension-less "route" paths.
+
+    API routes are registered on the app BEFORE this mount, so they always take
+    precedence and are never shadowed by the fallback.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # Only rewrite genuine "not found" for route-like paths (no file
+            # extension). Missing assets (foo.js, bar.png) keep their 404.
+            if exc.status_code == 404 and "." not in Path(path).name:
+                return await super().get_response("index.html", scope)
+            raise
 from app.auth import init_firebase_admin
 from app.utils.file_utils import ensure_directories
 
@@ -97,7 +124,7 @@ _react_dist = Path("frontend/dist")
 if _react_dist.is_dir():
     app.mount(
         "/",
-        StaticFiles(directory=str(_react_dist), html=True),
+        SPAStaticFiles(directory=str(_react_dist), html=True),
         name="spa",
     )
 else:

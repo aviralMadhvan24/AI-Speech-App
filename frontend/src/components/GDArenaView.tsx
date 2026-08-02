@@ -34,9 +34,15 @@ import {
   type GDTopic,
   type LiveKitTokenResponse,
 } from "../gdApi";
+import { useNavigate, useParams } from "react-router-dom";
 import { useGDSocket } from "../hooks/useGDSocket";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { useLiveKitAudio } from "../hooks/useLiveKitAudio";
+import {
+  clearRoomSession,
+  readRoomSession,
+  saveRoomSession,
+} from "../lib/roomSession";
 import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
 
@@ -116,6 +122,10 @@ function ParticipantCard({
 }
 
 export function GDArenaView({ onBack }: GDArenaViewProps) {
+  // ------- Routing: room code travels in the URL (/gd/:code) -------
+  const { code: codeParam } = useParams<{ code?: string }>();
+  const navigate = useNavigate();
+
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -138,9 +148,72 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   const [liveKitToken, setLiveKitToken] = useState<LiveKitTokenResponse | null>(null);
   const [liveKitError, setLiveKitError] = useState<string | null>(null);
 
-  const { state, connected } = useGDSocket(roomCode, participantId);
+  const { state, connected, error: socketError } = useGDSocket(
+    roomCode,
+    participantId,
+  );
   const recorder = useAudioRecorder();
   const toast = useToast();
+
+  // ------- Rehydrate + rejoin from /gd/:code on reload (Req 2.2) -------
+  // Mirror of DebateArenaView: seed `roomCode` from the URL param and recover
+  // `participantId` from the per-room store; fall back to the idempotent-by-uid
+  // `joinGDRoom` (same participant, no duplicate) then persist. Once both are
+  // set, `useGDSocket` connects and rejoins.
+  const rehydratedRef = useRef(false);
+  useEffect(() => {
+    if (!codeParam) return;
+    if (roomCode && participantId) return;
+    if (rehydratedRef.current) return;
+    rehydratedRef.current = true;
+
+    const normalized = codeParam.toUpperCase();
+    const stored = readRoomSession("gd", normalized);
+    if (stored?.participantId) {
+      setRoomCode(normalized);
+      setParticipantId(stored.participantId);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await joinGDRoom(normalized);
+        if (cancelled) return;
+        saveRoomSession("gd", response.room_code, {
+          participantId: response.participant_id,
+          savedAt: Date.now(),
+        });
+        setRoomCode(response.room_code);
+        setParticipantId(response.participant_id);
+      } catch (err) {
+        if (cancelled) return;
+        // Room gone / not joinable — clear stale identity, drop to the lobby
+        // with a message (Req 2.10).
+        clearRoomSession("gd", normalized);
+        const msg =
+          err instanceof Error ? err.message : "Could not rejoin the room.";
+        setJoinError(msg);
+        toast.error("Could not rejoin", msg);
+        navigate("/gd", { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [codeParam, roomCode, participantId, navigate, toast]);
+
+  // ------- Stale room: socket closed 4404 → lobby + message (Req 2.10) -------
+  useEffect(() => {
+    if (!socketError || !roomCode) return;
+    if (!socketError.includes("no longer exists")) return;
+    clearRoomSession("gd", roomCode);
+    setRoomCode(null);
+    setParticipantId(null);
+    setJoinError("This GD room no longer exists.");
+    toast.error("Room closed", "This GD room no longer exists.");
+    navigate("/gd", { replace: true });
+  }, [socketError, roomCode, navigate, toast]);
 
   // LiveKit live audio - enabled during prep and discussion phases
   const liveKitAudio = useLiveKitAudio({
@@ -348,9 +421,14 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     setJoinError(null);
     try {
       const response = await createGDRoom();
+      saveRoomSession("gd", response.room_code, {
+        participantId: response.participant_id,
+        savedAt: Date.now(),
+      });
       setRoomCode(response.room_code);
       setParticipantId(response.participant_id);
       toast.success("Room created!", `Share code: ${response.room_code}`);
+      navigate(`/gd/${response.room_code}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not create room.";
       setJoinError(msg);
@@ -358,7 +436,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, [toast]);
+  }, [toast, navigate]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -371,9 +449,14 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     setJoinError(null);
     try {
       const response = await joinGDRoom(cleaned);
+      saveRoomSession("gd", response.room_code, {
+        participantId: response.participant_id,
+        savedAt: Date.now(),
+      });
       setRoomCode(response.room_code);
       setParticipantId(response.participant_id);
       toast.success("Joined!", `Welcome to room ${cleaned}`);
+      navigate(`/gd/${response.room_code}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not join.";
       setJoinError(msg);
@@ -381,7 +464,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     } finally {
       setJoining(false);
     }
-  }, [joinCodeInput, toast]);
+  }, [joinCodeInput, toast, navigate]);
 
   const handleFlipReady = useCallback(async () => {
     if (!roomCode) return;
@@ -427,12 +510,15 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     if (isSpeaking && currentSpeechId) {
       void handleToggleSpeech();
     }
+    if (roomCode) {
+      clearRoomSession("gd", roomCode);
+    }
     setRoomCode(null);
     setParticipantId(null);
     setResults(null);
     setJoinCodeInput("");
-    onBack();
-  }, [isSpeaking, currentSpeechId, handleToggleSpeech, onBack]);
+    navigate("/gd");
+  }, [isSpeaking, currentSpeechId, handleToggleSpeech, navigate, roomCode]);
 
   const handleCopyCode = async () => {
     if (!roomCode) return;

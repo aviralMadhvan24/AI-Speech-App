@@ -33,10 +33,16 @@ def _fluency(clarity):
 
 
 class _FakeContent:
-    def __init__(self, total):
+    def __init__(self, total, off_topic=False):
         self.available = True
         self.total = total
         self.feedback = "good"
+        # Mirror the real ContentScoreResult surface consumed by
+        # compute_ai_score_with_content (off_topic gate + logging fields).
+        self.off_topic = off_topic
+        self.relevance = 0
+        self.arguments = 0
+        self.error = None
 
     def to_dict(self):
         return {"total": self.total}
@@ -87,7 +93,13 @@ def test_debate_score_full_when_all_signals_high():
 
 
 def test_debate_short_transcript_scores_on_fluency_only():
-    """Transcript too short for content -> only fluency counts (rescaled)."""
+    """Transcript too short for content -> delivery-only, scored out of 50.
+
+    Content is half the rubric. When content cannot be assessed (transcript
+    too short), the delivery-only score is intentionally halved (scored out
+    of 50) so a fluent but content-less turn cannot look like a pass. See the
+    content-missing branch in ``compute_ai_score_with_content``.
+    """
 
     async def scenario():
         score, unavailable, breakdown = await compute_ai_score_with_content(
@@ -97,9 +109,177 @@ def test_debate_short_transcript_scores_on_fluency_only():
             motion_title="M",
             motion_text="motion text",
         )
-        # Only fluency present: earned 20, max 25 -> 80.0
+        # Only fluency present: earned 20, max 25 -> 80.0, then halved
+        # because content is missing -> 40.0.
         assert not unavailable
-        assert score == 80.0
+        assert score == 40.0
         assert breakdown["content"]["total"] is None
+        assert breakdown["content_missing"] is True
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Winner selection: draw-on-tie rule (Property 5, Requirements 9.2/9.3/9.4/9.5)
+# ---------------------------------------------------------------------------
+
+import random
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from app.debate.scoring import (
+    EFFECTIVE_SCORE_DP,
+    compute_effective_score,
+    compute_winner,
+)
+from app.debate.schemas import DebateTurn, ParticipantInternal
+
+
+def _participant(pid: str, turn_index: int) -> ParticipantInternal:
+    return ParticipantInternal(
+        participant_id=pid,
+        user_id=f"uid-{pid}",
+        user_email=f"{pid}@example.com",
+        display_name=f"Speaker {pid}",
+        joined_at=1000.0,
+        is_ready=True,
+        turn_index=turn_index,
+    )
+
+
+def _turn(
+    pid: str,
+    turn_index: int,
+    ai_score: float,
+    override: int | None = None,
+    submitted_at: float = 1000.0,
+) -> DebateTurn:
+    return DebateTurn(
+        turn_id=f"turn-{pid}",
+        debate_id="debate-1",
+        participant_id=pid,
+        turn_index=turn_index,
+        analysis_id=f"an-{pid}",
+        ai_score=ai_score,
+        teacher_override_score=override,
+        submitted_at=submitted_at,
+    )
+
+
+def test_winner_unique_highest_returns_single_winner():
+    """(a) Exactly one strictly-highest rounded score -> that participant."""
+    parts = [_participant(str(i), i) for i in range(4)]
+    turns = [
+        _turn("0", 0, 90.0),
+        _turn("1", 1, 80.0),
+        _turn("2", 2, 70.0),
+        _turn("3", 3, 60.0),
+    ]
+    assert compute_winner(turns, parts) == "0"
+
+
+def test_winner_two_way_tie_is_draw():
+    """(b) Two participants share the top rounded score -> None (draw)."""
+    parts = [_participant(str(i), i) for i in range(4)]
+    turns = [
+        _turn("0", 0, 90.0),
+        _turn("1", 1, 90.0),
+        _turn("2", 2, 70.0),
+        _turn("3", 3, 60.0),
+    ]
+    assert compute_winner(turns, parts) is None
+
+
+def test_winner_no_scorable_turns_is_none():
+    """(c) Empty turns -> None."""
+    parts = [_participant(str(i), i) for i in range(4)]
+    assert compute_winner([], parts) is None
+
+
+def test_winner_rounding_boundary_consistent_with_1dp():
+    """(e) Winner decision is driven by round(score, 1), whatever it yields.
+
+    We assert compute_winner agrees with the 1-dp rounded comparison for
+    near-boundary values rather than hardcoding float-rounding quirks.
+    """
+    parts = [_participant("a", 0), _participant("b", 1)]
+    for a_score, b_score in [
+        (87.44, 87.45),
+        (87.44, 87.46),
+        (87.45, 87.45),
+        (87.40, 87.44),
+        (99.94, 99.95),
+    ]:
+        turns = [_turn("a", 0, a_score), _turn("b", 1, b_score)]
+        ra = round(a_score, EFFECTIVE_SCORE_DP)
+        rb = round(b_score, EFFECTIVE_SCORE_DP)
+        result = compute_winner(turns, parts)
+        if ra > rb:
+            assert result == "a"
+        elif rb > ra:
+            assert result == "b"
+        else:
+            assert result is None
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    scores=st.lists(
+        st.floats(min_value=0.0, max_value=100.0, allow_nan=False),
+        min_size=4,
+        max_size=6,
+    ),
+    seed=st.integers(min_value=0, max_value=1_000_000),
+)
+def test_winner_draw_on_tie_property(scores: list[float], seed: int):
+    """Property 5: unique argmax of 1-dp Effective_Score, else draw.
+
+    Also verifies order/timing independence: shuffling participants and
+    perturbing submitted_at / turn_index (without changing rounded scores)
+    never changes the result.
+
+    **Validates: Requirements 9.2, 9.3, 9.4, 9.5**
+    """
+    rng = random.Random(seed)
+    pids = [f"p{i}" for i in range(len(scores))]
+    parts = [_participant(pid, i) for i, pid in enumerate(pids)]
+    turns = [
+        _turn(pid, i, ai_score=scores[i], submitted_at=1000.0 + i)
+        for i, pid in enumerate(pids)
+    ]
+
+    result = compute_winner(turns, parts)
+
+    # Compute expected via the rounded-score argmax definition.
+    rounded = {
+        t.participant_id: round(compute_effective_score(t), EFFECTIVE_SCORE_DP)
+        for t in turns
+    }
+    max_score = max(rounded.values())
+    leaders = [pid for pid, s in rounded.items() if s == max_score]
+    if len(leaders) == 1:
+        assert result == leaders[0]
+        # (a) strictly greater than every other rounded score
+        for pid, s in rounded.items():
+            if pid != result:
+                assert rounded[result] > s
+    else:
+        # (b) two or more tied -> draw
+        assert result is None
+
+    # (d) Order / timing independence: shuffle participants + turns and
+    # perturb submitted_at + turn_index without changing rounded scores.
+    shuffled_parts = parts[:]
+    rng.shuffle(shuffled_parts)
+    perturbed_turns = [
+        _turn(
+            t.participant_id,
+            turn_index=rng.randint(0, 99),
+            ai_score=t.ai_score,
+            submitted_at=t.submitted_at + rng.uniform(-500, 500),
+        )
+        for t in turns
+    ]
+    rng.shuffle(perturbed_turns)
+    assert compute_winner(perturbed_turns, shuffled_parts) == result

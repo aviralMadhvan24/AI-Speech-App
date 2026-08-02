@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Briefcase,
@@ -204,6 +205,13 @@ function classifyScore(value: number): {
 }
 
 export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
+  const navigate = useNavigate();
+  // `/interview/:submissionId` resumes a submitted/complete submission on
+  // reload (Req 2.4). `/interview` (no param) is the entry / pick stage — the
+  // mid-capture stages (record/analyze) are not URL-encodable, so a reload
+  // there lands here rather than on main-menu.
+  const { submissionId: routeSubmissionId } = useParams();
+
   const [stage, setStage] = useState<Stage>("pick");
   const [questionIdx, setQuestionIdx] = useState(0);
 
@@ -315,8 +323,14 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
   // Reviewed → transitions to complete with the real rubric.
   // Pending → transitions to submitted and resumes polling.
   const openMySubmission = useCallback(
-    async (submissionId: string) => {
+    async (submissionId: string, opts?: { syncUrl?: boolean }) => {
       submissionIdRef.current = submissionId;
+      // Reflect the opened submission in the URL so a reload restores it
+      // (Req 2.4). Skip when we are already resuming from that route param, to
+      // avoid pushing a duplicate history entry.
+      if (opts?.syncUrl !== false) {
+        navigate(`/interview/${submissionId}`);
+      }
       try {
         const detail = await fetchMySubmission(submissionId);
         // Rebuild the per-metric card list so the complete/submitted screens
@@ -345,8 +359,18 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
         setMySubmissionsError(message);
       }
     },
-    [startReviewPolling, stopReviewPolling],
+    [startReviewPolling, stopReviewPolling, navigate],
   );
+
+  // Resume from `/interview/:submissionId` on mount (Req 2.4). Runs once per
+  // submission id; `syncUrl: false` because the URL already reflects it.
+  const resumedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!routeSubmissionId) return;
+    if (resumedIdRef.current === routeSubmissionId) return;
+    resumedIdRef.current = routeSubmissionId;
+    void openMySubmission(routeSubmissionId, { syncUrl: false });
+  }, [routeSubmissionId, openMySubmission]);
 
   // Captured from the real /interview/analyze response so the later
   // submit-for-review call can reference the gesture session by id.
@@ -549,6 +573,9 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
         durationSeconds: elapsedAtAnalyzeRef.current,
       });
       submissionIdRef.current = submissionId;
+      // Reflect the new submission in the URL so a reload restores it (Req 2.4).
+      resumedIdRef.current = submissionId;
+      navigate(`/interview/${submissionId}`);
       // Start polling the backend every few seconds. When a teacher reviews
       // the submission via the admin panel, the poll will pick it up and
       // transition to the completed screen with real scores.
@@ -559,9 +586,13 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
       setSubmitError(message);
       setStage("analyze");
     }
-  }, [gestureScores, question]);
+  }, [gestureScores, question, navigate, startReviewPolling]);
 
   const handleRestart = useCallback(() => {
+    // Drop back to the entry URL so a reload lands on the pick stage rather
+    // than re-resuming the just-finished submission (Req 2.4).
+    resumedIdRef.current = null;
+    if (routeSubmissionId) navigate("/interview");
     setStage("pick");
     setQuestionIdx(0);
     setIsRecording(false);
@@ -588,7 +619,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     }
     stream?.getTracks().forEach((track) => track.stop());
     setStream(null);
-  }, [stream]);
+  }, [stream, navigate, routeSubmissionId, stopReviewPolling]);
 
   const gestureAverage = useMemo(() => {
     if (gestureScores.length === 0) return 0;

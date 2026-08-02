@@ -56,10 +56,23 @@ def list_turns_for_debate(debate_id: str) -> list[DebateTurn]:
 
 
 def list_turns_for_debate_by_code(room_code: str) -> list[DebateTurn]:
-    """Return every turn that has audio, for audio serving lookup."""
-    # This is a fallback for completed debates - we don't have room_code
-    # stored in turns, so this returns empty. Audio serving primarily
-    # uses list_turns_for_debate_by_turn_id.
+    """Return every turn for the debate identified by `room_code`, ordered by
+    turn_index ASC.
+
+    Turns do not store the room code, so resolve the owning `debate_id` from
+    the completed-debate store by matching `code`, then reuse
+    `list_turns_for_debate(debate_id)`. This lets the audio-serve path resolve
+    turns for completed/evicted rooms without adding `room_code` to every turn
+    row. Returns `[]` when the code matches no persisted debate.
+
+    The import is done lazily to mirror the cross-store access pattern in
+    `debates.py` (which lazily imports this module) and avoid an import cycle.
+    """
+    from app.storage import debates as debates_store
+
+    for record in debates_store._iter_records():
+        if record.code == room_code:
+            return list_turns_for_debate(record.debate_id)
     return []
 
 
