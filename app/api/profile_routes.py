@@ -147,30 +147,56 @@ async def get_profile_summary(
     if debates_path.exists():
         for row in read_jsonl(debates_path):
             try:
-                # Find if user participated
-                final_standings = row.get("final_standings", [])
-                user_standing = None
-                for s in final_standings:
-                    if s.get("user_id") == user_id or s.get("email") == user_email:
-                        user_standing = s
+                # Match the caller against the persisted DebateRecord shape:
+                # `participants` is a snapshot of dicts carrying `user_id`
+                # (email is NOT stored), and scores live in `effective_scores`
+                # keyed by participant_id. (The old code read `final_standings`
+                # / nested `motion`, which the record never contains — so no
+                # debate ever matched and the list stayed empty.)
+                participants = row.get("participants", [])
+                my_pid: Optional[str] = None
+                for p in participants:
+                    if p.get("user_id") == user_id:
+                        my_pid = p.get("participant_id")
                         break
-                
-                if user_standing:
-                    stats.total_debates += 1
-                    is_winner = user_standing.get("is_winner", False)
-                    if is_winner:
-                        stats.debate_wins += 1
-                    
-                    recent_debates.append(DebateSummary(
-                        debate_id=row.get("debate_id", ""),
-                        code=row.get("code", ""),
-                        motion_title=row.get("motion", {}).get("title", "Unknown"),
-                        participant_count=len(final_standings),
-                        your_score=user_standing.get("effective_score", 0),
-                        your_rank=user_standing.get("rank", 0),
-                        is_winner=is_winner,
-                        completed_at=row.get("completed_at", 0),
-                    ))
+                if my_pid is None:
+                    continue
+
+                stats.total_debates += 1
+                winner_pid = row.get("winner_participant_id")
+                is_winner = winner_pid is not None and winner_pid == my_pid
+                if is_winner:
+                    stats.debate_wins += 1
+
+                effective_scores = row.get("effective_scores", [])
+                your_score = 0.0
+                for es in effective_scores:
+                    if es.get("participant_id") == my_pid:
+                        your_score = es.get("effective_score", 0) or 0
+                        break
+
+                # Rank by effective_score (desc); draw-safe (ties share order).
+                ranked = sorted(
+                    effective_scores,
+                    key=lambda e: e.get("effective_score", 0) or 0,
+                    reverse=True,
+                )
+                your_rank = 0
+                for idx, es in enumerate(ranked):
+                    if es.get("participant_id") == my_pid:
+                        your_rank = idx + 1
+                        break
+
+                recent_debates.append(DebateSummary(
+                    debate_id=row.get("debate_id", ""),
+                    code=row.get("code", ""),
+                    motion_title=row.get("motion_title", "Unknown"),
+                    participant_count=len(participants),
+                    your_score=your_score,
+                    your_rank=your_rank,
+                    is_winner=is_winner,
+                    completed_at=row.get("completed_at", 0),
+                ))
             except Exception as e:
                 logger.warning(f"Skipping malformed debate row: {e}")
     

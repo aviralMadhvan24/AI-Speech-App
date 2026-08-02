@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play, Volume2 } from "lucide-react";
+import { Loader2, Pause, Play, Volume2 } from "lucide-react";
+import { getCurrentIdToken } from "../hooks/useAuth";
 import { Avatar } from "./Avatar";
 
 /**
@@ -47,12 +48,22 @@ export function DebateTurnsAudio({
   // Track the currently-playing turn by its stable key so the button state and
   // the single shared <audio> element stay in sync.
   const [playingKey, setPlayingKey] = useState<string | null>(null);
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Object URL for the currently-loaded blob, revoked when we switch/stop.
+  const objectUrlRef = useRef<string | null>(null);
 
   const keyFor = (turn: DebateTurnAudioItem) =>
     `${turn.participant_id}-${turn.turn_index}`;
 
-  const handlePlay = (turn: DebateTurnAudioItem) => {
+  const revokeObjectUrl = () => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+  };
+
+  const handlePlay = async (turn: DebateTurnAudioItem) => {
     if (!turn.audio_url) return;
     const key = keyFor(turn);
 
@@ -65,22 +76,53 @@ export function DebateTurnsAudio({
 
     // Stop any current playback before starting a new turn.
     audioRef.current?.pause();
+    revokeObjectUrl();
 
-    const audio = new Audio(`${API_BASE_URL}${turn.audio_url}`);
-    audioRef.current = audio;
-    audio.onended = () => setPlayingKey(null);
-    audio.onerror = () => setPlayingKey(null);
+    // The audio-serve route requires auth (Firebase bearer token), which a
+    // bare <audio src> / new Audio(url) request cannot send. So fetch the
+    // bytes with the Authorization header, wrap them in an object URL, and
+    // play that instead.
+    setLoadingKey(key);
+    try {
+      const token = await getCurrentIdToken();
+      const resp = await fetch(`${API_BASE_URL}${turn.audio_url}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) {
+        setLoadingKey(null);
+        setPlayingKey(null);
+        return;
+      }
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      objectUrlRef.current = objectUrl;
 
-    audio
-      .play()
-      .then(() => setPlayingKey(key))
-      .catch(() => setPlayingKey(null));
+      const audio = new Audio(objectUrl);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setPlayingKey(null);
+        revokeObjectUrl();
+      };
+      audio.onerror = () => {
+        setPlayingKey(null);
+        revokeObjectUrl();
+      };
+
+      await audio.play();
+      setLoadingKey(null);
+      setPlayingKey(key);
+    } catch {
+      setLoadingKey(null);
+      setPlayingKey(null);
+      revokeObjectUrl();
+    }
   };
 
-  // Stop playback if the component unmounts.
+  // Stop playback + free the blob URL if the component unmounts.
   useEffect(() => {
     return () => {
       audioRef.current?.pause();
+      revokeObjectUrl();
     };
   }, []);
 
@@ -98,6 +140,7 @@ export function DebateTurnsAudio({
         {ordered.map((turn) => {
           const key = keyFor(turn);
           const isPlaying = playingKey === key;
+          const isLoading = loadingKey === key;
           const hasAudio = !!turn.audio_url && !turn.is_forfeit;
           return (
             <div
@@ -122,8 +165,9 @@ export function DebateTurnsAudio({
               {hasAudio ? (
                 <button
                   type="button"
-                  onClick={() => handlePlay(turn)}
-                  className="btn-ghost p-2 text-zinc-400 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+                  onClick={() => void handlePlay(turn)}
+                  disabled={isLoading}
+                  className="btn-ghost p-2 text-zinc-400 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 disabled:opacity-60"
                   aria-label={
                     isPlaying
                       ? `Pause ${turn.display_name}'s turn`
@@ -131,7 +175,9 @@ export function DebateTurnsAudio({
                   }
                   aria-pressed={isPlaying}
                 >
-                  {isPlaying ? (
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                  ) : isPlaying ? (
                     <Pause className="w-4 h-4 text-brand-300" aria-hidden />
                   ) : (
                     <Play className="w-4 h-4" aria-hidden />
