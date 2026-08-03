@@ -428,3 +428,84 @@ export async function analyzeInterview(
     message: raw.message ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Interview answer content scoring (AI — Groq Whisper + LLM)
+// ---------------------------------------------------------------------------
+
+export interface InterviewContentResult {
+  relevance: number;
+  structure: number;
+  depth: number;
+  communication: number;
+  total: number;
+  feedback: string;
+  strengths: string;
+  improvements: string;
+  available: boolean;
+  error: string | null;
+  transcript: string;
+}
+
+interface InterviewContentWire {
+  relevance: number;
+  structure: number;
+  depth: number;
+  communication: number;
+  total: number;
+  feedback: string;
+  strengths: string;
+  improvements: string;
+  available: boolean;
+  error: string | null;
+  transcript: string;
+}
+
+/**
+ * Score the *content* of a spoken interview answer. Sends the recorded
+ * media (the same webm blob captured for gesture analysis — Whisper reads
+ * the audio track) to `/interview/score-answer`, which transcribes it and
+ * grades relevance / structure / depth / communication with the LLM.
+ *
+ * `question_prompt` and `question_category` are query params on the backend
+ * (they are not declared as Form fields), so they go in the URL.
+ */
+export async function scoreInterviewAnswer(
+  media: Blob,
+  questionPrompt: string,
+  questionCategory: string = "general",
+  filename = "answer.webm",
+): Promise<InterviewContentResult> {
+  const bareType = (media.type || "audio/webm").split(";")[0] || "audio/webm";
+  const cleaned = new Blob([media], { type: bareType });
+
+  const formData = new FormData();
+  formData.append("audio", cleaned, filename);
+
+  const query = new URLSearchParams({
+    question_prompt: questionPrompt,
+    question_category: questionCategory,
+  }).toString();
+
+  const raw = await fetchJson<InterviewContentWire>(
+    `/interview/score-answer?${query}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+
+  return {
+    relevance: raw.relevance ?? 0,
+    structure: raw.structure ?? 0,
+    depth: raw.depth ?? 0,
+    communication: raw.communication ?? 0,
+    total: raw.total ?? 0,
+    feedback: raw.feedback ?? "",
+    strengths: raw.strengths ?? "",
+    improvements: raw.improvements ?? "",
+    available: !!raw.available,
+    error: raw.error ?? null,
+    transcript: raw.transcript ?? "",
+  };
+}

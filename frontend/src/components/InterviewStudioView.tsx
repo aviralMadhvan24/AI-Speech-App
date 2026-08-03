@@ -29,7 +29,9 @@ import {
   analyzeInterview,
   fetchMySubmission,
   fetchMySubmissions,
+  scoreInterviewAnswer,
   submitInterviewForReview,
+  type InterviewContentResult,
   type InterviewGestureMetric,
   type StudentSubmissionSummary,
 } from "../api";
@@ -231,6 +233,10 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [gestureScores, setGestureScores] = useState<GestureScore[]>([]);
+  // AI content score for the spoken answer (relevance/structure/depth/comm).
+  // Runs alongside gesture analysis; independent so one failing never blocks
+  // the other.
+  const [contentResult, setContentResult] = useState<InterviewContentResult | null>(null);
   const [teacherRubric, setTeacherRubric] = useState<TeacherRubricItem[]>([]);
   const [teacherComment, setTeacherComment] = useState<string>("");
   const [pollAttempts, setPollAttempts] = useState<number>(0);
@@ -337,6 +343,9 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
         // render the same body-language breakdown the student saw at analyze
         // time, without re-running the video through ss3.
         setGestureScores(gestureScoresFromMetrics(detail.gestureMetrics));
+        // Content score isn't persisted on the submission record, so it can't
+        // be reconstructed when reopening a past submission — clear it.
+        setContentResult(null);
         elapsedAtAnalyzeRef.current = Math.round(detail.durationSeconds);
         gestureSessionIdRef.current = null; // video already stored in ss3 by session id
 
@@ -510,6 +519,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     setAnalyzeProgress(0);
     setAnalyzeError(null);
     setGestureScores([]);
+    setContentResult(null);
     setStage("analyze");
 
     if (!blob || blob.size === 0) {
@@ -518,6 +528,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
       );
       return;
     }
+
+    // Kick off AI content scoring in parallel (fire-and-forget). Whisper
+    // reads the audio track of the same recording. Failures are non-fatal —
+    // gesture analysis and teacher review still work without it.
+    void scoreInterviewAnswer(blob, question.prompt, question.category)
+      .then((res) => setContentResult(res))
+      .catch((err) => {
+        console.warn("interview content scoring failed", err);
+        setContentResult(null);
+      });
 
     // Indeterminate progress driver — actual call duration is unknown
     // (ss3 polling takes 10-30 s on CPU). The bar fakes asymptotic progress
@@ -546,7 +566,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     } finally {
       window.clearInterval(ramp);
     }
-  }, [stream, stopRecording]);
+  }, [stream, stopRecording, question]);
 
   const submitForReview = useCallback(async () => {
     setSubmitError(null);
@@ -598,6 +618,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     setIsRecording(false);
     setElapsed(0);
     setGestureScores([]);
+    setContentResult(null);
     setTeacherRubric([]);
     setAnalyzeProgress(0);
     setAnalyzeError(null);
@@ -981,6 +1002,84 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                   );
                 })}
               </div>
+
+              {/* AI answer-content score (relevance / structure / depth /
+                  communication). Runs in parallel with gesture analysis. */}
+              <div className="max-w-3xl mx-auto text-left">
+                {contentResult === null ? (
+                  <div className="card-glass p-4 flex items-center gap-2 text-sm text-zinc-400">
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                    Scoring what you said…
+                  </div>
+                ) : !contentResult.available ? (
+                  <div className="card-glass p-4 text-sm text-zinc-400">
+                    <div className="flex items-center gap-2 text-zinc-300">
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      <span className="text-xs font-medium uppercase tracking-wide">
+                        AI content score
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[13px] text-zinc-400 leading-snug">
+                      {contentResult.feedback ||
+                        contentResult.error ||
+                        "Content scoring is unavailable right now."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="card-glass p-5 space-y-4 animate-fade-in-up">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-amber-300">
+                        <Sparkles className="w-4 h-4" />
+                        <span className="text-xs font-medium uppercase tracking-widest">
+                          AI content score
+                        </span>
+                      </div>
+                      <div
+                        className={`text-2xl font-bold tabular-nums ${classifyScore(contentResult.total).textClass}`}
+                      >
+                        {contentResult.total}
+                        <span className="text-sm text-zinc-500">/100</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        { label: "Relevance", value: contentResult.relevance },
+                        { label: "Structure", value: contentResult.structure },
+                        { label: "Depth", value: contentResult.depth },
+                        { label: "Communication", value: contentResult.communication },
+                      ].map((item) => (
+                        <div key={item.label} className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                          <div className="text-[10px] uppercase tracking-widest text-zinc-500">
+                            {item.label}
+                          </div>
+                          <div className="mt-1 text-lg font-semibold text-zinc-100 tabular-nums">
+                            {item.value}
+                            <span className="text-[11px] text-zinc-500">/25</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {contentResult.feedback && (
+                      <p className="text-[13px] text-zinc-300 leading-relaxed">
+                        {contentResult.feedback}
+                      </p>
+                    )}
+                    {contentResult.strengths && (
+                      <p className="text-[12px] text-emerald-300/90 leading-relaxed">
+                        <span className="font-semibold">Strengths: </span>
+                        {contentResult.strengths}
+                      </p>
+                    )}
+                    {contentResult.improvements && (
+                      <p className="text-[12px] text-amber-300/90 leading-relaxed">
+                        <span className="font-semibold">Improve: </span>
+                        {contentResult.improvements}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {submitError && (
                 <div className="mx-auto max-w-md card-glass border-rose-500/40 px-4 py-3 text-sm text-rose-300 text-left">
                   {submitError}
