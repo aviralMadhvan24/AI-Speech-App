@@ -471,13 +471,13 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
 
           <section className="card-glass p-6 overflow-hidden">
             <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div><h2 className="text-lg font-semibold text-zinc-100 inline-flex items-center gap-2"><Calendar className="w-5 h-5 text-emerald-300" />Activity</h2><p className="mt-1 text-sm text-zinc-400">Every completed pronunciation practice and interview submission counts.</p></div>
-              <div className="flex items-center gap-4 text-center"><div><div className="text-xl font-bold text-amber-200">{data.stats.points}</div><div className="text-[11px] text-zinc-500">points</div></div><div><div className="text-xl font-bold text-zinc-100">{data.stats.total_submissions}</div><div className="text-[11px] text-zinc-500">submissions</div></div><div><div className="text-xl font-bold text-emerald-300">{data.stats.active_days}</div><div className="text-[11px] text-zinc-500">active days</div></div><div><div className="text-xl font-bold text-orange-200">{data.stats.max_streak}</div><div className="text-[11px] text-zinc-500">max streak</div></div></div>
+              <div><h2 className="text-lg font-semibold text-zinc-100 inline-flex items-center gap-2"><Calendar className="w-5 h-5 text-emerald-300" />Activity</h2><p className="mt-1 text-sm text-zinc-400">Every meaningful activity counts toward your streak and points.</p></div>
+              <div className="flex items-center gap-4 text-center"><div><div className="text-xl font-bold text-amber-200">{data.stats.points}</div><div className="text-[11px] text-zinc-500">points</div></div><div><div className="text-xl font-bold text-zinc-100">{data.stats.total_submissions}</div><div className="text-[11px] text-zinc-500">events</div></div><div><div className="text-xl font-bold text-emerald-300">{data.stats.active_days}</div><div className="text-[11px] text-zinc-500">active days</div></div><div><div className="text-xl font-bold text-orange-200">{data.stats.max_streak}</div><div className="text-[11px] text-zinc-500">max streak</div></div></div>
             </div>
             <div className="mt-6 overflow-x-auto pb-2">
               <div className="min-w-[760px]">
                 <div className="grid grid-rows-7 grid-flow-col auto-cols-[13px] gap-1" aria-label="Activity heatmap">
-                  {data.activity.map((day) => <div key={day.date} title={`${day.date}: ${day.count} ${day.count === 1 ? "submission" : "submissions"}`} className={`h-3 w-3 rounded-sm ${activityColor(day.level)}`} />)}
+                  {data.activity.map((day) => <div key={day.date} title={`${day.date}: ${day.count} ${day.count === 1 ? "event" : "events"}`} className={`h-3 w-3 rounded-sm ${activityColor(day.level)}`} />)}
                 </div>
                 <div className="mt-3 flex items-center justify-end gap-1.5 text-[11px] text-zinc-500"><span>Less</span>{[0, 1, 2, 3, 4].map((level) => <span key={level} className={`h-3 w-3 rounded-sm ${activityColor(level)}`} />)}<span>More</span></div>
               </div>

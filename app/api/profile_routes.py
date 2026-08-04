@@ -237,12 +237,12 @@ async def get_profile_summary(
                     continue
 
                 stats.total_debates += 1
+                record_activity(row.get("completed_at"))
                 winner_pid = row.get("winner_participant_id")
                 is_winner = winner_pid is not None and winner_pid == my_pid
                 if is_winner:
                     stats.debate_wins += 1
                     points += 20
-                    record_activity(row.get("completed_at"))
 
                 effective_scores = row.get("effective_scores", [])
                 your_score = 0.0
@@ -308,11 +308,11 @@ async def get_profile_summary(
                 if user_score:
                     seen_sessions.add(session_id)
                     stats.total_gds += 1
+                    record_activity(row.get("completed_at"))
                     is_winner = user_score.get("rank") == 1
                     if is_winner:
                         stats.gd_wins += 1
                         points += 20
-                        record_activity(row.get("completed_at"))
                     
                     recent_gds.append(GDSummary(
                         session_id=session_id,
