@@ -333,6 +333,9 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   // ------- PTT Handlers (Click to Start/Stop instead of Hold) -------
   const [isStartingSpeech, setIsStartingSpeech] = useState(false);
   const [isStoppingSpeech, setIsStoppingSpeech] = useState(false);
+  // Guard: while a stop is still being processed (endSpeech API + recorder teardown),
+  // block new startSpeech attempts. Prevents the "STARTING stuck" race condition.
+  const stopInProgressRef = useRef(false);
 
   const handleToggleSpeech = useCallback(async () => {
     if (!roomCode) return;
@@ -340,36 +343,37 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     
     // If currently speaking, stop
     if (isSpeaking && currentSpeechId) {
-      if (isStoppingSpeech) return; // Prevent double-click
+      if (isStoppingSpeech || stopInProgressRef.current) return; // Prevent double-click
       
-      // Immediately update UI - don't wait for anything
       const speechIdToEnd = currentSpeechId;
       const roomCodeCopy = roomCode;
+      
+      // Mark stop in progress BEFORE clearing speaking state
+      stopInProgressRef.current = true;
       setIsSpeaking(false);
       setCurrentSpeechId(null);
       setSpeechError(null);
-      
-      // Show brief stopping indicator then clear
       setIsStoppingSpeech(true);
-      setTimeout(() => setIsStoppingSpeech(false), 300);
       
-      // Stop recording and upload in background (completely non-blocking)
-      (async () => {
-        try {
-          const blob = await recorder.stop();
-          recorder.reset();
-          await endSpeech(roomCodeCopy, speechIdToEnd, blob);
-        } catch (err) {
-          console.error("[GD] Background stop/upload failed:", err);
-          // Don't set error since UI already moved on
-        }
-      })();
+      // Await the stop + upload (NOT fire-and-forget) so the backend
+      // registers the speech end before the user can start a new one.
+      try {
+        const blob = await recorder.stop();
+        recorder.reset();
+        await endSpeech(roomCodeCopy, speechIdToEnd, blob);
+      } catch (err) {
+        console.error("[GD] Stop/upload failed:", err);
+        // Still allow re-speaking even if upload failed
+      } finally {
+        stopInProgressRef.current = false;
+        setIsStoppingSpeech(false);
+      }
       
       return;
     }
     
-    // Start speaking
-    if (isStartingSpeech) return; // Prevent double-click
+    // Start speaking — block if a stop is still processing
+    if (isStartingSpeech || stopInProgressRef.current) return;
     setIsStartingSpeech(true);
     setSpeechError(null);
     
