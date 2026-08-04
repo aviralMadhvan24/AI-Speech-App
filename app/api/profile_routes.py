@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -12,7 +13,7 @@ from pydantic import BaseModel
 
 from app.auth import User, require_user
 from app.storage import users_store
-from app.storage._jsonl import read_jsonl
+from app.storage._jsonl import append_jsonl, read_jsonl
 
 logger = logging.getLogger("profile")
 
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 # Where avatar images live on disk. Served publicly via the /uploads mount
 # configured in app.main.
 AVATAR_DIR = Path("uploads/avatars")
+ACTIVITY_PATH = Path("outputs/activity_events.jsonl")
 
 # Accepted image content types -> file extension.
 _ALLOWED_IMAGE_TYPES: dict[str, str] = {
@@ -98,6 +100,17 @@ class ProfileStats(BaseModel):
     battle_wins: int = 0
     total_pronunciations: int = 0
     avg_pronunciation_score: float = 0.0
+    active_days: int = 0
+    current_streak: int = 0
+    max_streak: int = 0
+    total_submissions: int = 0
+    points: int = 0
+
+
+class ActivityDay(BaseModel):
+    date: str
+    count: int
+    level: int
 
 
 class ProfileSummaryResponse(BaseModel):
@@ -108,10 +121,48 @@ class ProfileSummaryResponse(BaseModel):
     recent_interviews: List[InterviewSummary]
     recent_battles: List[BattleSummary]
     recent_pronunciations: List[AttemptSummary]
+    activity: List[ActivityDay] = []
+    badges: List[str] = []
 
 
 class AvatarResponse(BaseModel):
     avatar_url: Optional[str] = None
+
+
+class ActivityEventRequest(BaseModel):
+    event: str
+
+
+@router.post("/activity", status_code=204)
+async def record_activity(
+    body: ActivityEventRequest,
+    current_user: User = Depends(require_user),
+) -> None:
+    """Record lightweight activity such as opening the platform.
+
+    Practice, interviews, debates, and POTD completions are also read from
+    their durable stores when the profile is built.
+    """
+    # Practice/POTD/debate/GD activity is derived from durable server records
+    # below. Only lightweight open events are accepted from the browser; the
+    # battle event remains supported until battle results are persisted by the
+    # battle service itself.
+    allowed = {"open", "battle_win"}
+    if body.event not in allowed:
+        raise HTTPException(status_code=400, detail="unsupported_activity")
+    if body.event == "open":
+        today = datetime.now(timezone.utc).date().isoformat()
+        for event in read_jsonl(ACTIVITY_PATH):
+            if event.get("user_id") != current_user.uid or event.get("event") != "open":
+                continue
+            created_at = event.get("created_at")
+            if isinstance(created_at, str) and created_at[:10] == today:
+                return
+    append_jsonl(ACTIVITY_PATH, {
+        "user_id": current_user.uid,
+        "event": body.event,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +192,33 @@ async def get_profile_summary(
     recent_interviews: List[InterviewSummary] = []
     recent_battles: List[BattleSummary] = []
     recent_pronunciations: List[AttemptSummary] = []
+    activity_counts: dict[str, int] = {}
+    points = 0
+    potd_dates: set[str] = set()
+
+    event_points = {"open": 1, "practice": 5, "potd": 10, "debate_win": 20, "gd_win": 20, "battle_win": 10}
+    for event in read_jsonl(ACTIVITY_PATH):
+        if event.get("user_id") == user_id:
+            record_activity_value = event.get("created_at")
+            if isinstance(record_activity_value, str):
+                try:
+                    event_day = datetime.fromisoformat(record_activity_value.replace("Z", "+00:00")).date().isoformat()
+                    activity_counts[event_day] = activity_counts.get(event_day, 0) + 1
+                except ValueError:
+                    pass
+            points += event_points.get(event.get("event"), 0)
+
+    def record_activity(value: object) -> None:
+        if isinstance(value, (int, float)):
+            activity_day = datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
+        elif isinstance(value, str):
+            try:
+                activity_day = datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+            except ValueError:
+                return
+        else:
+            return
+        activity_counts[activity_day] = activity_counts.get(activity_day, 0) + 1
     
     # --- Debates ---
     debates_path = Path("outputs/debates.jsonl")
@@ -163,10 +241,12 @@ async def get_profile_summary(
                     continue
 
                 stats.total_debates += 1
+                record_activity(row.get("completed_at"))
                 winner_pid = row.get("winner_participant_id")
                 is_winner = winner_pid is not None and winner_pid == my_pid
                 if is_winner:
                     stats.debate_wins += 1
+                    points += 20
 
                 effective_scores = row.get("effective_scores", [])
                 your_score = 0.0
@@ -232,9 +312,11 @@ async def get_profile_summary(
                 if user_score:
                     seen_sessions.add(session_id)
                     stats.total_gds += 1
+                    record_activity(row.get("completed_at"))
                     is_winner = user_score.get("rank") == 1
                     if is_winner:
                         stats.gd_wins += 1
+                        points += 20
                     
                     recent_gds.append(GDSummary(
                         session_id=session_id,
@@ -259,6 +341,8 @@ async def get_profile_summary(
         for row in read_jsonl(interview_path):
             try:
                 if row.get("student_uid") == user_id or row.get("student_email") == user_email:
+                    record_activity(row.get("submitted_at"))
+                    points += 5
                     stats.total_interviews += 1
                     combined = row.get("combined_score")
                     if combined is not None:
@@ -289,6 +373,8 @@ async def get_profile_summary(
         for row in read_jsonl(attempts_path):
             try:
                 if row.get("userId") == user_id or row.get("userEmail") == user_email:
+                    record_activity(row.get("createdAt"))
+                    points += 5
                     stats.total_pronunciations += 1
                     score = row.get("score", 0)
                     if score:
@@ -308,6 +394,70 @@ async def get_profile_summary(
     
     recent_pronunciations.sort(key=lambda x: x.createdAt, reverse=True)
     recent_pronunciations = recent_pronunciations[:10]
+
+    for row in read_jsonl(Path("outputs/potd_completions.jsonl")):
+        if row.get("user_id") == user_id:
+            record_activity(row.get("date"))
+            potd_dates.add(str(row.get("date", "")))
+            points += 10
+
+    # A green activity day means the student completed any pronunciation
+    # attempt or submitted any Interview Studio answer, not only POTD.
+    today = datetime.now(timezone.utc).date()
+    activity: List[ActivityDay] = []
+    for offset in range(364, -1, -1):
+        day = today - timedelta(days=offset)
+        key = day.isoformat()
+        count = activity_counts.get(key, 0)
+        activity.append(ActivityDay(date=key, count=count, level=min(4, count)))
+    active_dates = {day.date for day in activity if day.count > 0}
+    current_streak = 0
+    cursor = today
+    while cursor.isoformat() in active_dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+    max_streak = 0
+    run = 0
+    for day in activity:
+        run = run + 1 if day.count > 0 else 0
+        max_streak = max(max_streak, run)
+    stats.active_days = len(active_dates)
+    stats.current_streak = current_streak
+    stats.max_streak = max_streak
+    stats.total_submissions = sum(activity_counts.values())
+    stats.points = points
+    badges: List[str] = []
+    if stats.total_submissions >= 1:
+        badges.append("First Step")
+    if max_streak >= 7:
+        badges.append("7-Day Streak")
+    if max_streak >= 30:
+        badges.append("30-Day Streak")
+    if max_streak >= 365:
+        badges.append("365 Days Badge")
+    elif max_streak >= 200:
+        badges.append("200 Days Badge")
+    elif max_streak >= 100:
+        badges.append("100 Days Badge")
+    elif max_streak >= 50:
+        badges.append("50 Days Badge")
+    if len(potd_dates) >= 365:
+        badges.append("Annual Daily Challenge")
+    for month in sorted({day[:7] for day in potd_dates if len(day) >= 7}):
+        try:
+            year, month_number = (int(part) for part in month.split("-"))
+            next_month = date(year + (month_number == 12), (month_number % 12) + 1, 1)
+            days_in_month = (next_month - date(year, month_number, 1)).days
+            if sum(day.startswith(month) for day in potd_dates) >= days_in_month:
+                badges.append(date(year, month_number, 1).strftime("%B") + " Challenge")
+        except ValueError:
+            continue
+    if points >= 2500:
+        badges.append("Guardian")
+    elif points >= 1000:
+        badges.append("Knight")
+    if stats.avg_pronunciation_score >= 90 or stats.avg_interview_score >= 90:
+        badges.append("Standout Performer")
     
     return ProfileSummaryResponse(
         avatar_url=avatar_url,
@@ -317,6 +467,8 @@ async def get_profile_summary(
         recent_interviews=recent_interviews,
         recent_battles=recent_battles,
         recent_pronunciations=recent_pronunciations,
+        activity=activity,
+        badges=badges,
     )
 
 

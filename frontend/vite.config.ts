@@ -21,27 +21,28 @@ export default defineConfig({
       // forwarded to FastAPI on 8080. The string target above doesn't enable
       // websocket forwarding, so the object form is required here.
       "/battle": {
-        target: "http://localhost:8080",
+        target: "http://127.0.0.1:8080",
         changeOrigin: true,
         ws: true,
       },
       "/debate": {
-        target: "http://localhost:8080",
+        target: "http://127.0.0.1:8080",
         changeOrigin: true,
         ws: true,
       },
       "/gd": {
-        target: "http://localhost:8080",
+        target: "http://127.0.0.1:8080",
         changeOrigin: true,
         ws: true,
       },
-      "/analyze": "http://localhost:8080",
-      "/attempts": "http://localhost:8080",
-      "/interview": "http://localhost:8080",
-      "/auth": "http://localhost:8080",
-      "/admin": "http://localhost:8080",
-      "/profile": "http://localhost:8080",
-      "/uploads": "http://localhost:8080",
+      "/analyze": "http://127.0.0.1:8080",
+      "/attempts": "http://127.0.0.1:8080",
+      "/interview": "http://127.0.0.1:8080",
+      "/auth": "http://127.0.0.1:8080",
+      "/admin": "http://127.0.0.1:8080",
+      "/profile": "http://127.0.0.1:8080",
+      "/potd": "http://127.0.0.1:8080",
+      "/uploads": "http://127.0.0.1:8080",
     },
   },
 });

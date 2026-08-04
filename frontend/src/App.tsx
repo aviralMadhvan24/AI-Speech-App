@@ -28,12 +28,14 @@ import { MainMenuView } from "./components/MainMenuView";
 import { PracticeView } from "./components/PracticeView";
 import { ProcessingView } from "./components/ProcessingView";
 import { ProfileView } from "./components/ProfileView";
+import { PotdView } from "./components/PotdView";
+import { completePotd, type PotdChallenge } from "./potdApi";
 import { ReportView } from "./components/ReportView";
 import { RequireAuth } from "./routes/RequireAuth";
 import { saveRoomSession, clearRoomSession } from "./lib/roomSession";
 import { fetchSentences, fetchSessions, scoreAudio } from "./api";
 import type { PlayerRole, RoomState } from "./battleApi";
-import { useAuth } from "./hooks/useAuth";
+import { getCurrentIdToken, useAuth } from "./hooks/useAuth";
 import type {
   AnalyzeRaw,
   Difficulty,
@@ -134,18 +136,30 @@ function PracticeRoute({
   const [searchParams] = useSearchParams();
   const qDifficulty = searchParams.get("difficulty");
   const qIndex = searchParams.get("i");
+  const qPotdId = searchParams.get("potdId");
 
   // Sync URL -> state (on load / when the query changes).
   useEffect(() => {
+    const parsed = qIndex === null ? NaN : Number.parseInt(qIndex, 10);
+    if (qPotdId) {
+      const potdSentence = sentences.find((item) => item.id === qPotdId);
+      if (potdSentence) {
+        if (potdSentence.difficulty !== difficulty) setDifficulty(potdSentence.difficulty);
+        const potdIndex = sentences
+          .filter((item) => item.difficulty === potdSentence.difficulty)
+          .findIndex((item) => item.id === qPotdId);
+        if (potdIndex >= 0 && potdIndex !== sentenceIdx) setSentenceIdx(potdIndex);
+        return;
+      }
+    }
     if (isDifficulty(qDifficulty) && qDifficulty !== difficulty) {
       setDifficulty(qDifficulty);
     }
-    const parsed = qIndex === null ? NaN : Number.parseInt(qIndex, 10);
     if (Number.isFinite(parsed) && parsed >= 0 && parsed !== sentenceIdx) {
       setSentenceIdx(parsed);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qDifficulty, qIndex]);
+  }, [qDifficulty, qIndex, qPotdId, sentences, sentenceIdx, setSentenceIdx]);
 
   const changeDifficulty = useCallback(
     (next: Difficulty) => {
@@ -374,6 +388,11 @@ export default function App() {
   // Initial data loads — only once we're authenticated.
   useEffect(() => {
     if (!user) return;
+    void getCurrentIdToken().then((token) => fetch("/profile/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ event: "open" }),
+    }).catch(() => undefined));
     let cancelled = false;
     fetchSentences()
       .then((items) => {
@@ -468,11 +487,19 @@ export default function App() {
     navigate("/profile");
   }, [navigate]);
 
+  const handleSelectPotd = useCallback(() => navigate("/potd"), [navigate]);
+
+  const handleStartPotd = useCallback((challenge: PotdChallenge) => {
+    sessionStorage.setItem("potd.active", JSON.stringify(challenge));
+    if (challenge.type === "pronunciation") navigate(`/practice?potdId=${encodeURIComponent(challenge.id)}`);
+    else navigate(`/interview?potdId=${encodeURIComponent(challenge.id)}`);
+  }, [navigate]);
+
   const handleOpenReview = useCallback(
     (submissionId: string) => {
       navigate(`/admin/review/${submissionId}`);
     },
-    [navigate],
+    [navigate, battleSession],
   );
 
   const handleOpenStudent = useCallback(
@@ -549,6 +576,13 @@ export default function App() {
 
   const handleBattleComplete = useCallback(
     (finalState: RoomState) => {
+      if (finalState.match_winner && battleSession && finalState.match_winner === battleSession.role) {
+        void getCurrentIdToken().then((token) => fetch("/profile/activity", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ event: "battle_win" }),
+        }).catch(() => undefined));
+      }
       let code: string | null = null;
       setBattleSession((prev) => {
         if (!prev) return prev;
@@ -557,7 +591,7 @@ export default function App() {
       });
       if (code) navigate(`/battle/${code}/result`);
     },
-    [navigate],
+    [navigate, battleSession],
   );
 
   const handleBattlePlayAgain = useCallback(() => {
@@ -630,6 +664,16 @@ export default function App() {
         setDegradedReport(false);
         setScoring(false);
         navigate(`/report/${result.sessionId}`);
+        const activePotdRaw = sessionStorage.getItem("potd.active");
+        if (activePotdRaw) {
+          try {
+            const activePotd = JSON.parse(activePotdRaw) as { id?: string; type?: string };
+            if (activePotd.type === "pronunciation" && activePotd.id === sentence.id) {
+              void completePotd(activePotd.id, result.score, result.sessionId).catch((error) => console.warn("Could not record POTD completion", error));
+              sessionStorage.removeItem("potd.active");
+            }
+          } catch { sessionStorage.removeItem("potd.active"); }
+        }
         void refreshSessions();
       } catch (err) {
         const message = err instanceof Error ? err.message : "Scoring failed.";
@@ -683,7 +727,7 @@ export default function App() {
             )}
 
             <Routes>
-              <Route
+        <Route
                 path="/"
                 element={
                   <MainMenuView
@@ -696,9 +740,12 @@ export default function App() {
                     onSelectGD={handleSelectGD}
                     onSelectAdmin={handleSelectAdmin}
                     onSelectProfile={handleSelectProfile}
+                    onSelectPotd={handleSelectPotd}
                   />
                 }
               />
+
+              <Route path="/potd" element={<PotdView onBack={handleBackToMenu} onStart={handleStartPotd} />} />
 
               <Route
                 path="/pronunciation"

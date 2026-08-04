@@ -17,6 +17,7 @@ from app.gd.admin_routes import router as gd_admin_router
 from app.gd.admin_routes import topics_router as gd_topics_router
 from app.gd.routes import router as gd_router
 from app.interview.routes import router as interview_router
+from app.potd.routes import router as potd_router
 
 
 router = APIRouter()
@@ -28,6 +29,7 @@ router.include_router(analysis_router)
 router.include_router(attempts_router)
 router.include_router(battles_router)
 router.include_router(interview_router)
+router.include_router(potd_router)
 router.include_router(admin_router)
 router.include_router(admin_bulk_router)
 router.include_router(admin_export_router)

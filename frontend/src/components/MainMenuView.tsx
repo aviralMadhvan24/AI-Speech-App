@@ -23,6 +23,7 @@ interface MainMenuViewProps {
   onSelectGD: () => void;
   onSelectAdmin?: () => void;
   onSelectProfile: () => void;
+  onSelectPotd: () => void;
 }
 
 type FeatureStatus = "live" | "coming-soon";
@@ -52,10 +53,27 @@ export function MainMenuView({
   onSelectGD,
   onSelectAdmin,
   onSelectProfile,
+  onSelectPotd,
 }: MainMenuViewProps) {
   const features: Feature[] = useMemo(
     () => {
       const base: Feature[] = [
+        {
+          id: "potd",
+          title: "Problem of the Day",
+          tagline: "Daily · Live",
+          description:
+            "One randomly selected pronunciation or interview challenge. Build your streak and earn badges.",
+          icon: Sparkles,
+          status: "live",
+          accent: "text-orange-300",
+          gradient: "from-orange-500/20 via-amber-500/10 to-transparent",
+          ringGlow:
+            "hover:shadow-[0_0_28px_-4px_rgba(249,115,22,0.45)]",
+          iconGlow: "bg-gradient-to-br from-orange-500 to-amber-600",
+          onClick: onSelectPotd,
+          ariaLabel: "Open problem of the day",
+        },
       {
         id: "profile",
         title: "My Profile",
@@ -183,6 +201,7 @@ export function MainMenuView({
       onSelectGD,
       onSelectAdmin,
       onSelectProfile,
+      onSelectPotd,
       showAdmin,
     ],
   );

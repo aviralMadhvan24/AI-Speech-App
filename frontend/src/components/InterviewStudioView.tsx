@@ -35,6 +35,7 @@ import {
   type InterviewGestureMetric,
   type StudentSubmissionSummary,
 } from "../api";
+import { completePotd } from "../potdApi";
 import { relativeTime } from "../utils/time";
 
 interface InterviewStudioViewProps {
@@ -214,8 +215,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
   // there lands here rather than on main-menu.
   const { submissionId: routeSubmissionId } = useParams();
 
-  const [stage, setStage] = useState<Stage>("pick");
-  const [questionIdx, setQuestionIdx] = useState(0);
+  const [stage, setStage] = useState<Stage>(() =>
+    new URLSearchParams(window.location.search).has("potdId")
+      ? "record"
+      : "pick",
+  );
+  const [questionIdx, setQuestionIdx] = useState(() => {
+    const id = new URLSearchParams(window.location.search).get("potdId");
+    const index = QUESTIONS.findIndex((item) => item.id === id);
+    return index >= 0 ? index : 0;
+  });
 
   const [isRecording, setIsRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -421,6 +430,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
     }
   }, []);
 
+  // POTD launches directly into the recording stage, so there is no question
+  // card click to request camera/microphone access. Start the same capture
+  // flow automatically for that deep link.
+  const potdId = new URLSearchParams(window.location.search).get("potdId");
+  useEffect(() => {
+    if (potdId && stage === "record" && !stream) {
+      void startCamera();
+    }
+  }, [potdId, stage, stream, startCamera]);
+
   const handlePick = useCallback(
     (idx: number) => {
       setQuestionIdx(idx);
@@ -593,6 +612,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
         durationSeconds: elapsedAtAnalyzeRef.current,
       });
       submissionIdRef.current = submissionId;
+      const activePotdRaw = sessionStorage.getItem("potd.active");
+      if (activePotdRaw) {
+        try {
+          const activePotd = JSON.parse(activePotdRaw) as { id?: string; type?: string };
+          if (activePotd.type === "interview" && activePotd.id === question.id) {
+            void completePotd(activePotd.id, gestureAvg, submissionId).catch((error) => console.warn("Could not record POTD completion", error));
+            sessionStorage.removeItem("potd.active");
+          }
+        } catch { sessionStorage.removeItem("potd.active"); }
+      }
       // Reflect the new submission in the URL so a reload restores it (Req 2.4).
       resumedIdRef.current = submissionId;
       navigate(`/interview/${submissionId}`);
