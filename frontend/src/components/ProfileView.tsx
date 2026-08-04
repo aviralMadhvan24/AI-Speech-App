@@ -15,12 +15,14 @@ import {
   Users2,
   User,
   Briefcase,
+  Flame,
   X,
 } from "lucide-react";
 import type { AuthUser } from "../types";
 import { getCurrentIdToken } from "../hooks/useAuth";
 import { getDebateDetail, type DebateTurnAudioRef } from "../debateApi";
 import { DebateTurnsAudio } from "./DebateTurnsAudio";
+import { fetchPotd, type PotdChallenge } from "../potdApi";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,6 +87,11 @@ interface ProfileStats {
   battle_wins: number;
   total_pronunciations: number;
   avg_pronunciation_score: number;
+  points: number;
+  active_days: number;
+  current_streak: number;
+  max_streak: number;
+  total_submissions: number;
 }
 
 interface ProfileData {
@@ -95,6 +102,8 @@ interface ProfileData {
   recent_interviews: InterviewSummary[];
   recent_battles: BattleSummary[];
   recent_pronunciations: AttemptSummary[];
+  activity: Array<{ date: string; count: number; level: number }>;
+  badges: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +168,14 @@ function formatDate(dateStr: string | number): string {
   }
 }
 
+function activityColor(level: number): string {
+  if (level >= 4) return "bg-emerald-400";
+  if (level === 3) return "bg-emerald-500/80";
+  if (level === 2) return "bg-emerald-600/70";
+  if (level === 1) return "bg-emerald-700/70";
+  return "bg-zinc-800";
+}
+
 export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) {
   const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -166,6 +183,7 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [potd, setPotd] = useState<PotdChallenge | null>(null);
   // Pending selection awaiting Save/Cancel: the chosen file plus a local
   // object-URL used only for the preview (revoked once resolved).
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -239,6 +257,10 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void fetchPotd().then(setPotd).catch(() => undefined);
+  }, []);
 
   // Step 1: user picks a file → stage it and show a local preview. Nothing
   // is uploaded until they confirm with Save.
@@ -438,13 +460,44 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
 
       {data && (
         <>
+          {potd && (
+            <section className="card-glass p-6 border-orange-500/20">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div><h2 className="text-lg font-semibold text-zinc-100 inline-flex items-center gap-2"><Flame className="w-5 h-5 text-orange-300" />Problem of the Day streak</h2><p className="mt-1 text-sm text-zinc-400">Keep showing up to unlock stronger badges.</p></div>
+              <div className="flex items-center gap-5 text-center"><div><div className="text-2xl font-bold text-orange-200">{potd.current_streak}</div><div className="text-xs text-zinc-500">current</div></div><div><div className="text-2xl font-bold text-zinc-100">{potd.best_streak}</div><div className="text-xs text-zinc-500">best</div></div>{potd.badge && <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{potd.badge}</div>}</div>
+              </div>
+            </section>
+          )}
+
+          <section className="card-glass p-6 overflow-hidden">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div><h2 className="text-lg font-semibold text-zinc-100 inline-flex items-center gap-2"><Calendar className="w-5 h-5 text-emerald-300" />Activity</h2><p className="mt-1 text-sm text-zinc-400">Every completed pronunciation practice and interview submission counts.</p></div>
+              <div className="flex items-center gap-4 text-center"><div><div className="text-xl font-bold text-amber-200">{data.stats.points}</div><div className="text-[11px] text-zinc-500">points</div></div><div><div className="text-xl font-bold text-zinc-100">{data.stats.total_submissions}</div><div className="text-[11px] text-zinc-500">submissions</div></div><div><div className="text-xl font-bold text-emerald-300">{data.stats.active_days}</div><div className="text-[11px] text-zinc-500">active days</div></div><div><div className="text-xl font-bold text-orange-200">{data.stats.max_streak}</div><div className="text-[11px] text-zinc-500">max streak</div></div></div>
+            </div>
+            <div className="mt-6 overflow-x-auto pb-2">
+              <div className="min-w-[760px]">
+                <div className="grid grid-rows-7 grid-flow-col auto-cols-[13px] gap-1" aria-label="Activity heatmap">
+                  {data.activity.map((day) => <div key={day.date} title={`${day.date}: ${day.count} ${day.count === 1 ? "submission" : "submissions"}`} className={`h-3 w-3 rounded-sm ${activityColor(day.level)}`} />)}
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-1.5 text-[11px] text-zinc-500"><span>Less</span>{[0, 1, 2, 3, 4].map((level) => <span key={level} className={`h-3 w-3 rounded-sm ${activityColor(level)}`} />)}<span>More</span></div>
+              </div>
+            </div>
+          </section>
+
+          {data.badges.length > 0 && <section className="card-glass p-6"><h2 className="text-lg font-semibold text-zinc-100 inline-flex items-center gap-2"><Award className="w-5 h-5 text-amber-300" />Badges</h2><div className="mt-4 flex flex-wrap gap-3">{data.badges.map((badge) => <div key={badge} className="inline-flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-2 text-sm text-amber-200"><Trophy className="w-4 h-4" />{badge}</div>)}</div></section>}
           {/* Stats overview */}
           <section className="card-glass p-6">
             <h2 className="text-lg font-semibold text-zinc-100 mb-4 inline-flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-brand-300" />
               Performance Overview
             </h2>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 text-center">
+                <Trophy className="w-6 h-6 mx-auto text-amber-300 mb-2" />
+                <div className="text-2xl font-bold text-amber-200">{data.stats.points ?? 0}</div>
+                <div className="text-xs text-zinc-400">Points</div>
+                <div className="text-xs text-amber-300 mt-1">Earned from activity</div>
+              </div>
               <div className="bg-zinc-800/50 rounded-xl p-4 text-center">
                 <MessageSquareText className="w-6 h-6 mx-auto text-violet-300 mb-2" />
                 <div className="text-2xl font-bold text-zinc-100">{data.stats.total_debates}</div>

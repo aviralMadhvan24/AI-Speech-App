@@ -10,7 +10,9 @@ from app.auth import require_user
 
 router = APIRouter()
 
-PROMPTS_PATH = Path("app/data/pronunciation_prompts.json")
+# Resolve from this file so the endpoint also works when uvicorn is launched
+# from `frontend/` or another directory during local development.
+PROMPTS_PATH = Path(__file__).resolve().parents[1] / "data" / "pronunciation_prompts.json"
 
 
 @router.get("/battle/prompts")
