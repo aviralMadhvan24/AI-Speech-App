@@ -44,12 +44,29 @@ logger = logging.getLogger(__name__)
 
 
 try:
-    from transformers import AutoModelForCTC, AutoProcessor
     import torch
+    from transformers import AutoModelForCTC, AutoProcessor
+
+    ProcessorClass = AutoProcessor
+    ModelClass = AutoModelForCTC
     HF_AVAILABLE = True
 except Exception as exc:
-    logger.warning("transformers/torch not available: %s", exc)
-    HF_AVAILABLE = False
+    try:
+        import torch
+        from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+
+        ProcessorClass = Wav2Vec2Processor
+        ModelClass = Wav2Vec2ForCTC
+        HF_AVAILABLE = True
+    except Exception as fallback_exc:
+        logger.warning(
+            "transformers/torch not available: %s (fallback: %s)",
+            exc,
+            fallback_exc,
+        )
+        ProcessorClass = None
+        ModelClass = None
+        HF_AVAILABLE = False
 
 
 # Module-level model cache so we load weights once per process.
@@ -60,19 +77,22 @@ def _load_model(model_name: str):
     if model_name in _MODEL_CACHE:
         return _MODEL_CACHE[model_name]
 
+    if not HF_AVAILABLE or ProcessorClass is None or ModelClass is None:
+        raise RuntimeError("HF phoneme dependencies are not available")
+
     logger.info("Loading HF phoneme model: %s", model_name)
 
     # do_phonemize=False asks the tokenizer to skip espeak/phonemizer backend
     # initialization. We only decode model output, we never re-phonemize text,
     # so this lets us run on systems without espeak-ng / phonemizer installed.
     try:
-        processor = AutoProcessor.from_pretrained(model_name, do_phonemize=False)
+        processor = ProcessorClass.from_pretrained(model_name, do_phonemize=False)
     except TypeError:
         # Older/newer transformers versions may not accept do_phonemize on
-        # AutoProcessor — fall back to plain load.
-        processor = AutoProcessor.from_pretrained(model_name)
+        # the processor class — fall back to plain load.
+        processor = ProcessorClass.from_pretrained(model_name)
 
-    model = AutoModelForCTC.from_pretrained(model_name)
+    model = ModelClass.from_pretrained(model_name)
     model.eval()
 
     _MODEL_CACHE[model_name] = (processor, model)
