@@ -1103,6 +1103,8 @@ class DebateRoomManager:
             turn_ids=[t.turn_id for t in turns],
             winner_participant_id=winner_id,
             effective_scores=effective_scores,
+            final_standings=list(room.final_standings),
+            scoring_mode=room.scoring_mode,
             turn_audio=turn_audio,
             created_at=room.created_at,
             completed_at=room.completed_at,
@@ -1211,16 +1213,44 @@ class DebateRoomManager:
                     )
 
             # Update room final standings with full scores
+            updated_turns = debate_turns_store.list_turns_for_debate(debate_id)
+            turn_by_pid = {t.participant_id: t for t in updated_turns}
+
             room = self._rooms.get(code)
             if room is not None:
-                updated_turns = debate_turns_store.list_turns_for_debate(debate_id)
-                turn_by_pid = {t.participant_id: t for t in updated_turns}
                 for standing in room.final_standings:
                     t = turn_by_pid.get(standing.participant_id)
                     if t and t.full_ai_score is not None:
                         standing.full_ai_score = t.full_ai_score
                         standing.full_score_ready = True
                 await self.broadcast(code)
+
+            # Re-persist the durable record so the My Performance detail view
+            # shows the pronunciation-adjusted scores. Without this the record
+            # keeps the instant standings forever, since the in-memory room is
+            # eventually evicted.
+            try:
+                record = debates_store.load_debate(debate_id)
+                if record is not None:
+                    for standing in record.final_standings:
+                        t = turn_by_pid.get(standing.participant_id)
+                        if t and t.full_ai_score is not None:
+                            standing.full_ai_score = t.full_ai_score
+                            standing.full_score_ready = True
+                        else:
+                            # No pronunciation available for this speaker —
+                            # mark ready so the UI stops waiting on it.
+                            standing.full_ai_score = standing.ai_score
+                            standing.full_score_ready = True
+                    debates_store.update_standings(
+                        debate_id, record.final_standings
+                    )
+            except Exception as exc:  # noqa: BLE001 - non-fatal
+                logger.warning(
+                    "detailed_standings_persist_failed debate_id=%s err=%s",
+                    debate_id,
+                    f"{type(exc).__name__}: {exc}",
+                )
 
             logger.info("detailed_scoring_complete debate_id=%s", debate_id)
         except Exception as exc:

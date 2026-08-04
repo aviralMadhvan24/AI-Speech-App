@@ -242,6 +242,10 @@ class GDSessionRecord(BaseModel):
     topic_id: str
     topic_title: str
     topic_text: str
+    # "detailed" sessions get pronunciation scoring in the background, so the
+    # My Performance detail view uses this to decide whether to show a
+    # "still processing" state or the final numbers.
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     participants: list[dict]  # Snapshots
     speech_ids: list[str]
     scores: list[GDParticipantScore]
@@ -300,3 +304,4 @@ class GDResultsResponse(BaseModel):
     scores: list[GDParticipantScore]
     total_speeches: int
     duration_seconds: float
+    scoring_mode: Literal["instant", "detailed"] = "instant"

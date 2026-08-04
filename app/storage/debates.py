@@ -104,3 +104,34 @@ def update_winner(debate_id: str, winner_id: Optional[str]) -> None:
         return
 
     overwrite_jsonl(_PATH, out_rows)
+
+
+def update_standings(debate_id: str, standings: list) -> None:
+    """Rewrite the target debate's `final_standings` in place.
+
+    Used by the detailed-scoring background task once pronunciation has been
+    assessed, so the My Performance detail view reflects the adjusted scores.
+    Appending via `save_debate` would not work here: rows are append-only and
+    `load_debate` returns the first match, so a second row would be ignored.
+
+    No-op if debate_id is not found.
+    """
+    rows = read_jsonl(_PATH)
+    found = False
+    out_rows: list[dict] = []
+    for row in rows:
+        try:
+            record = DebateRecord.model_validate(row)
+        except Exception as exc:
+            logger.warning("Preserving malformed debate row as-is: %s", exc)
+            out_rows.append(row)
+            continue
+        if record.debate_id == debate_id:
+            record = record.model_copy(update={"final_standings": standings})
+            found = True
+        out_rows.append(record.model_dump())
+
+    if not found:
+        return
+
+    overwrite_jsonl(_PATH, out_rows)

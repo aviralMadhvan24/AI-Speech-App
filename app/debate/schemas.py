@@ -354,11 +354,16 @@ class DebateRecord(BaseModel):
     motion_id: str
     motion_title: str
     motion_text: str
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     # snapshot: participant_id, user_id, display_name, turn_index, is_forfeit
     participants: list[dict]
     turn_ids: list[str]  # ordered by turn_index
     winner_participant_id: Optional[str] = None
     effective_scores: list[EffectiveScoreEntry] = Field(default_factory=list)
+    # Ranked results snapshot so the My Performance detail view can render the
+    # full outcome after the in-memory room has been evicted. In detailed mode
+    # these rows are re-saved once pronunciation scoring finishes.
+    final_standings: list["FinalStanding"] = Field(default_factory=list)
     # Ordered by turn_index; self-contained audio index for the completed
     # debate so playback survives room eviction. Empty entries allowed for
     # forfeits. Populated at finalize (see room_manager).
@@ -391,7 +396,9 @@ class DebateDetailResponse(BaseModel):
     code: str
     motion: Motion
     completed_at: float
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     winner_participant_id: Optional[str] = None
+    final_standings: list[FinalStanding] = Field(default_factory=list)
     turn_audio: list[DebateTurnAudioRef] = []
 
 # ---------------------------------------------------------------------------

@@ -89,8 +89,9 @@ EXAMPLE FEEDBACK:
 BAD FEEDBACK (too generic):
 "The speech lacks relevance" - NO! Quote the actual problematic words!
 
-Respond with ONLY valid JSON:
-{{"relevance": <0-15>, "arguments": <0-15>, "structure": <0-10>, "vocabulary": <0-10>, "total": <0-50>, "off_topic": <true/false>, "feedback": "<MUST quote exact phrases from transcript with specific criticism>"}}"""""""""
+Return one JSON object only. Do not use Markdown or add any text before or after it.
+{{"relevance": 0, "arguments": 0, "structure": 0, "vocabulary": 0, "total": 0, "off_topic": false, "feedback": "Specific feedback quoting the transcript"}}
+"""
 
 
 def _create_unavailable_result(error: str) -> ContentScoreResult:

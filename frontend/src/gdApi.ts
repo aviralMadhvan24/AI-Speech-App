@@ -110,6 +110,7 @@ export interface GDResultsResponse {
   scores: GDParticipantScore[];
   total_speeches: number;
   duration_seconds: number;
+  scoring_mode: "instant" | "detailed";
 }
 
 import { getCurrentIdToken } from "./hooks/useAuth";
@@ -249,6 +250,13 @@ export async function endDiscussion(code: string) {
 export async function getGDResults(code: string): Promise<GDResultsResponse> {
   const cleaned = code.trim().toUpperCase();
   return fetchJson<GDResultsResponse>(`/gd/rooms/${cleaned}/results`);
+}
+
+/** Fetch a completed GD from the durable history used by My Performance. */
+export async function getGDSessionDetail(
+  sessionId: string,
+): Promise<GDResultsResponse> {
+  return fetchJson<GDResultsResponse>(`/gd/sessions/${sessionId}`);
 }
 
 export async function fetchGDTopics(): Promise<GDTopic[]> {

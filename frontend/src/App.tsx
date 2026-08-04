@@ -28,6 +28,7 @@ import { MainMenuView } from "./components/MainMenuView";
 import { PracticeView } from "./components/PracticeView";
 import { ProcessingView } from "./components/ProcessingView";
 import { ProfileView } from "./components/ProfileView";
+import { PerformanceResultView } from "./components/PerformanceResultView";
 import { PotdView } from "./components/PotdView";
 import { completePotd, type PotdChallenge } from "./potdApi";
 import { ReportView } from "./components/ReportView";
@@ -328,6 +329,18 @@ function BattleResultRoute({
 function ProcessingRoute({ scoring }: { scoring: boolean }) {
   if (!scoring) return <Navigate to="/practice" replace />;
   return <ProcessingView />;
+}
+
+function PerformanceResultRoute({
+  kind,
+  onBack,
+}: {
+  kind: "debate" | "gd";
+  onBack: () => void;
+}) {
+  const { resultId } = useParams();
+  if (!resultId) return <Navigate to="/profile" replace />;
+  return <PerformanceResultView kind={kind} id={resultId} onBack={onBack} />;
 }
 
 interface AdminReviewRouteProps {
@@ -876,8 +889,18 @@ export default function App() {
                     user={user}
                     onBack={handleBackToMenu}
                     onAvatarChange={refreshProfile}
+                    onOpenDebateResult={(debateId) => navigate(`/profile/debates/${debateId}`)}
+                    onOpenGDResult={(sessionId) => navigate(`/profile/gds/${sessionId}`)}
                   />
                 }
+              />
+              <Route
+                path="/profile/debates/:resultId"
+                element={<PerformanceResultRoute kind="debate" onBack={() => navigate("/profile")} />}
+              />
+              <Route
+                path="/profile/gds/:resultId"
+                element={<PerformanceResultRoute kind="gd" onBack={() => navigate("/profile")} />}
               />
 
               <Route path="*" element={<Navigate to="/" replace />} />

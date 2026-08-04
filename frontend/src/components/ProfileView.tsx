@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import type { AuthUser } from "../types";
 import { getCurrentIdToken } from "../hooks/useAuth";
-import { getDebateDetail, type DebateTurnAudioRef } from "../debateApi";
+import { type DebateTurnAudioRef } from "../debateApi";
 import { DebateTurnsAudio } from "./DebateTurnsAudio";
 import { fetchPotd, type PotdChallenge } from "../potdApi";
 
@@ -36,6 +36,8 @@ interface DebateSummary {
   your_score: number;
   your_rank: number;
   is_winner: boolean;
+  scoring_mode: "instant" | "detailed";
+  result_pending: boolean;
   completed_at: number;
 }
 
@@ -47,6 +49,8 @@ interface GDSummary {
   your_score: number;
   your_rank: number;
   is_winner: boolean;
+  scoring_mode: "instant" | "detailed";
+  result_pending: boolean;
   completed_at: number;
 }
 
@@ -151,6 +155,8 @@ interface ProfileViewProps {
   onBack: () => void;
   /** Called after the avatar changes so the app header can refresh. */
   onAvatarChange?: () => void | Promise<void>;
+  onOpenDebateResult: (debateId: string) => void;
+  onOpenGDResult: (sessionId: string) => void;
 }
 
 function formatDate(dateStr: string | number): string {
@@ -176,7 +182,7 @@ function activityColor(level: number): string {
   return "bg-zinc-800";
 }
 
-export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) {
+export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, onOpenGDResult }: ProfileViewProps) {
   const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -189,56 +195,6 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Per-debate playback: which "Recent Debates" row is expanded, plus a cache of
-  // the per-turn audio refs fetched on demand from the debate-detail endpoint.
-  // We fetch lazily (on expand) instead of widening /profile/summary, keeping
-  // profile_routes.py untouched and reusing the participant-authorized endpoint.
-  const [expandedDebateId, setExpandedDebateId] = useState<string | null>(null);
-  const [turnAudioByDebate, setTurnAudioByDebate] = useState<
-    Record<string, DebateTurnAudioRef[]>
-  >({});
-  const [loadingDebateId, setLoadingDebateId] = useState<string | null>(null);
-  const [debateAudioError, setDebateAudioError] = useState<
-    Record<string, string>
-  >({});
-
-  const toggleDebateAudio = useCallback(
-    async (debateId: string) => {
-      // Collapse if already open.
-      if (expandedDebateId === debateId) {
-        setExpandedDebateId(null);
-        return;
-      }
-      setExpandedDebateId(debateId);
-
-      // Only fetch once per debate; subsequent expands use the cache.
-      if (turnAudioByDebate[debateId]) return;
-
-      setLoadingDebateId(debateId);
-      setDebateAudioError((prev) => {
-        const next = { ...prev };
-        delete next[debateId];
-        return next;
-      });
-      try {
-        const detail = await getDebateDetail(debateId);
-        setTurnAudioByDebate((prev) => ({
-          ...prev,
-          [debateId]: detail.turn_audio ?? [],
-        }));
-      } catch (err) {
-        setDebateAudioError((prev) => ({
-          ...prev,
-          [debateId]:
-            err instanceof Error ? err.message : "Failed to load turn audio",
-        }));
-      } finally {
-        setLoadingDebateId((cur) => (cur === debateId ? null : cur));
-      }
-    },
-    [expandedDebateId, turnAudioByDebate],
-  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -544,11 +500,15 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
               </h2>
               <ul className="space-y-2">
                 {data.recent_debates.map((d) => {
-                  const isExpanded = expandedDebateId === d.debate_id;
-                  const isLoading = loadingDebateId === d.debate_id;
-                  const turnAudio = turnAudioByDebate[d.debate_id];
-                  const audioError = debateAudioError[d.debate_id];
+                  // Result details now open on their own My Performance page.
+                  // Keep the old playback panel closed; the result page is the
+                  // canonical destination for both instant and detailed runs.
+                  const isExpanded = d.debate_id === "__playback_panel_disabled__";
+                  const isLoading = false;
+                  const turnAudio: DebateTurnAudioRef[] | undefined = [];
+                  const audioError: string | undefined = undefined;
                   const panelId = `debate-audio-${d.debate_id}`;
+                  const showSummary = !d.result_pending && d.scoring_mode === "instant";
                   return (
                     <li
                       key={d.debate_id}
@@ -556,7 +516,7 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
                     >
                       <button
                         type="button"
-                        onClick={() => void toggleDebateAudio(d.debate_id)}
+                        onClick={() => onOpenDebateResult(d.debate_id)}
                         aria-expanded={isExpanded}
                         aria-controls={panelId}
                         className="w-full p-3 flex items-center gap-3 text-left hover:bg-zinc-800/70 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
@@ -568,10 +528,13 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-lg font-bold text-zinc-100">{Math.round(d.your_score)}</div>
-                          <div className="text-xs text-zinc-500">Rank #{d.your_rank}</div>
+                          {!showSummary ? (
+                            <div className="text-xs font-medium text-amber-300">{d.result_pending ? "Processing" : "View result"}</div>
+                          ) : (
+                            <><div className="text-lg font-bold text-zinc-100">{Math.round(d.your_score)}</div><div className="text-xs text-zinc-500">Rank #{d.your_rank}</div></>
+                          )}
                         </div>
-                        {d.is_winner && (
+                        {showSummary && d.is_winner && (
                           <Trophy className="w-5 h-5 text-amber-300" aria-hidden />
                         )}
                         <ChevronDown
@@ -624,7 +587,8 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
               </h2>
               <ul className="space-y-2">
                 {data.recent_gds.map((g) => (
-                  <li key={g.session_id} className="bg-zinc-800/50 rounded-lg p-3 flex items-center gap-3">
+                  <li key={g.session_id} className="bg-zinc-800/50 rounded-lg overflow-hidden">
+                    <button type="button" onClick={() => onOpenGDResult(g.session_id)} className="w-full p-3 flex items-center gap-3 text-left hover:bg-zinc-800/70 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-zinc-100 truncate">{g.topic_title}</div>
                       <div className="text-xs text-zinc-500">
@@ -632,12 +596,16 @@ export function ProfileView({ user, onBack, onAvatarChange }: ProfileViewProps) 
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-lg font-bold text-zinc-100">{Math.round(g.your_score)}</div>
-                      <div className="text-xs text-zinc-500">Rank #{g.your_rank}</div>
+                      {(!g.result_pending && g.scoring_mode === "instant") ? (
+                        <><div className="text-lg font-bold text-zinc-100">{Math.round(g.your_score)}</div><div className="text-xs text-zinc-500">Rank #{g.your_rank}</div></>
+                      ) : (
+                        <div className="text-xs font-medium text-amber-300">{g.result_pending ? "Processing" : "View result"}</div>
+                      )}
                     </div>
-                    {g.is_winner && (
+                    {!g.result_pending && g.scoring_mode === "instant" && g.is_winner && (
                       <Trophy className="w-5 h-5 text-amber-300" />
                     )}
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -50,6 +50,11 @@ class DebateSummary(BaseModel):
     your_rank: int
     is_winner: bool
     completed_at: float
+    # "detailed" runs pronunciation in the background; `result_pending` is True
+    # while those scores are still being computed so the list can show a
+    # "processing" badge instead of a possibly-provisional number.
+    scoring_mode: str = "instant"
+    result_pending: bool = False
 
 
 class GDSummary(BaseModel):
@@ -60,6 +65,8 @@ class GDSummary(BaseModel):
     your_score: float
     your_rank: int
     is_winner: bool
+    scoring_mode: str = "instant"
+    result_pending: bool = False
     completed_at: float
 
 
@@ -267,6 +274,14 @@ async def get_profile_summary(
                         your_rank = idx + 1
                         break
 
+                # In detailed mode the pronunciation pass runs after the room
+                # completes, so flag rows whose full scores have not landed.
+                scoring_mode = row.get("scoring_mode", "instant")
+                standings = row.get("final_standings", []) or []
+                result_pending = scoring_mode == "detailed" and not all(
+                    s.get("full_score_ready") for s in standings
+                ) if standings else scoring_mode == "detailed"
+
                 recent_debates.append(DebateSummary(
                     debate_id=row.get("debate_id", ""),
                     code=row.get("code", ""),
@@ -276,6 +291,8 @@ async def get_profile_summary(
                     your_rank=your_rank,
                     is_winner=is_winner,
                     completed_at=row.get("completed_at", 0),
+                    scoring_mode=scoring_mode,
+                    result_pending=result_pending,
                 ))
             except Exception as e:
                 logger.warning(f"Skipping malformed debate row: {e}")
@@ -318,15 +335,29 @@ async def get_profile_summary(
                         stats.gd_wins += 1
                         points += 20
                     
+                    gd_scoring_mode = row.get("scoring_mode", "instant")
+                    gd_pending = gd_scoring_mode == "detailed" and not all(
+                        s.get("full_score_ready") for s in scores
+                    )
+                    # Prefer the pronunciation-adjusted score once available.
+                    shown_score = (
+                        user_score.get("full_total_score")
+                        if user_score.get("full_score_ready")
+                        and user_score.get("full_total_score") is not None
+                        else user_score.get("total_score", 0)
+                    )
+
                     recent_gds.append(GDSummary(
                         session_id=session_id,
                         code=row.get("code", ""),
                         topic_title=row.get("topic_title", "Unknown"),
                         participant_count=len(participants),
-                        your_score=user_score.get("total_score", 0),
+                        your_score=shown_score or 0,
                         your_rank=user_score.get("rank", 0),
                         is_winner=is_winner,
                         completed_at=row.get("completed_at", 0),
+                        scoring_mode=gd_scoring_mode,
+                        result_pending=gd_pending,
                     ))
             except Exception as e:
                 logger.warning(f"Skipping malformed GD row: {e}")

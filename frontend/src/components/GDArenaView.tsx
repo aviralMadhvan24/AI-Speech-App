@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Award,
+  Clock,
   Check,
   Copy,
   Home,
@@ -260,7 +261,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
 
   // Load results when scoring completes
   useEffect(() => {
-    if (state?.state === "complete" && roomCode && !results && !resultsLoading) {
+    if (state?.state === "complete" && state.scoring_mode !== "detailed" && roomCode && !results && !resultsLoading) {
       setResultsLoading(true);
       getGDResults(roomCode)
         .then((r) => {
@@ -306,13 +307,14 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   // Detailed mode: pronunciation scoring finishes minutes after the instant
   // scores, so keep polling once complete until every full score has landed.
   useEffect(() => {
-    if (state?.state !== "complete" || !roomCode) return;
-    if (state?.scoring_mode !== "detailed") return;
-    if (results && results.scores.every((s) => s.full_score_ready)) return;
+    if (state?.state !== "complete" || !roomCode || state?.scoring_mode === "detailed") return;
+    // Detailed results are deliberately only surfaced from My Performance.
+    return;
+    if (results?.scores.every((s) => s.full_score_ready)) return;
 
     const interval = window.setInterval(async () => {
       try {
-        const r = await getGDResults(roomCode);
+        const r = await getGDResults(roomCode!);
         setResults(r);
         if (r.scores.every((s) => s.full_score_ready)) {
           window.clearInterval(interval);
@@ -1039,7 +1041,17 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           </div>
         )}
 
-        {results && (
+        {state?.scoring_mode === "detailed" && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
+            <Clock className="mx-auto h-8 w-8 text-amber-300" />
+            <h3 className="mt-2 text-lg font-semibold text-zinc-100">Detailed result is being prepared</h3>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
+              Your result will be available after the detailed analysis finishes. Please check the My Performance section in a few minutes.
+            </p>
+          </div>
+        )}
+
+        {results && state?.scoring_mode !== "detailed" && (
           <div className="space-y-3">
             <div className="text-center text-xs text-zinc-500">
               {results.total_speeches} speeches · {Math.floor(results.duration_seconds / 60)} min
@@ -1047,7 +1059,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
 
             {/* Detailed mode: pronunciation runs in the background after the
                 instant scores land, so tell the user where to look. */}
-            {state?.scoring_mode === "detailed" && (
+            {results && Boolean(false) && (
               <div className="text-center text-xs px-4">
                 {results.scores.some((s) => s.full_score_ready) ? (
                   <span className="text-emerald-400">

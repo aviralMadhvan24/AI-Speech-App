@@ -1295,7 +1295,15 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           )}
         </div>
 
-        {winner ? (
+        {state?.scoring_mode === "detailed" ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
+            <Clock className="mx-auto h-8 w-8 text-amber-300" />
+            <h3 className="mt-2 text-lg font-semibold text-zinc-100">Detailed result is being prepared</h3>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
+              The final result will be available after detailed analysis. Please check the My Performance section in a few minutes.
+            </p>
+          </div>
+        ) : winner ? (
           <div className="card-glass bg-amber-500/5 border-amber-500/30 p-6 text-center space-y-2">
             <div className="text-[10px] uppercase tracking-widest text-amber-300 font-semibold">
               Winner
@@ -1348,12 +1356,12 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </div>
         )}
 
-        {state?.final_standings && state.final_standings.length > 0 ? (
+        {state?.scoring_mode === "detailed" ? null : state?.final_standings && state.final_standings.length > 0 ? (
           <div className="space-y-2">
             <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold text-center">
               Final Standings
             </div>
-            {state.scoring_mode === "detailed" && (
+            {state && Boolean(false) && (
               <div className="text-center text-xs text-zinc-500 px-4">
                 {state.final_standings.some((s) => s.full_score_ready) ? (
                   <span className="text-emerald-400">✓ Full pronunciation scores ready</span>
@@ -1487,7 +1495,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         )}
 
         {/* Post-debate playback: per-speaker audio for each completed turn. */}
-        {state?.completed_turns && state.completed_turns.length > 0 && (
+        {state?.scoring_mode !== "detailed" && state?.completed_turns && state.completed_turns.length > 0 && (
           <DebateTurnsAudio
             turns={state.completed_turns}
             avatarByParticipant={Object.fromEntries(

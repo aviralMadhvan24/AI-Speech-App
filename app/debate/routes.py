@@ -514,7 +514,9 @@ async def get_debate_detail(
             text=record.motion_text,
         ),
         completed_at=record.completed_at,
+        scoring_mode=record.scoring_mode,
         winner_participant_id=record.winner_participant_id,
+        final_standings=record.final_standings,
         turn_audio=_turn_audio_for_record(record),
     )
 

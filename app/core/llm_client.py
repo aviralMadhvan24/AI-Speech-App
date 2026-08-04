@@ -64,6 +64,11 @@ class LLMClient:
                     json={
                         "model": "llama-3.1-8b-instant",
                         "messages": [{"role": "user", "content": prompt}],
+                        # Groq's OpenAI-compatible JSON mode prevents the
+                        # debate judge from wrapping its rubric in prose or a
+                        # markdown fence, which was the main source of the
+                        # "Could not parse LLM response" fallback.
+                        "response_format": {"type": "json_object"},
                         "temperature": 0.3,
                         "max_tokens": max_tokens,
                     },
@@ -104,7 +109,10 @@ class LLMClient:
         """Generate and parse JSON response from LLM."""
         try:
             response = await self.generate(prompt, max_tokens)
-            # Extract JSON from response (handle markdown code blocks)
+            # Extract JSON from response (handle markdown code blocks). First
+            # ask the decoder for the first complete object rather than taking
+            # everything through the final `}`; a model can append an example
+            # or explanation containing braces after the answer.
             json_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", response, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
@@ -174,7 +182,12 @@ class LLMClient:
                 return ''.join(result)
             
             json_str = sanitize_json(json_str)
-            return json.loads(json_str)
+            decoded = json.JSONDecoder().raw_decode(json_str.lstrip())
+            parsed = decoded[0]
+            if not isinstance(parsed, dict):
+                logger.warning("LLM JSON response was not an object")
+                return None
+            return parsed
             
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parse error: {e}")

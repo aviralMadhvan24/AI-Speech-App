@@ -134,7 +134,9 @@ export interface DebateDetailResponse {
   code: string;
   motion: MotionPublic;
   completed_at: number;
+  scoring_mode: "instant" | "detailed";
   winner_participant_id: string | null;
+  final_standings: FinalStanding[];
   turn_audio: DebateTurnAudioRef[];
 }
 

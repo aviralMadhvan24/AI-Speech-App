@@ -442,6 +442,7 @@ async def _run_scoring(code: str) -> None:
             topic_id=room.topic_id,
             topic_title=room.topic_title,
             topic_text=room.topic_text,
+            scoring_mode=room.scoring_mode,
             participants=[
                 {
                     "participant_id": p.participant_id,
@@ -611,7 +612,9 @@ async def _run_detailed_pronunciation_gd(
                     score.full_total_score = score.total_score
                     score.full_score_ready = True
 
-            gd_sessions_store.save_session(session)
+            # Must upsert, not append — `get_session` reads the first matching
+            # row, so an appended duplicate would never be seen.
+            gd_sessions_store.upsert_session(session)
             logger.info(f"GD detailed scoring complete for {code}")
 
     except Exception as exc:
@@ -653,6 +656,50 @@ async def get_results(
         scores=session.scores,
         total_speeches=len(session.speech_ids),
         duration_seconds=duration,
+        scoring_mode=session.scoring_mode,
+    )
+
+
+@router.get("/sessions/{session_id}", response_model=GDResultsResponse)
+async def get_session_detail(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> GDResultsResponse:
+    """Return a completed GD's full result, read from the durable store.
+
+    Unlike `/rooms/{code}/results` this does not require the in-memory room to
+    still exist, so it powers the My Performance history detail view. The
+    caller must have participated in the session (or be a teacher).
+    """
+    session = gd_sessions_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session_not_found")
+
+    is_teacher = getattr(current_user, "role", "") in ("teacher", "admin")
+    is_participant = any(
+        isinstance(p, dict) and p.get("user_id") == current_user.uid
+        for p in session.participants
+    )
+    if not (is_teacher or is_participant):
+        raise HTTPException(status_code=403, detail="not_authorized")
+
+    duration = (
+        (session.completed_at - session.created_at) if session.completed_at else 0.0
+    )
+
+    return GDResultsResponse(
+        session_id=session.session_id,
+        code=session.code,
+        topic=GDTopicPublic(
+            id=session.topic_id,
+            title=session.topic_title,
+            text=session.topic_text,
+            category="general",
+        ),
+        scores=session.scores,
+        total_speeches=len(session.speech_ids),
+        duration_seconds=duration,
+        scoring_mode=session.scoring_mode,
     )
 
 
