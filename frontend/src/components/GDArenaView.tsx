@@ -303,6 +303,28 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     return () => window.clearInterval(interval);
   }, [state?.state, roomCode]);
 
+  // Detailed mode: pronunciation scoring finishes minutes after the instant
+  // scores, so keep polling once complete until every full score has landed.
+  useEffect(() => {
+    if (state?.state !== "complete" || !roomCode) return;
+    if (state?.scoring_mode !== "detailed") return;
+    if (results && results.scores.every((s) => s.full_score_ready)) return;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const r = await getGDResults(roomCode);
+        setResults(r);
+        if (r.scores.every((s) => s.full_score_ready)) {
+          window.clearInterval(interval);
+          toast.success("Full scores ready!", "Pronunciation analysis complete");
+        }
+      } catch {
+        // Not ready yet — keep polling
+      }
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [state?.state, state?.scoring_mode, roomCode, results, toast]);
+
   const myParticipant = useMemo<GDParticipantPublic | null>(() => {
     if (!state || !participantId) return null;
     return state.participants.find((p) => p.participant_id === participantId) ?? null;
@@ -1022,6 +1044,23 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
             <div className="text-center text-xs text-zinc-500">
               {results.total_speeches} speeches · {Math.floor(results.duration_seconds / 60)} min
             </div>
+
+            {/* Detailed mode: pronunciation runs in the background after the
+                instant scores land, so tell the user where to look. */}
+            {state?.scoring_mode === "detailed" && (
+              <div className="text-center text-xs px-4">
+                {results.scores.some((s) => s.full_score_ready) ? (
+                  <span className="text-emerald-400">
+                    ✓ Full pronunciation scores ready
+                  </span>
+                ) : (
+                  <span className="text-amber-400">
+                    ⏳ Pronunciation analysis in progress — full scores update in
+                    1-3 minutes. This page refreshes automatically.
+                  </span>
+                )}
+              </div>
+            )}
             
             {results.scores.map((score) => {
               const isYou = score.participant_id === participantId;
@@ -1064,15 +1103,34 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className={[
-                        "text-2xl font-bold",
-                        score.total_score >= 70 ? "text-emerald-300" :
-                        score.total_score >= 50 ? "text-zinc-100" :
-                        score.total_score >= 30 ? "text-amber-300" : "text-rose-300"
-                      ].join(" ")}>
-                        {score.total_score.toFixed(1)}
-                      </div>
-                      <div className="text-[10px] text-zinc-500 uppercase">/ 100</div>
+                      {(() => {
+                        // In detailed mode prefer the pronunciation-adjusted
+                        // score once it's available.
+                        const shown =
+                          score.full_score_ready && score.full_total_score != null
+                            ? score.full_total_score
+                            : score.total_score;
+                        return (
+                          <>
+                            <div className={[
+                              "text-2xl font-bold",
+                              shown >= 70 ? "text-emerald-300" :
+                              shown >= 50 ? "text-zinc-100" :
+                              shown >= 30 ? "text-amber-300" : "text-rose-300"
+                            ].join(" ")}>
+                              {shown.toFixed(1)}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 uppercase">/ 100</div>
+                            {score.full_score_ready &&
+                              score.full_total_score != null &&
+                              Math.abs(score.full_total_score - score.total_score) >= 0.05 && (
+                                <div className="text-[9px] text-zinc-500 mt-0.5">
+                                  was {score.total_score.toFixed(1)}
+                                </div>
+                              )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                   

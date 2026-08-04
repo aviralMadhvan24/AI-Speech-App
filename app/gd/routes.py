@@ -475,6 +475,53 @@ async def _run_scoring(code: str) -> None:
         traceback.print_exc()
 
 
+def _resolve_speech_audio_path(audio_ref: str) -> Optional[str]:
+    """Resolve a speech's audio_ref to a WAV file the pronunciation model can read.
+
+    Handles two shapes of `audio_ref`:
+      * An absolute path to an egress recording (``/opt/livekit/egress-out/x.ogg``)
+        — transcoded to 16 kHz mono WAV, since the phoneme model needs WAV.
+      * A bare audio_id from the older push-to-talk flow — looked up under
+        ``uploads/`` then ``temp/``.
+
+    Returns the WAV path, or None when nothing usable exists.
+    """
+    import os
+    import subprocess
+
+    # Case 1: egress recording (absolute path, non-WAV container)
+    if os.path.isabs(audio_ref) and os.path.exists(audio_ref):
+        if audio_ref.lower().endswith(".wav"):
+            return audio_ref
+        wav_path = os.path.splitext(audio_ref)[0] + ".wav"
+        if os.path.exists(wav_path):
+            return wav_path
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", audio_ref,
+                    "-ar", "16000", "-ac", "1",
+                    wav_path,
+                ],
+                capture_output=True,
+                timeout=120,
+                check=True,
+            )
+            return wav_path
+        except Exception as exc:  # noqa: BLE001 - fall through to None
+            logger.warning(
+                f"ffmpeg transcode failed for {audio_ref}: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+    # Case 2: legacy push-to-talk audio_id
+    for candidate in (f"uploads/{audio_ref}.wav", f"temp/{audio_ref}.wav"):
+        if os.path.exists(candidate):
+            return candidate
+
+    return None
+
+
 async def _run_detailed_pronunciation_gd(
     code: str,
     session_id: str,
@@ -502,16 +549,16 @@ async def _run_detailed_pronunciation_gd(
             for speech in speeches:
                 if not speech.audio_ref:
                     continue
-                # Try to resolve audio path
-                audio_path = f"uploads/{speech.audio_ref}.wav"
+
                 import os
-                if not os.path.exists(audio_path):
-                    # Try alternative paths
-                    alt_path = f"temp/{speech.audio_ref}.wav"
-                    if os.path.exists(alt_path):
-                        audio_path = alt_path
-                    else:
-                        continue
+
+                audio_path = _resolve_speech_audio_path(speech.audio_ref)
+                if audio_path is None:
+                    logger.warning(
+                        f"GD detailed: could not resolve audio for speech "
+                        f"{speech.speech_id} (ref={speech.audio_ref})"
+                    )
+                    continue
 
                 try:
                     transcription = TranscriptionResult(
