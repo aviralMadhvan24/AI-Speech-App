@@ -133,6 +133,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   const [readyBusy, setReadyBusy] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [creating, setCreating] = useState(false);
+  const [scoringMode, setScoringMode] = useState<"instant" | "detailed">("instant");
   const [joining, setJoining] = useState(false);
   const [now, setNow] = useState(() => Date.now() / 1000);
   const [codeCopied, setCodeCopied] = useState(false);
@@ -420,7 +421,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     setCreating(true);
     setJoinError(null);
     try {
-      const response = await createGDRoom();
+      const response = await createGDRoom(scoringMode);
       saveRoomSession("gd", response.room_code, {
         participantId: response.participant_id,
         savedAt: Date.now(),
@@ -436,7 +437,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, [toast, navigate]);
+  }, [toast, navigate, scoringMode]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -593,6 +594,36 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               A topic will be auto-assigned. 5-10 participants can join.
               Once everyone is ready: 2 min prep + 15 min discussion.
             </p>
+            {/* Scoring mode toggle */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Scoring mode</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScoringMode("instant")}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+                    scoringMode === "instant"
+                      ? "bg-emerald-600/30 border-emerald-500/60 text-emerald-200"
+                      : "bg-zinc-800/50 border-zinc-700/40 text-zinc-400 hover:border-zinc-600"
+                  }`}
+                >
+                  <span className="block text-sm">⚡ Instant</span>
+                  <span className="block text-[10px] mt-0.5 opacity-70">Content + Fluency</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScoringMode("detailed")}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+                    scoringMode === "detailed"
+                      ? "bg-cyan-600/30 border-cyan-500/60 text-cyan-200"
+                      : "bg-zinc-800/50 border-zinc-700/40 text-zinc-400 hover:border-zinc-600"
+                  }`}
+                >
+                  <span className="block text-sm">🎯 Detailed</span>
+                  <span className="block text-[10px] mt-0.5 opacity-70">+ Pronunciation (2-3 min)</span>
+                </button>
+              </div>
+            </div>
             <button
               type="button"
               onClick={handleCreateRoom}

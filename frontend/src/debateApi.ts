@@ -36,6 +36,8 @@ export interface FinalStanding {
   effective_score: number;
   is_forfeit: boolean;
   is_winner: boolean;
+  full_ai_score: number | null;
+  full_score_ready: boolean;
 }
 
 export interface CompletedTurnPublic {
@@ -68,6 +70,7 @@ export interface PublicDebateRoom {
   code: string;
   state: DebateState;
   paused: boolean;
+  scoring_mode: "instant" | "detailed";
   motion: MotionPublic | null;
   participants: ParticipantPublic[];
   active_turn_index: number | null;
@@ -221,11 +224,11 @@ function pickUploadMime(rawType: string): { mime: string; ext: string } {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function createDebateRoom(): Promise<CreateRoomResponse> {
+export async function createDebateRoom(scoringMode: "instant" | "detailed" = "instant"): Promise<CreateRoomResponse> {
   return fetchJson<CreateRoomResponse>("/debate/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify({ scoring_mode: scoringMode }),
   });
 }
 

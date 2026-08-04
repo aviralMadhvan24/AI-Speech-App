@@ -184,7 +184,7 @@ class GDRoomManager:
     # Room lifecycle
     # ------------------------------------------------------------------
 
-    async def create_room(self, user: User) -> GDRoom:
+    async def create_room(self, user: User, scoring_mode: str = "instant") -> GDRoom:
         """Create new GD room."""
         async with self._manager_lock:
             code: Optional[str] = None
@@ -215,6 +215,7 @@ class GDRoomManager:
                 topic_text=topic.text,
                 topic_category=topic.category,
                 state="waiting",
+                scoring_mode=scoring_mode if scoring_mode in ("instant", "detailed") else "instant",
                 participants=[first],
                 created_at=now,
             )

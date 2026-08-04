@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -41,6 +41,13 @@ from app.gd.service import analyze_speech_audio
 from app.storage import gd_sessions as gd_sessions_store
 from app.storage import gd_speeches as gd_speeches_store
 
+from pydantic import BaseModel as PydanticBaseModel
+
+
+class CreateGDRoomRequest(PydanticBaseModel):
+    """Request body for POST /gd/rooms."""
+    scoring_mode: Literal["instant", "detailed"] = "instant"
+
 logger = logging.getLogger("gd.routes")
 
 router = APIRouter(prefix="/gd", tags=["gd"])
@@ -51,8 +58,11 @@ router = APIRouter(prefix="/gd", tags=["gd"])
 # ---------------------------------------------------------------------------
 
 @router.post("/rooms", response_model=CreateGDRoomResponse)
-async def create_room(current_user: User = Depends(require_user)) -> CreateGDRoomResponse:
-    room = await gd_room_manager.create_room(current_user)
+async def create_room(
+    body: CreateGDRoomRequest = CreateGDRoomRequest(),
+    current_user: User = Depends(require_user),
+) -> CreateGDRoomResponse:
+    room = await gd_room_manager.create_room(current_user, scoring_mode=body.scoring_mode)
     first = room.participants[0]
     return CreateGDRoomResponse(
         room_code=room.code,
@@ -358,8 +368,112 @@ async def _run_scoring(code: str) -> None:
         await gd_room_manager.finalize_scores(code, scores)
         
         logger.info(f"GD scoring complete for {code}: {len(scores)} participants")
+
+        # If detailed mode, spawn background pronunciation re-scoring
+        if room.scoring_mode == "detailed":
+            asyncio.create_task(
+                _run_detailed_pronunciation_gd(code, room.session_id, persisted_speeches, scores)
+            )
     except Exception as exc:
         logger.error(f"GD scoring failed for {code}: {type(exc).__name__}: {exc}")
+        import traceback
+        traceback.print_exc()
+
+
+async def _run_detailed_pronunciation_gd(
+    code: str,
+    session_id: str,
+    persisted_speeches: list,
+    scores: list,
+) -> None:
+    """Background task: run pronunciation on GD speeches and recompute communication scores."""
+    from app.pronunciation.service import assess_pronunciation
+    from app.asr.schemas import TranscriptionResult
+    from app.gd.scoring import compute_communication_score
+
+    try:
+        await asyncio.sleep(2.0)
+        logger.info(f"GD detailed scoring: starting pronunciation for session {session_id}")
+
+        # Group speeches by participant
+        speeches_by_pid: dict[str, list] = {}
+        for sp in persisted_speeches:
+            speeches_by_pid.setdefault(sp.participant_id, []).append(sp)
+
+        # For each participant's speeches, run pronunciation assessment
+        updated_comm_scores: dict[str, float] = {}
+        for pid, speeches in speeches_by_pid.items():
+            pron_scores_for_pid = []
+            for speech in speeches:
+                if not speech.audio_ref:
+                    continue
+                # Try to resolve audio path
+                audio_path = f"uploads/{speech.audio_ref}.wav"
+                import os
+                if not os.path.exists(audio_path):
+                    # Try alternative paths
+                    alt_path = f"temp/{speech.audio_ref}.wav"
+                    if os.path.exists(alt_path):
+                        audio_path = alt_path
+                    else:
+                        continue
+
+                try:
+                    transcription = TranscriptionResult(
+                        text=speech.transcript or "",
+                        words=[],
+                        provider="cached",
+                        language="en",
+                    )
+                    pronunciation = assess_pronunciation(
+                        audio_path=audio_path,
+                        expected_text=speech.transcript,
+                        transcription=transcription,
+                    )
+                    if pronunciation.available and pronunciation.overall_score is not None:
+                        pron_scores_for_pid.append(pronunciation.overall_score)
+                        # Update the speech record too
+                        speech.pronunciation_score = pronunciation.overall_score
+                        gd_speeches_store.save_speech(speech)
+                except Exception as exc:
+                    logger.warning(
+                        f"GD detailed pron failed for speech {speech.speech_id}: {type(exc).__name__}"
+                    )
+
+            # Recompute communication score with real pronunciation
+            if pron_scores_for_pid:
+                avg_pron = sum(pron_scores_for_pid) / len(pron_scores_for_pid)
+                fluency_scores = [s.fluency_score for s in speeches if s.fluency_score is not None]
+                avg_fluency = sum(fluency_scores) / len(fluency_scores) if fluency_scores else None
+
+                if avg_fluency is not None:
+                    comm = round((avg_pron + avg_fluency) / 2.0 / 100.0 * 20.0, 2)
+                else:
+                    comm = round(avg_pron / 100.0 * 20.0, 2)
+                updated_comm_scores[pid] = comm
+
+        # Recompute total scores with updated communication
+        session = gd_sessions_store.get_session(session_id)
+        if session is not None:
+            for score in session.scores:
+                if score.participant_id in updated_comm_scores:
+                    old_comm = score.communication
+                    new_comm = updated_comm_scores[score.participant_id]
+                    # Recalculate total: replace old communication with new
+                    new_total = score.total_score - old_comm + new_comm
+                    new_total = round(min(100.0, max(0.0, new_total)), 2)
+                    score.full_total_score = new_total
+                    score.full_score_ready = True
+                else:
+                    # No pronunciation data available, keep instant score
+                    score.full_total_score = score.total_score
+                    score.full_score_ready = True
+
+            gd_sessions_store.save_session(session)
+            logger.info(f"GD detailed scoring complete for {code}")
+
+    except Exception as exc:
+        logger.error(f"GD detailed scoring failed for {code}: {type(exc).__name__}: {exc}")
         import traceback
         traceback.print_exc()
 
@@ -398,6 +512,50 @@ async def get_results(
         total_speeches=len(session.speech_ids),
         duration_seconds=duration,
     )
+
+
+@router.get("/rooms/{code}/full-scores")
+async def get_full_scores(
+    code: str,
+    current_user: User = Depends(require_user),
+):
+    """Return full (detailed) scores once pronunciation scoring is complete.
+
+    Returns 202 if scoring is still in progress, 200 with full scores when ready.
+    """
+    normalized = code.strip().upper()
+    room = gd_room_manager.get_state(normalized)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room_not_found")
+    if room.scoring_mode != "detailed":
+        raise HTTPException(status_code=400, detail="not_detailed_mode")
+
+    session = gd_sessions_store.get_session(room.session_id)
+    if session is None:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "processing", "message": "Full scores still computing."},
+        )
+
+    all_ready = all(s.full_score_ready for s in session.scores)
+    if not all_ready:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "processing", "message": "Full scores still computing."},
+        )
+
+    results = []
+    for s in session.scores:
+        results.append({
+            "participant_id": s.participant_id,
+            "display_name": s.display_name,
+            "total_score": s.total_score,
+            "full_total_score": s.full_total_score,
+            "full_score_ready": s.full_score_ready,
+        })
+    return {"status": "ready", "scores": results}
 
 
 # ---------------------------------------------------------------------------

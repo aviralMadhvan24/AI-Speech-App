@@ -78,6 +78,7 @@ class GDRoom(BaseModel):
     topic_text: str
     topic_category: str
     state: GDState = "waiting"
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     participants: list[GDParticipantInternal] = Field(default_factory=list)
     speeches: list[GDSpeechInternal] = Field(default_factory=list)
     active_speakers: list[str] = Field(default_factory=list)  # participant_ids currently speaking
@@ -129,6 +130,7 @@ class PublicGDRoom(BaseModel):
     """Broadcast shape - no PII."""
     code: str
     state: GDState
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     topic: Optional[GDTopicPublic] = None
     participants: list[GDParticipantPublic] = Field(default_factory=list)
     active_speakers: list[GDActiveSpeaker] = Field(default_factory=list)
@@ -159,6 +161,7 @@ def to_public(room: GDRoom) -> PublicGDRoom:
     return PublicGDRoom(
         code=room.code,
         state=room.state,
+        scoring_mode=room.scoring_mode,
         topic=GDTopicPublic(
             id=room.topic_id,
             title=room.topic_title,
@@ -228,6 +231,8 @@ class GDParticipantScore(BaseModel):
     was_interrupted_count: int
     feedback: Optional[str] = None
     rank: int = 0
+    full_total_score: Optional[float] = None  # Detailed score with pronunciation
+    full_score_ready: bool = False
 
 
 class GDSessionRecord(BaseModel):

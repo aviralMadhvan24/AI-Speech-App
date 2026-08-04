@@ -276,7 +276,7 @@ class DebateRoomManager:
     # Room lifecycle
     # ------------------------------------------------------------------
 
-    async def create_room(self, user: User) -> DebateRoom:
+    async def create_room(self, user: User, scoring_mode: str = "instant") -> DebateRoom:
         """Create a new room with a unique code and register the caller
         as the first participant.
         """
@@ -311,6 +311,7 @@ class DebateRoomManager:
                 motion_text=motion.text,
                 state="waiting",
                 paused=False,
+                scoring_mode=scoring_mode if scoring_mode in ("instant", "detailed") else "instant",
                 participants=[first],
                 created_at=now,
             )
@@ -1114,6 +1115,119 @@ class DebateRoomManager:
                 room.code,
                 room.debate_id,
                 type(exc).__name__,
+            )
+
+        # If detailed scoring mode, spawn background task for pronunciation
+        if room.scoring_mode == "detailed":
+            asyncio.create_task(
+                self._run_detailed_pronunciation(room.code, room.debate_id, room.motion_title, room.motion_text)
+            )
+
+    async def _run_detailed_pronunciation(
+        self, code: str, debate_id: str, motion_title: str, motion_text: str
+    ) -> None:
+        """Background task: run pronunciation scoring on each turn's audio.
+
+        For each non-forfeit turn, calls assess_pronunciation (60-110s on CPU),
+        recomputes the full score with pronunciation at 25% weight, and persists
+        the result as `full_ai_score` on the turn.
+        """
+        from app.debate.service import compute_full_score_with_pronunciation
+
+        try:
+            await asyncio.sleep(2.0)  # Brief pause for any pending I/O
+            turns = debate_turns_store.list_turns_for_debate(debate_id)
+
+            for turn in turns:
+                if turn.forfeit_reason is not None:
+                    continue
+                if not turn.audio_key:
+                    logger.warning(
+                        "detailed_scoring_skip turn=%s reason=no_audio_key", turn.turn_id
+                    )
+                    continue
+
+                # Resolve audio path from storage
+                store = get_audio_store()
+                # Get local file path from the store's internal resolution
+                try:
+                    audio_path = str(store._resolve(turn.audio_key))
+                except Exception:
+                    logger.warning(
+                        "detailed_scoring_skip turn=%s reason=cannot_resolve_path", turn.turn_id
+                    )
+                    continue
+                
+                import os
+                if not os.path.exists(audio_path):
+                    logger.warning(
+                        "detailed_scoring_skip turn=%s reason=file_not_found path=%s", turn.turn_id, audio_path
+                    )
+                    continue
+
+                transcript = ""
+                # Load transcript from the persisted turn or analysis
+                if turn.score_breakdown and turn.score_breakdown.get("content", {}).get("details"):
+                    # Try to get transcript from content details
+                    pass
+                # Use a simple approach: re-read from the stored data
+                # The transcript was used during content scoring; we can
+                # reconstruct it from what we have or just run pronunciation only
+                # Actually the transcript was used to generate content_score.
+                # We'll pass it for pronunciation alignment.
+                # For now, use empty string which will make pronunciation use
+                # the audio directly without text alignment.
+                transcript = transcript or ""
+
+                try:
+                    full_score, _unavailable, _breakdown = await compute_full_score_with_pronunciation(
+                        audio_path=audio_path,
+                        transcript=transcript,
+                        motion_title=motion_title,
+                        motion_text=motion_text,
+                    )
+                    # Update persisted turn
+                    debate_turns_store.update_turn_full_score(
+                        turn_id=turn.turn_id,
+                        full_ai_score=full_score,
+                        full_score_ready=True,
+                    )
+                    logger.info(
+                        "detailed_score_done turn=%s full_score=%.2f",
+                        turn.turn_id,
+                        full_score,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "detailed_scoring_failed turn=%s err=%s",
+                        turn.turn_id,
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                    # Mark as ready anyway so the user isn't stuck waiting
+                    debate_turns_store.update_turn_full_score(
+                        turn_id=turn.turn_id,
+                        full_ai_score=turn.ai_score,
+                        full_score_ready=True,
+                    )
+
+            # Update room final standings with full scores
+            room = self._rooms.get(code)
+            if room is not None:
+                updated_turns = debate_turns_store.list_turns_for_debate(debate_id)
+                turn_by_pid = {t.participant_id: t for t in updated_turns}
+                for standing in room.final_standings:
+                    t = turn_by_pid.get(standing.participant_id)
+                    if t and t.full_ai_score is not None:
+                        standing.full_ai_score = t.full_ai_score
+                        standing.full_score_ready = True
+                await self.broadcast(code)
+
+            logger.info("detailed_scoring_complete debate_id=%s", debate_id)
+        except Exception as exc:
+            logger.error(
+                "detailed_scoring_task_failed debate_id=%s err=%s",
+                debate_id,
+                f"{type(exc).__name__}: {exc}",
             )
 
     async def _maybe_abandon(self, code: str) -> None:

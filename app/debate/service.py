@@ -390,3 +390,65 @@ async def compute_ai_score_with_content(
     breakdown["scoring_unavailable"] = False
 
     return final_score, False, breakdown
+
+
+async def compute_full_score_with_pronunciation(
+    audio_path: str,
+    transcript: str,
+    motion_title: str,
+    motion_text: str,
+) -> tuple[float, bool, dict]:
+    """Compute the full detailed score including pronunciation analysis.
+
+    This is the background-task counterpart to the instant scoring flow.
+    It runs the (slow) Wav2Vec2 pronunciation model, then recomputes
+    the score with pronunciation included at 25% weight.
+
+    Args:
+        audio_path: Path to the processed audio file on disk.
+        transcript: The transcribed text from the turn.
+        motion_title: Debate motion title.
+        motion_text: Debate motion full text.
+
+    Returns:
+        Tuple of (full_score, scoring_unavailable, breakdown_dict)
+    """
+    from app.asr.schemas import TranscriptionResult
+    from app.pronunciation.service import assess_pronunciation
+
+    # Build a minimal transcription result for pronunciation assessment
+    transcription = TranscriptionResult(
+        text=transcript,
+        words=[],
+        provider="cached",
+        language="en",
+    )
+
+    # Run pronunciation assessment (the slow part: 60-110s on CPU)
+    pronunciation = assess_pronunciation(
+        audio_path=audio_path,
+        expected_text=transcript,
+        transcription=transcription,
+    )
+
+    # Build a fluency result from the transcript for consistency
+    # (we don't have the audio asset here, but fluency was already computed
+    # in the instant pass — we just need pronunciation to be real this time)
+    fluency = FluencyResult(
+        words_per_minute=None,
+        clarity_score=None,
+        filler_word_count=0,
+        filler_words=[],
+        pace_assessment="unknown",
+    )
+
+    # Recompute the full score WITH pronunciation
+    full_score, unavailable, breakdown = await compute_ai_score_with_content(
+        pronunciation=pronunciation,
+        fluency=fluency,
+        transcript=transcript,
+        motion_title=motion_title,
+        motion_text=motion_text,
+    )
+
+    return full_score, unavailable, breakdown

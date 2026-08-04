@@ -247,6 +247,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     useState<TurnUploadResponse | null>(null);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [creating, setCreating] = useState(false);
+  const [scoringMode, setScoringMode] = useState<"instant" | "detailed">("instant");
   const [joining, setJoining] = useState(false);
   const [now, setNow] = useState(() => Date.now() / 1000);
   const [codeCopied, setCodeCopied] = useState(false);
@@ -574,7 +575,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     setCreating(true);
     setJoinError(null);
     try {
-      const response = await createDebateRoom();
+      const response = await createDebateRoom(scoringMode);
       saveRoomSession("debate", response.room_code, {
         participantId: response.participant_id,
         savedAt: Date.now(),
@@ -589,7 +590,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, [navigate]);
+  }, [navigate, scoringMode]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -766,6 +767,36 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               A random motion will be assigned when you create the room. Share the
               code with your opponent — the debate starts once you are both ready.
             </p>
+            {/* Scoring mode toggle */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Scoring mode</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScoringMode("instant")}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+                    scoringMode === "instant"
+                      ? "bg-violet-600/30 border-violet-500/60 text-violet-200"
+                      : "bg-zinc-800/50 border-zinc-700/40 text-zinc-400 hover:border-zinc-600"
+                  }`}
+                >
+                  <span className="block text-sm">⚡ Instant</span>
+                  <span className="block text-[10px] mt-0.5 opacity-70">Content + Fluency</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScoringMode("detailed")}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all border ${
+                    scoringMode === "detailed"
+                      ? "bg-fuchsia-600/30 border-fuchsia-500/60 text-fuchsia-200"
+                      : "bg-zinc-800/50 border-zinc-700/40 text-zinc-400 hover:border-zinc-600"
+                  }`}
+                >
+                  <span className="block text-sm">🎯 Detailed</span>
+                  <span className="block text-[10px] mt-0.5 opacity-70">+ Pronunciation (2-3 min)</span>
+                </button>
+              </div>
+            </div>
             <button
               type="button"
               onClick={handleCreateRoom}
@@ -1322,6 +1353,15 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold text-center">
               Final Standings
             </div>
+            {state.scoring_mode === "detailed" && (
+              <div className="text-center text-xs text-zinc-500 px-4">
+                {state.final_standings.some((s) => s.full_score_ready) ? (
+                  <span className="text-emerald-400">✓ Full pronunciation scores ready</span>
+                ) : (
+                  <span className="text-amber-400">⏳ Pronunciation analysis in progress — full scores will update in a few minutes. Check My Debates later.</span>
+                )}
+              </div>
+            )}
             <ul className="space-y-2" role="list">
               {state.final_standings.map((s) => {
                 const isYou = s.participant_id === participantId;

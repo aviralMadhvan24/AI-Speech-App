@@ -20,7 +20,7 @@ manager's ``ValueError`` sentinels into HTTP status codes.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -162,11 +162,17 @@ def _may_access_debate_audio(user: User, *, code: str, turn: DebateTurn) -> bool
 # ---------------------------------------------------------------------------
 
 
+class CreateDebateRoomRequest(BaseModel):
+    """Request body for POST /debate/rooms."""
+    scoring_mode: Literal["instant", "detailed"] = "instant"
+
+
 @router.post("/rooms", response_model=CreateRoomResponse)
 async def create_room(
+    body: CreateDebateRoomRequest = CreateDebateRoomRequest(),
     current_user: User = Depends(require_user),
 ) -> CreateRoomResponse:
-    room = await debate_room_manager.create_room(current_user)
+    room = await debate_room_manager.create_room(current_user, scoring_mode=body.scoring_mode)
     first = room.participants[0]
     return CreateRoomResponse(
         room_code=room.code,
@@ -372,6 +378,49 @@ async def get_room(
     if room is None:
         raise HTTPException(status_code=404, detail="room_not_found")
     return to_public(room)
+
+
+@router.get("/rooms/{code}/full-scores")
+async def get_full_scores(
+    code: str,
+    current_user: User = Depends(require_user),
+):
+    """Return full (detailed) scores once pronunciation scoring is complete.
+
+    Returns 202 if scoring is still in progress, 200 with full scores when ready.
+    """
+    normalized = code.strip().upper()
+    room = debate_room_manager.get_state(normalized)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room_not_found")
+    if room.scoring_mode != "detailed":
+        raise HTTPException(status_code=400, detail="not_detailed_mode")
+
+    # Check if full scores are ready by looking at persisted turns
+    turns = debate_turns_store.list_turns_for_debate(room.debate_id)
+    all_ready = all(
+        t.full_score_ready or t.forfeit_reason is not None
+        for t in turns
+    )
+    if not all_ready:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "processing", "message": "Full scores still computing."},
+        )
+
+    # Return the full scores
+    results = []
+    for t in turns:
+        results.append({
+            "turn_id": t.turn_id,
+            "participant_id": t.participant_id,
+            "turn_index": t.turn_index,
+            "ai_score": t.ai_score,
+            "full_ai_score": t.full_ai_score,
+            "full_score_ready": t.full_score_ready,
+        })
+    return {"status": "ready", "scores": results}
 
 
 @router.get("/motions", response_model=List[Motion])

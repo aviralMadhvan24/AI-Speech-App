@@ -116,3 +116,39 @@ def apply_teacher_review(
 
     overwrite_jsonl(_PATH, out_rows)
     return updated
+
+
+def update_turn_full_score(
+    turn_id: str,
+    full_ai_score: float,
+    full_score_ready: bool = True,
+) -> Optional[DebateTurn]:
+    """Rewrite the file with the target turn's full_ai_score and
+    full_score_ready updated in place. Return the updated DebateTurn or
+    None if turn_id is unknown.
+    """
+    rows = read_jsonl(_PATH)
+    updated: Optional[DebateTurn] = None
+    out_rows: list[dict] = []
+    for row in rows:
+        try:
+            turn = DebateTurn.model_validate(row)
+        except Exception as exc:
+            logger.warning("Preserving malformed debate_turn row as-is: %s", exc)
+            out_rows.append(row)
+            continue
+        if turn.turn_id == turn_id:
+            turn = turn.model_copy(
+                update={
+                    "full_ai_score": full_ai_score,
+                    "full_score_ready": full_score_ready,
+                }
+            )
+            updated = turn
+        out_rows.append(turn.model_dump())
+
+    if updated is None:
+        return None
+
+    overwrite_jsonl(_PATH, out_rows)
+    return updated

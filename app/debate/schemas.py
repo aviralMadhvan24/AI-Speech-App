@@ -77,6 +77,7 @@ class DebateRoom(BaseModel):
     motion_text: str
     state: DebateState = "waiting"
     paused: bool = False
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     # LiveKit room name for live audio; set around prep/speaking. Idempotent
     # once assigned (see room_manager `_create_livekit_room`).
     livekit_room: Optional[str] = None
@@ -153,6 +154,8 @@ class FinalStanding(BaseModel):
     effective_score: float
     is_forfeit: bool = False
     is_winner: bool = False
+    full_ai_score: Optional[float] = None  # Detailed score with pronunciation
+    full_score_ready: bool = False
 
 
 class CompletedTurnPublic(BaseModel):
@@ -180,6 +183,7 @@ class PublicDebateRoom(BaseModel):
     code: str
     state: DebateState
     paused: bool = False
+    scoring_mode: Literal["instant", "detailed"] = "instant"
     # LiveKit room name, exposed ONLY while the room state is `prep` or
     # `speaking`. `to_public` gates this so the name never leaks outside
     # active audio phases (Requirement 1.1).
@@ -212,6 +216,7 @@ def to_public(room: DebateRoom) -> PublicDebateRoom:
         code=room.code,
         state=room.state,
         paused=room.paused,
+        scoring_mode=room.scoring_mode,
         motion=MotionPublic(
             id=room.motion_id,
             title=room.motion_title,
@@ -296,6 +301,10 @@ class DebateTurn(BaseModel):
     score_breakdown: Optional[dict] = None  # Full breakdown: {pronunciation, fluency, content}
     submitted_at: float  # unix seconds
     forfeit_reason: Optional[Literal["timeout", "reconnect_timeout"]] = None
+    
+    # Full detailed score (with pronunciation) — populated by background task
+    full_ai_score: Optional[float] = None
+    full_score_ready: bool = False
 
 
 class EffectiveScoreEntry(BaseModel):

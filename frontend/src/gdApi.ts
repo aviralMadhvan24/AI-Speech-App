@@ -35,6 +35,7 @@ export interface GDActiveSpeaker {
 export interface PublicGDRoom {
   code: string;
   state: GDState;
+  scoring_mode: "instant" | "detailed";
   topic: GDTopic | null;
   participants: GDParticipantPublic[];
   active_speakers: GDActiveSpeaker[];
@@ -98,6 +99,8 @@ export interface GDParticipantScore {
   was_interrupted_count: number;
   feedback: string | null;
   rank: number;
+  full_total_score: number | null;
+  full_score_ready: boolean;
 }
 
 export interface GDResultsResponse {
@@ -178,11 +181,11 @@ function pickUploadMime(rawType: string): { mime: string; ext: string } {
 // API functions
 // ---------------------------------------------------------------------------
 
-export async function createGDRoom(): Promise<CreateGDRoomResponse> {
+export async function createGDRoom(scoringMode: "instant" | "detailed" = "instant"): Promise<CreateGDRoomResponse> {
   return fetchJson<CreateGDRoomResponse>("/gd/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify({ scoring_mode: scoringMode }),
   });
 }
 
