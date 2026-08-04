@@ -92,7 +92,17 @@ def _badge(score: float, streak: int) -> str | None:
 
 
 def _streak(completions: list[dict[str, Any]]) -> tuple[int, int]:
-    days = {row.get("date") for row in completions}
+    days: set[str] = set()
+    for row in completions:
+        value = row.get("date")
+        if not isinstance(value, str):
+            continue
+        try:
+            from datetime import date
+            date.fromisoformat(value)
+        except ValueError:
+            continue
+        days.add(value)
     today = datetime.now(timezone.utc).date()
     current = 0
     cursor = today

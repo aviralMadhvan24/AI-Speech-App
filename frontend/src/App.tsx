@@ -29,7 +29,7 @@ import { PracticeView } from "./components/PracticeView";
 import { ProcessingView } from "./components/ProcessingView";
 import { ProfileView } from "./components/ProfileView";
 import { PotdView } from "./components/PotdView";
-import { completePotd } from "./potdApi";
+import { completePotd, type PotdChallenge } from "./potdApi";
 import { ReportView } from "./components/ReportView";
 import { RequireAuth } from "./routes/RequireAuth";
 import { saveRoomSession, clearRoomSession } from "./lib/roomSession";
@@ -489,7 +489,7 @@ export default function App() {
 
   const handleSelectPotd = useCallback(() => navigate("/potd"), [navigate]);
 
-  const handleStartPotd = useCallback((challenge: { id: string; type: string }) => {
+  const handleStartPotd = useCallback((challenge: PotdChallenge) => {
     sessionStorage.setItem("potd.active", JSON.stringify(challenge));
     if (challenge.type === "pronunciation") navigate(`/practice?potdId=${encodeURIComponent(challenge.id)}`);
     else navigate(`/interview?potdId=${encodeURIComponent(challenge.id)}`);

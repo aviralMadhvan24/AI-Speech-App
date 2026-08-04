@@ -143,7 +143,11 @@ async def record_activity(
     Practice, interviews, debates, and POTD completions are also read from
     their durable stores when the profile is built.
     """
-    allowed = {"open", "practice", "potd", "debate_win", "gd_win", "battle_win"}
+    # Practice/POTD/debate/GD activity is derived from durable server records
+    # below. Only lightweight open events are accepted from the browser; the
+    # battle event remains supported until battle results are persisted by the
+    # battle service itself.
+    allowed = {"open", "battle_win"}
     if body.event not in allowed:
         raise HTTPException(status_code=400, detail="unsupported_activity")
     if body.event == "open":
