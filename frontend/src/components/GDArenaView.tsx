@@ -291,7 +291,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
       if (state.state === "prep") {
         toast.info("Get ready!", "Topic revealed. 2 min prep time.");
       } else if (state.state === "discussion") {
-        toast.success("Discussion started!", "Hold SPACE to speak");
+        toast.success("Discussion started!", "Speak naturally — you're being recorded");
       } else if (state.state === "scoring") {
         toast.info("Analyzing...", "AI is processing all speeches");
       }
@@ -403,22 +403,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     return () => window.clearTimeout(timer);
   }, [isSpeaking, currentSpeechId, handleToggleSpeech]);
 
-  // Space bar to toggle speech
-  useEffect(() => {
-    if (state?.state !== "discussion") return;
-    
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !e.repeat) {
-        e.preventDefault();
-        void handleToggleSpeech();
-      }
-    };
-    
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [state?.state, handleToggleSpeech]);
+  // Space bar handler removed - no longer using PTT
 
   // ------- Lobby handlers -------
   const handleCreateRoom = useCallback(async () => {
@@ -489,32 +474,17 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     if (!roomCode || isEndingDiscussion) return;
     setIsEndingDiscussion(true);
     try {
-      // Stop speaking if active
-      if (isSpeaking && currentSpeechId) {
-        try {
-          const blob = await recorder.stop();
-          await endSpeech(roomCode, currentSpeechId, blob);
-          setIsSpeaking(false);
-          setCurrentSpeechId(null);
-          recorder.reset();
-        } catch {
-          // Ignore errors, just end discussion
-        }
-      }
       await endDiscussion(roomCode);
-      toast.info("Ending discussion...", "AI is processing all speeches");
+      toast.info("Ending discussion...", "AI is processing all recordings");
     } catch (err) {
       toast.error("Failed to end", err instanceof Error ? err.message : "Try again");
       console.warn("End discussion failed:", err);
     } finally {
       setIsEndingDiscussion(false);
     }
-  }, [roomCode, isEndingDiscussion, isSpeaking, currentSpeechId, recorder, toast]);
+  }, [roomCode, isEndingDiscussion, toast]);
 
   const handleLeave = useCallback(() => {
-    if (isSpeaking && currentSpeechId) {
-      void handleToggleSpeech();
-    }
     if (roomCode) {
       clearRoomSession("gd", roomCode);
     }
@@ -523,7 +493,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     setResults(null);
     setJoinCodeInput("");
     navigate("/gd");
-  }, [isSpeaking, currentSpeechId, handleToggleSpeech, navigate, roomCode]);
+  }, [navigate, roomCode]);
 
   const handleCopyCode = async () => {
     if (!roomCode) return;
@@ -571,8 +541,8 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               </span>
             </h1>
             <p className="mt-2 text-zinc-400 text-sm md:text-base max-w-2xl leading-relaxed">
-              Real group discussion with 5-10 participants. Push-to-talk mode —
-              hold the button to speak. 15 min discussion, then individual scores and rankings.
+              Real group discussion with 5-10 participants. Live voice mode —
+              speak naturally, AI records and analyzes. 15 min discussion, then individual scores and rankings.
             </p>
           </div>
         </header>
@@ -928,7 +898,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
         </div>
         
         <p className="text-center text-xs text-zinc-500">
-          Prepare your thoughts. Discussion lasts 15 minutes. Push-to-Talk mode.
+          Prepare your thoughts. Discussion lasts 15 minutes. Your voice is recorded automatically.
         </p>
       </section>
     );
@@ -1040,48 +1010,16 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           </div>
         )}
 
-        {/* Click-to-Talk Button (Toggle) */}
+        {/* Recording indicator (Egress handles recording automatically) */}
         <div className="flex flex-col items-center gap-3">
-          <button
-            type="button"
-            onClick={handleToggleSpeech}
-            disabled={isStartingSpeech || isStoppingSpeech}
-            className={[
-              "w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center transition-all",
-              "font-bold text-lg shadow-lg select-none",
-              isStartingSpeech || isStoppingSpeech
-                ? "bg-zinc-600 cursor-wait"
-                : isSpeaking
-                ? "bg-gradient-to-br from-rose-500 to-red-600 scale-110 shadow-rose-500/50 animate-pulse"
-                : "bg-gradient-to-br from-emerald-500 to-cyan-500 hover:scale-105 shadow-emerald-500/30",
-            ].join(" ")}
-          >
-            <div className="flex flex-col items-center gap-1 text-white">
-              {isStartingSpeech ? (
-                <>
-                  <Loader2 className="w-8 h-8 animate-spin" />
-                  <span className="text-xs">STARTING...</span>
-                </>
-              ) : isStoppingSpeech ? (
-                <>
-                  <Loader2 className="w-8 h-8 animate-spin" />
-                  <span className="text-xs">STOPPING...</span>
-                </>
-              ) : isSpeaking ? (
-                <>
-                  <Mic className="w-8 h-8" />
-                  <span className="text-xs">TAP TO STOP</span>
-                </>
-              ) : (
-                <>
-                  <MicOff className="w-8 h-8" />
-                  <span className="text-xs">TAP TO SPEAK</span>
-                </>
-              )}
+          <div className="w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border-2 border-emerald-500/40 animate-pulse">
+            <div className="flex flex-col items-center gap-1 text-emerald-300">
+              <Mic className="w-8 h-8" />
+              <span className="text-xs font-semibold">RECORDING</span>
             </div>
-          </button>
-          <p className="text-xs text-zinc-500 text-center">
-            Tap to start speaking, tap again to stop. Or press SPACE.
+          </div>
+          <p className="text-xs text-zinc-500 text-center max-w-xs">
+            Your voice is being recorded automatically. Just speak naturally — AI will analyze when the discussion ends.
           </p>
           {speechError && (
             <div className="text-xs text-rose-300 bg-rose-500/10 px-3 py-1 rounded">

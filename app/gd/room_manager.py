@@ -17,6 +17,7 @@ from fastapi import HTTPException, WebSocket
 
 from app.auth import User
 from app.core.livekit_client import livekit
+from app.core.egress_client import egress_client
 from app.storage import custom_topics, users_store
 from app.gd.schemas import (
     GDParticipantInternal,
@@ -373,6 +374,8 @@ class GDRoomManager:
             room.discussion_deadline = time.time() + DISCUSSION_SECONDS
         self._spawn_timer(code, "discussion", self._run_discussion_timer(code))
         await self.broadcast(code)
+        # Start egress recording for all participants
+        await self._start_egress_recording(code)
 
     async def _run_discussion_timer(self, code: str) -> None:
         try:
@@ -380,6 +383,50 @@ class GDRoomManager:
         except asyncio.CancelledError:
             return
         await self.end_discussion(code)
+
+    # ------------------------------------------------------------------
+    # Egress recording management
+    # ------------------------------------------------------------------
+
+    async def _start_egress_recording(self, code: str) -> None:
+        """Start track egress for all participants when discussion begins."""
+        room = self._rooms.get(code)
+        if room is None or not room.livekit_room:
+            logger.warning(f"Cannot start egress for {code}: no LiveKit room")
+            return
+
+        if not egress_client.is_available:
+            logger.warning(f"Egress not available for {code}")
+            return
+
+        try:
+            # Give participants a moment to publish their audio tracks
+            await asyncio.sleep(3.0)
+            
+            started = await egress_client.start_all_track_egresses(
+                room_name=room.livekit_room,
+                session_id=room.session_id,
+            )
+            logger.info(f"Started egress for {len(started)} participants in GD {code}")
+        except Exception as e:
+            logger.error(f"Failed to start egress for GD {code}: {e}")
+
+    async def _stop_egress_recording(self, code: str) -> dict[str, str]:
+        """Stop all egress recordings for a room. Returns stopped egresses."""
+        room = self._rooms.get(code)
+        if room is None or not room.livekit_room:
+            return {}
+
+        if not egress_client.is_available:
+            return {}
+
+        try:
+            stopped = await egress_client.stop_all_for_room(room.livekit_room)
+            logger.info(f"Stopped egress for {len(stopped)} participants in GD {code}")
+            return stopped
+        except Exception as e:
+            logger.error(f"Failed to stop egress for GD {code}: {e}")
+            return {}
 
     # ------------------------------------------------------------------
     # Speech management (Push-to-Talk)
@@ -483,7 +530,10 @@ class GDRoomManager:
         return speech
 
     async def end_discussion(self, code: str) -> None:
-        """Transition to scoring phase."""
+        """Transition to scoring phase. Stop egress recordings."""
+        # Stop egress first (before lock) to allow recordings to finalize
+        await self._stop_egress_recording(code)
+        
         async with self._lock_for(code):
             room = self._rooms.get(code)
             if room is None:

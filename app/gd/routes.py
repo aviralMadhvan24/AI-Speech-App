@@ -306,41 +306,107 @@ async def end_discussion_manually(
 
 
 async def _run_scoring(code: str) -> None:
-    """Background task to compute final scores."""
+    """Background task to compute final scores using egress audio files."""
     try:
         room = gd_room_manager.get_state(code)
         if room is None:
             return
         
-        # Wait a moment for any pending speech uploads to complete
-        await asyncio.sleep(3.0)
+        # Wait for egress files to be written (they need time to flush)
+        await asyncio.sleep(8.0)
         
-        # Get persisted speeches
-        persisted_speeches = gd_speeches_store.list_speeches_for_session(room.session_id)
+        logger.info(f"GD scoring: processing egress audio for session {room.session_id}")
         
-        logger.info(f"GD scoring: {len(persisted_speeches)} persisted speeches for session {room.session_id}")
+        # Import transcription + scoring
+        from app.core.egress_client import egress_client
+        from app.asr.whisper_service import transcribe_audio
+        import os
         
-        # Recalculate participant stats from persisted speeches (more accurate than in-memory)
-        speech_stats: dict[str, dict] = {}
-        for speech in persisted_speeches:
-            pid = speech.participant_id
-            if pid not in speech_stats:
-                speech_stats[pid] = {"count": 0, "total_seconds": 0.0}
-            speech_stats[pid]["count"] += 1
-            speech_stats[pid]["total_seconds"] += speech.duration_seconds or 0.0
+        persisted_speeches: list = []
         
-        # Update room participant stats from persisted data
-        for p in room.participants:
-            stats = speech_stats.get(p.participant_id, {"count": 0, "total_seconds": 0.0})
-            logger.info(f"Participant {p.display_name}: in-memory count={p.speech_count}, persisted count={stats['count']}")
-            p.speech_count = stats["count"]
-            p.total_speak_seconds = stats["total_seconds"]
+        # Process each participant's egress audio file
+        for participant in room.participants:
+            audio_path = egress_client.get_output_path(
+                room.session_id, participant.participant_id
+            )
+            
+            if not os.path.exists(audio_path):
+                logger.warning(
+                    f"No egress audio for {participant.display_name} at {audio_path}"
+                )
+                # Fall back to any PTT speeches that might exist
+                ptts = gd_speeches_store.list_speeches_for_participant(
+                    room.session_id, participant.participant_id
+                )
+                if ptts:
+                    persisted_speeches.extend(ptts)
+                continue
+            
+            # Transcribe the full audio
+            try:
+                transcription = transcribe_audio(audio_path)
+                transcript_text = transcription.text if transcription else ""
+                
+                if not transcript_text.strip():
+                    logger.info(f"Empty transcript for {participant.display_name}")
+                    continue
+                
+                # Get audio duration
+                import subprocess
+                result = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-show_entries", 
+                     "format=duration", "-of", "csv=p=0", audio_path],
+                    capture_output=True, text=True, timeout=10
+                )
+                duration = float(result.stdout.strip()) if result.stdout.strip() else 0.0
+                
+                # Create a single speech record for this participant
+                speech_record = GDSpeechRecord(
+                    speech_id=f"egress_{participant.participant_id}",
+                    session_id=room.session_id,
+                    participant_id=participant.participant_id,
+                    display_name=participant.display_name,
+                    started_at=room.scoring_started_at - duration if room.scoring_started_at else 0,
+                    ended_at=room.scoring_started_at or 0,
+                    duration_seconds=duration,
+                    audio_ref=audio_path,
+                    transcript=transcript_text,
+                    analysis_id=None,
+                    pronunciation_score=None,
+                    fluency_score=None,
+                    is_interruption=False,
+                )
+                gd_speeches_store.save_speech(speech_record)
+                persisted_speeches.append(speech_record)
+                
+                # Update participant stats
+                participant.speech_count = 1
+                participant.total_speak_seconds = duration
+                
+                logger.info(
+                    f"Transcribed {participant.display_name}: "
+                    f"{len(transcript_text)} chars, {duration:.1f}s"
+                )
+                
+            except Exception as exc:
+                logger.error(
+                    f"Failed to transcribe egress for {participant.display_name}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        
+        # Also include any PTT speeches that were recorded
+        ptt_speeches = gd_speeches_store.list_speeches_for_session(room.session_id)
+        for ptt in ptt_speeches:
+            if not any(s.speech_id == ptt.speech_id for s in persisted_speeches):
+                persisted_speeches.append(ptt)
+        
+        logger.info(f"GD scoring: {len(persisted_speeches)} total speech records")
         
         # Compute scores
         scores = await compute_final_scores(room, persisted_speeches)
         
         # Persist session
-        import time
+        import time as time_mod
         session_record = GDSessionRecord(
             session_id=room.session_id,
             code=room.code,
@@ -360,7 +426,7 @@ async def _run_scoring(code: str) -> None:
             speech_ids=[s.speech_id for s in persisted_speeches],
             scores=scores,
             created_at=room.created_at,
-            completed_at=time.time(),
+            completed_at=time_mod.time(),
         )
         gd_sessions_store.save_session(session_record)
         
