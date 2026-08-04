@@ -43,8 +43,13 @@ class EgressClient:
 
     def _get_api(self) -> LiveKitAPI:
         """Create LiveKitAPI client."""
-        # Convert ws:// to http:// for API calls
-        http_url = self.url.replace("ws://", "http://").replace("wss://", "https://")
+        # Use internal URL for server-to-server communication
+        internal_url = os.getenv("LIVEKIT_INTERNAL_URL", "")
+        if internal_url:
+            http_url = internal_url
+        else:
+            # Convert ws:// to http:// for API calls
+            http_url = self.url.replace("ws://", "http://").replace("wss://", "https://")
         return LiveKitAPI(
             url=http_url,
             api_key=self.api_key,
@@ -165,32 +170,59 @@ class EgressClient:
         """Start egress for ALL audio tracks in a room.
         
         Returns map of participant_identity -> egress_id.
+        Retries up to 3 times with 5s delay to wait for tracks to be published.
         """
         started = {}
-        participants = await self.get_room_participants(room_name)
         
-        for participant in participants:
-            identity = participant.identity
-            # Find the audio track
-            audio_track = None
-            for track in participant.tracks:
-                if track.type == 1:  # AUDIO type
-                    audio_track = track
-                    break
+        # Retry loop — participants may not have published tracks yet
+        for attempt in range(4):
+            participants = await self.get_room_participants(room_name)
             
-            if audio_track is None:
-                logger.warning(f"No audio track for participant {identity} in {room_name}")
-                continue
-            
-            filename = f"{session_id}_{identity}.ogg"
-            egress_id = await self.start_track_egress(
-                room_name=room_name,
-                track_sid=audio_track.sid,
-                participant_identity=identity,
-                output_filename=filename,
+            logger.info(
+                f"Egress attempt {attempt+1}: found {len(participants)} participants in {room_name}"
             )
-            if egress_id:
-                started[identity] = egress_id
+            
+            for participant in participants:
+                identity = participant.identity
+                if identity in started:
+                    continue  # Already started for this participant
+                    
+                # Find the audio track.
+                # LiveKit protobuf enums:
+                #   TrackType: AUDIO=0, VIDEO=1, DATA=2
+                #   TrackSource: UNKNOWN=0, CAMERA=1, MICROPHONE=2
+                audio_track = None
+                for track in participant.tracks:
+                    logger.info(
+                        f"  Track for {identity}: sid={track.sid}, "
+                        f"type={track.type}, source={track.source}, name={track.name}"
+                    )
+                    # AUDIO type == 0, or MICROPHONE source == 2
+                    if track.type == 0 or track.source == 2:
+                        audio_track = track
+                        break
+                
+                if audio_track is None:
+                    logger.warning(f"No audio track for participant {identity} (attempt {attempt+1})")
+                    continue
+                
+                filename = f"{session_id}_{identity}.ogg"
+                egress_id = await self.start_track_egress(
+                    room_name=room_name,
+                    track_sid=audio_track.sid,
+                    participant_identity=identity,
+                    output_filename=filename,
+                )
+                if egress_id:
+                    started[identity] = egress_id
+            
+            # If we got all participants, stop retrying
+            if len(started) >= len(participants) and len(started) > 0:
+                break
+            
+            # Wait before retrying
+            if attempt < 3:
+                await asyncio.sleep(5)
         
         logger.info(f"Started {len(started)} track egresses for room {room_name}")
         return started

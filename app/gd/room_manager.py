@@ -401,7 +401,7 @@ class GDRoomManager:
 
         try:
             # Give participants a moment to publish their audio tracks
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(8.0)
             
             started = await egress_client.start_all_track_egresses(
                 room_name=room.livekit_room,

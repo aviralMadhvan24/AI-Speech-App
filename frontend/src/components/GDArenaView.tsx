@@ -7,7 +7,6 @@ import {
   Home,
   Loader2,
   Mic,
-  MicOff,
   MessageCircle,
   Phone,
   PhoneOff,
@@ -22,13 +21,11 @@ import {
 import {
   createGDRoom,
   endDiscussion,
-  endSpeech,
   fetchGDTopics,
   flipGDReady,
   getGDResults,
   getLiveKitToken,
   joinGDRoom,
-  startSpeech,
   type GDParticipantPublic,
   type GDResultsResponse,
   type GDTopic,
@@ -36,7 +33,6 @@ import {
 } from "../gdApi";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGDSocket } from "../hooks/useGDSocket";
-import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { useLiveKitAudio } from "../hooks/useLiveKitAudio";
 import {
   clearRoomSession,
@@ -140,11 +136,6 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   const [results, setResults] = useState<GDResultsResponse | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   
-  // PTT state
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [currentSpeechId, setCurrentSpeechId] = useState<string | null>(null);
-  const [speechError, setSpeechError] = useState<string | null>(null);
-
   // LiveKit token state
   const [liveKitToken, setLiveKitToken] = useState<LiveKitTokenResponse | null>(null);
   const [liveKitError, setLiveKitError] = useState<string | null>(null);
@@ -153,7 +144,6 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     roomCode,
     participantId,
   );
-  const recorder = useAudioRecorder();
   const toast = useToast();
 
   // ------- Rehydrate + rejoin from /gd/:code on reload (Req 2.2) -------
@@ -329,81 +319,6 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     () => state?.participants.filter((p) => p.is_ready).length ?? 0,
     [state],
   );
-
-  // ------- PTT Handlers (Click to Start/Stop instead of Hold) -------
-  const [isStartingSpeech, setIsStartingSpeech] = useState(false);
-  const [isStoppingSpeech, setIsStoppingSpeech] = useState(false);
-  // Guard: while a stop is still being processed (endSpeech API + recorder teardown),
-  // block new startSpeech attempts. Prevents the "STARTING stuck" race condition.
-  const stopInProgressRef = useRef(false);
-
-  const handleToggleSpeech = useCallback(async () => {
-    if (!roomCode) return;
-    if (state?.state !== "discussion") return;
-    
-    // If currently speaking, stop
-    if (isSpeaking && currentSpeechId) {
-      if (isStoppingSpeech || stopInProgressRef.current) return; // Prevent double-click
-      
-      const speechIdToEnd = currentSpeechId;
-      const roomCodeCopy = roomCode;
-      
-      // Mark stop in progress BEFORE clearing speaking state
-      stopInProgressRef.current = true;
-      setIsSpeaking(false);
-      setCurrentSpeechId(null);
-      setSpeechError(null);
-      setIsStoppingSpeech(true);
-      
-      // Await the stop + upload (NOT fire-and-forget) so the backend
-      // registers the speech end before the user can start a new one.
-      try {
-        const blob = await recorder.stop();
-        recorder.reset();
-        await endSpeech(roomCodeCopy, speechIdToEnd, blob);
-      } catch (err) {
-        console.error("[GD] Stop/upload failed:", err);
-        // Still allow re-speaking even if upload failed
-      } finally {
-        stopInProgressRef.current = false;
-        setIsStoppingSpeech(false);
-      }
-      
-      return;
-    }
-    
-    // Start speaking — block if a stop is still processing
-    if (isStartingSpeech || stopInProgressRef.current) return;
-    setIsStartingSpeech(true);
-    setSpeechError(null);
-    
-    try {
-      // Register with backend first
-      const response = await startSpeech(roomCode);
-      setCurrentSpeechId(response.speech_id);
-      
-      // Start local recording
-      await recorder.start();
-      setIsSpeaking(true);
-    } catch (err) {
-      setSpeechError(err instanceof Error ? err.message : "Failed to start speech");
-      setIsSpeaking(false);
-      setCurrentSpeechId(null);
-    } finally {
-      setIsStartingSpeech(false);
-    }
-  }, [roomCode, isSpeaking, currentSpeechId, state?.state, recorder, isStartingSpeech, isStoppingSpeech]);
-
-  // Auto-stop after 90 seconds
-  useEffect(() => {
-    if (!isSpeaking || !currentSpeechId) return;
-    const timer = window.setTimeout(() => {
-      void handleToggleSpeech();
-    }, 90 * 1000);
-    return () => window.clearTimeout(timer);
-  }, [isSpeaking, currentSpeechId, handleToggleSpeech]);
-
-  // Space bar handler removed - no longer using PTT
 
   // ------- Lobby handlers -------
   const handleCreateRoom = useCallback(async () => {
@@ -1021,11 +936,6 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
           <p className="text-xs text-zinc-500 text-center max-w-xs">
             Your voice is being recorded automatically. Just speak naturally — AI will analyze when the discussion ends.
           </p>
-          {speechError && (
-            <div className="text-xs text-rose-300 bg-rose-500/10 px-3 py-1 rounded">
-              {speechError}
-            </div>
-          )}
         </div>
 
         {/* Stats */}
