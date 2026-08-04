@@ -320,6 +320,8 @@ async def _run_scoring(code: str) -> None:
         # Import transcription + scoring
         from app.core.egress_client import egress_client
         from app.asr.whisper_service import transcribe_audio
+        from app.audio.schemas import AudioAsset
+        from app.fluency.service import build_fluency_section
         import os
         
         persisted_speeches: list = []
@@ -360,6 +362,33 @@ async def _run_scoring(code: str) -> None:
                 )
                 duration = float(result.stdout.strip()) if result.stdout.strip() else 0.0
                 
+                # Compute fluency (clarity/WPM) from the transcript + duration.
+                # Without this, the communication sub-score stays at 0.
+                fluency_score = None
+                try:
+                    audio_asset = AudioAsset(
+                        audio_id=f"egress_{participant.participant_id}",
+                        original_path=audio_path,
+                        duration_seconds=duration,
+                        sample_rate=48000,
+                        channels=1,
+                        format="ogg",
+                    )
+                    fluency = build_fluency_section(
+                        transcription=transcription,
+                        audio_asset=audio_asset,
+                    )
+                    fluency_score = fluency.clarity_score
+                    logger.info(
+                        f"Fluency for {participant.display_name}: "
+                        f"clarity={fluency_score}, wpm={fluency.words_per_minute}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Fluency computation failed for {participant.display_name}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                
                 # Create a single speech record for this participant
                 speech_record = GDSpeechRecord(
                     speech_id=f"egress_{participant.participant_id}",
@@ -373,7 +402,7 @@ async def _run_scoring(code: str) -> None:
                     transcript=transcript_text,
                     analysis_id=None,
                     pronunciation_score=None,
-                    fluency_score=None,
+                    fluency_score=fluency_score,
                     is_interruption=False,
                 )
                 gd_speeches_store.save_speech(speech_record)
