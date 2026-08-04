@@ -37,7 +37,7 @@ logger = logging.getLogger("gd.room_manager")
 ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 ROOM_CODE_LENGTH = 6
 
-PREP_SECONDS = 120  # 2 minutes prep after all ready
+PREP_SECONDS = 10  # short prep for testing/demo
 DISCUSSION_SECONDS = 900  # 15 minutes discussion
 
 # Dev mode allows single-player testing (set GD_DEV_MODE=true in .env)
