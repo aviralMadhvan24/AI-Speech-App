@@ -6,7 +6,11 @@ import {
   type FinalStanding,
   type ScoreBreakdown,
 } from "../debateApi";
-import { getGDSessionDetail, type GDResultsResponse } from "../gdApi";
+import {
+  getGDSessionDetail,
+  type GDParticipantScore,
+  type GDResultsResponse,
+} from "../gdApi";
 import { DebateTurnsAudio } from "./DebateTurnsAudio";
 
 type PerformanceResultKind = "debate" | "gd";
@@ -112,29 +116,34 @@ function ScoreBreakdownPanel({
   const content = breakdown.content?.total ?? contentScore ?? null;
   const details = breakdown.content?.details ?? null;
 
-  const rows: { label: string; value: number | null; max: number; note?: string }[] = [
-    { label: "Pronunciation", value: pronunciation, max: 25, note: breakdown.pronunciation?.raw != null ? `raw ${Math.round(breakdown.pronunciation.raw)}/100` : undefined },
-    { label: "Fluency", value: fluency, max: 25, note: breakdown.fluency?.raw != null ? `clarity ${Math.round(breakdown.fluency.raw)}/100` : undefined },
-    { label: "Content", value: content, max: 50 },
-  ];
-
   return (
     <div className="mt-3 space-y-2 border-t border-zinc-700/60 pt-3">
       <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
         Score breakdown
       </div>
-      <div className="grid grid-cols-3 gap-2">
-        {rows.map((row) => (
-          <div key={row.label} className="rounded-lg bg-zinc-800/60 p-2">
-            <div className="text-[11px] text-zinc-400">{row.label}</div>
-            <div className={`text-sm font-semibold tabular-nums ${componentTone(row.value, row.max)}`}>
-              {row.value != null ? row.value.toFixed(1) : "Not scored"}
-              <span className="text-[11px] font-normal text-zinc-500">/{row.max}</span>
-            </div>
-            {row.note && <div className="text-[10px] text-zinc-500">{row.note}</div>}
-          </div>
-        ))}
-      </div>
+      <ComponentGrid
+        items={[
+          {
+            label: "Pronunciation",
+            value: pronunciation,
+            max: 25,
+            note:
+              breakdown.pronunciation?.raw != null
+                ? `raw ${Math.round(breakdown.pronunciation.raw)}/100`
+                : undefined,
+          },
+          {
+            label: "Fluency",
+            value: fluency,
+            max: 25,
+            note:
+              breakdown.fluency?.raw != null
+                ? `clarity ${Math.round(breakdown.fluency.raw)}/100`
+                : undefined,
+          },
+          { label: "Content", value: content, max: 50 },
+        ]}
+      />
 
       {details && (
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-zinc-800/40 p-2 text-[11px] text-zinc-400 sm:grid-cols-4">
@@ -162,6 +171,79 @@ function ScoreBreakdownPanel({
       {details?.off_topic && (
         <p className="text-[11px] leading-relaxed text-rose-300/80">
           Flagged as off-topic: the speech did not address the motion.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Reusable row of weighted score components, each shown out of its own max. */
+function ComponentGrid({
+  items,
+  columns = 3,
+}: {
+  items: { label: string; value: number | null; max: number; note?: string }[];
+  columns?: 3 | 5;
+}) {
+  return (
+    <div
+      className={`grid gap-2 ${columns === 5 ? "grid-cols-3 sm:grid-cols-5" : "grid-cols-3"}`}
+    >
+      {items.map((item) => (
+        <div key={item.label} className="rounded-lg bg-zinc-800/60 p-2">
+          <div className="text-[11px] text-zinc-400">{item.label}</div>
+          <div
+            className={`text-sm font-semibold tabular-nums ${componentTone(item.value, item.max)}`}
+          >
+            {item.value != null ? item.value.toFixed(1) : "Not scored"}
+            <span className="text-[11px] font-normal text-zinc-500">/{item.max}</span>
+          </div>
+          {item.note && <div className="text-[10px] text-zinc-500">{item.note}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * GD rubric breakdown: content 30, communication 20, participation 20,
+ * listening 15, leadership 15 (see `app/gd/scoring.py`).
+ */
+function GDScoreBreakdownPanel({ score }: { score: GDParticipantScore }) {
+  return (
+    <div className="mt-3 space-y-2 border-t border-zinc-700/60 pt-3">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+        Score breakdown
+      </div>
+      <ComponentGrid
+        columns={5}
+        items={[
+          { label: "Content", value: score.content_quality, max: 30 },
+          {
+            label: "Communication",
+            value: score.communication,
+            max: 20,
+            note: "pronunciation + fluency",
+          },
+          {
+            label: "Participation",
+            value: score.participation,
+            max: 20,
+            note: "speak time + turns",
+          },
+          { label: "Listening", value: score.listening, max: 15 },
+          { label: "Leadership", value: score.leadership, max: 15 },
+        ]}
+      />
+      {(score.interruption_count > 0 || score.was_interrupted_count > 0) && (
+        <p className="text-[11px] text-zinc-500">
+          Interrupted others {score.interruption_count}× · was interrupted{" "}
+          {score.was_interrupted_count}×
+        </p>
+      )}
+      {score.speech_count === 0 && (
+        <p className="text-[11px] leading-relaxed text-amber-300/80">
+          Did not speak, so no rubric points could be awarded.
         </p>
       )}
     </div>
@@ -229,6 +311,7 @@ function GDResult({ result }: { result: GDResultsResponse }) {
               {isWinner && <Trophy className="h-4 w-4 text-amber-300" aria-label="Winner" />}
             </div>
             {score.feedback && <p className="mt-3 border-l-2 border-emerald-500/40 pl-3 text-xs leading-relaxed text-zinc-400">{score.feedback}</p>}
+            <GDScoreBreakdownPanel score={score} />
           </article>
         );
       })}
