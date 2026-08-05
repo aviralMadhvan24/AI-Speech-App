@@ -39,6 +39,7 @@ from app.core.logging_helpers import stage_log
 from app.debate.content_scoring import score_debate_content, ContentScoreResult
 from app.fluency.schemas import FluencyResult
 from app.fluency.service import build_fluency_section
+from app.pronunciation.transcript_cleaner import normalize_transcript
 from app.schemas.pronunciation_schema import AnalyzeResponse
 from app.schemas.pronunciation_schema import PronunciationResult
 
@@ -233,6 +234,7 @@ async def compute_ai_score_with_content(
     transcript: str,
     motion_title: str,
     motion_text: str,
+    precomputed_content: Optional[ContentScoreResult] = None,
 ) -> tuple[float, bool, dict]:
     """Enhanced AI scoring including content analysis.
 
@@ -270,7 +272,15 @@ async def compute_ai_score_with_content(
     content_score: Optional[float] = None
     content_feedback: str = ""
 
-    if transcript and len(transcript.strip()) >= 20:
+    if precomputed_content is not None and precomputed_content.available:
+        # Reuse the content judgement from an earlier pass. The LLM is not
+        # deterministic, so re-scoring the same speech would make the detailed
+        # score drift for reasons unrelated to pronunciation - and cost an extra
+        # API call per turn.
+        content_result = precomputed_content
+        content_score = float(precomputed_content.total)
+        content_feedback = precomputed_content.feedback
+    elif transcript and len(transcript.strip()) >= 20:
         try:
             content_result = await score_debate_content(
                 transcript=transcript,
@@ -398,6 +408,7 @@ async def compute_full_score_with_pronunciation(
     motion_title: str,
     motion_text: str,
     prior_clarity_score: Optional[float] = None,
+    prior_content: Optional[ContentScoreResult] = None,
 ) -> tuple[float, bool, dict]:
     """Compute the full detailed score including pronunciation analysis.
 
@@ -424,11 +435,16 @@ async def compute_full_score_with_pronunciation(
     from app.asr.schemas import TranscriptionResult
     from app.pronunciation.service import assess_pronunciation
 
-    # Build a minimal transcription result for pronunciation assessment
+    # Build a minimal transcription result for pronunciation assessment.
+    # `normalized_text` and `model` are required fields; omitting them raised a
+    # ValidationError that aborted every detailed run before pronunciation ever
+    # got a chance to execute.
     transcription = TranscriptionResult(
         text=transcript,
+        normalized_text=normalize_transcript(transcript),
         words=[],
         provider="cached",
+        model="cached",
         language="en",
     )
 
@@ -452,13 +468,15 @@ async def compute_full_score_with_pronunciation(
     if prior_clarity_score is not None:
         fluency = FluencyResult(clarity_score=float(prior_clarity_score))
 
-    # Recompute the full score WITH pronunciation
+    # Recompute the full score WITH pronunciation, reusing the instant pass's
+    # content judgement so only pronunciation changes between the two scores.
     full_score, unavailable, breakdown = await compute_ai_score_with_content(
         pronunciation=pronunciation,
         fluency=fluency,
         transcript=transcript,
         motion_title=motion_title,
         motion_text=motion_text,
+        precomputed_content=prior_content,
     )
 
     return full_score, unavailable, breakdown
