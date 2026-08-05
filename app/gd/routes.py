@@ -47,6 +47,8 @@ from pydantic import BaseModel as PydanticBaseModel
 class CreateGDRoomRequest(PydanticBaseModel):
     """Request body for POST /gd/rooms."""
     scoring_mode: Literal["instant", "detailed"] = "instant"
+    # Topic chosen by the host. Omit to get a random one from the catalog.
+    topic_id: Optional[str] = None
 
 logger = logging.getLogger("gd.routes")
 
@@ -62,7 +64,11 @@ async def create_room(
     body: CreateGDRoomRequest = CreateGDRoomRequest(),
     current_user: User = Depends(require_user),
 ) -> CreateGDRoomResponse:
-    room = await gd_room_manager.create_room(current_user, scoring_mode=body.scoring_mode)
+    room = await gd_room_manager.create_room(
+        current_user,
+        scoring_mode=body.scoring_mode,
+        topic_id=body.topic_id,
+    )
     first = room.participants[0]
     return CreateGDRoomResponse(
         room_code=room.code,
@@ -532,6 +538,7 @@ async def _run_detailed_pronunciation_gd(
     """Background task: run pronunciation on GD speeches and recompute communication scores."""
     from app.pronunciation.service import assess_pronunciation
     from app.asr.schemas import TranscriptionResult
+    from app.pronunciation.transcript_cleaner import normalize_transcript
     from app.gd.scoring import compute_communication_score
 
     try:
@@ -562,13 +569,24 @@ async def _run_detailed_pronunciation_gd(
                     continue
 
                 try:
+                    # `normalized_text` and `model` are required fields. Omitting
+                    # them raised a ValidationError that the except-branch below
+                    # swallowed as a warning, so GD detailed pronunciation never
+                    # produced a score and nobody saw an error.
+                    transcript_text = speech.transcript or ""
                     transcription = TranscriptionResult(
-                        text=speech.transcript or "",
+                        text=transcript_text,
+                        normalized_text=normalize_transcript(transcript_text),
                         words=[],
                         provider="cached",
+                        model="cached",
                         language="en",
                     )
-                    pronunciation = assess_pronunciation(
+                    # Off the event loop: this is a 60-110s CPU-bound call, and
+                    # running it inline froze every other request (and the GD
+                    # websockets) until it finished.
+                    pronunciation = await asyncio.to_thread(
+                        assess_pronunciation,
                         audio_path=audio_path,
                         expected_text=speech.transcript,
                         transcription=transcription,

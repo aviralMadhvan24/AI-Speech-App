@@ -39,6 +39,7 @@ import {
 } from "../lib/roomSession";
 import { Avatar } from "./Avatar";
 import { DebateTurnsAudio } from "./DebateTurnsAudio";
+import { TopicSelect } from "./TopicSelect";
 
 interface DebateArenaViewProps {
   onBack: () => void;
@@ -240,6 +241,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [motions, setMotions] = useState<MotionPublic[]>([]);
   const [motionsError, setMotionsError] = useState<string | null>(null);
+  // null = let the backend pick a random motion.
+  const [selectedMotionId, setSelectedMotionId] = useState<string | null>(null);
   const [readyBusy, setReadyBusy] = useState(false);
   const [uploadingTurn, setUploadingTurn] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -575,7 +578,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     setCreating(true);
     setJoinError(null);
     try {
-      const response = await createDebateRoom(scoringMode);
+      const response = await createDebateRoom(scoringMode, selectedMotionId);
       saveRoomSession("debate", response.room_code, {
         participantId: response.participant_id,
         savedAt: Date.now(),
@@ -590,7 +593,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, [navigate, scoringMode]);
+  }, [navigate, scoringMode, selectedMotionId]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -764,9 +767,20 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               </div>
             </div>
             <p className="text-sm text-zinc-400">
-              A random motion will be assigned when you create the room. Share the
-              code with your opponent — the debate starts once you are both ready.
+              Pick a motion or leave it random. Share the code with your
+              opponent — the debate starts once you are both ready.
             </p>
+            {/* Motion picker. Mirrors the selectable list further down the page. */}
+            <TopicSelect
+              label="Motion"
+              options={motions}
+              value={selectedMotionId}
+              onChange={setSelectedMotionId}
+              randomLabel="Random motion"
+              accent="violet"
+              disabled={motions.length === 0}
+              emptyLabel="Loading motions…"
+            />
             {/* Scoring mode toggle */}
             <div className="space-y-2">
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Scoring mode</p>
@@ -878,7 +892,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
             </span>
           </div>
           <p className="text-xs text-zinc-500">
-            A random motion is assigned on room creation. Preview below.
+            Tap a motion to use it for your next room, or leave it unselected for
+            a random one.
           </p>
           {motionsError && (
             <div className="text-sm text-rose-300">{motionsError}</div>
@@ -894,17 +909,37 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
               className="max-h-64 overflow-y-auto space-y-2 pr-1"
               role="list"
             >
-              {motions.map((m) => (
-                <li
-                  key={m.id}
-                  className="bg-zinc-900/40 border border-zinc-800/60 rounded-xl px-3 py-2"
-                >
-                  <div className="text-sm font-medium text-zinc-100">
-                    {m.title}
-                  </div>
-                  <div className="text-xs text-zinc-400 mt-0.5">{m.text}</div>
-                </li>
-              ))}
+              {motions.map((m) => {
+                const isSelected = selectedMotionId === m.id;
+                return (
+                  <li key={m.id}>
+                    <button
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() =>
+                        setSelectedMotionId(isSelected ? null : m.id)
+                      }
+                      className={`w-full rounded-xl border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 ${
+                        isSelected
+                          ? "border-violet-500/60 bg-violet-600/15"
+                          : "border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-sm font-medium text-zinc-100">
+                          {m.title}
+                        </div>
+                        {isSelected && (
+                          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-violet-300">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-zinc-400">{m.text}</div>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
@@ -928,9 +963,12 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
       liveAudioUnavailable);
 
   // Show motion only from prep onwards (Requirement 4.1 — hidden until then).
+  // Exception: a motion the creator picked on purpose is shown straight away,
+  // since they already know it and may want to share it before starting.
   const motionRevealed =
     !!motion &&
-    (roomState === "prep" ||
+    (state?.motion_chosen === true ||
+      roomState === "prep" ||
       roomState === "speaking" ||
       roomState === "scoring" ||
       roomState === "complete");
@@ -1028,8 +1066,22 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         <div className="text-5xl md:text-6xl font-mono font-bold tracking-[0.35em] gradient-text">
           {roomCode}
         </div>
+        {motionRevealed && motion ? (
+          <div className="mx-auto max-w-2xl rounded-xl border border-violet-500/30 bg-violet-500/5 px-5 py-4">
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-violet-300">
+              Motion
+            </div>
+            <h3 className="mt-1 text-lg font-semibold leading-snug text-zinc-100">
+              {motion.title}
+            </h3>
+            <p className="mt-1 text-sm leading-relaxed text-zinc-400">{motion.text}</p>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-400 max-w-xl mx-auto">
+            Motion: <span className="text-zinc-500 italic">hidden until prep phase</span>.
+          </p>
+        )}
         <p className="text-sm text-zinc-400 max-w-xl mx-auto">
-          Motion: <span className="text-zinc-500 italic">hidden until prep phase</span>.
           Debate auto-starts when all participants are ready.
         </p>
         
@@ -1219,42 +1271,25 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           <p className="text-xs text-zinc-500 text-center">
             AI scoring will begin after all turns are complete.
           </p>
+          {/* Mid-debate we only confirm the handover. Per-turn scores are
+              deliberately not shown here: they are provisional (pronunciation
+              and, in detailed mode, the full score land later) so showing them
+              between turns was misleading. The full breakdown appears on the
+              result screen once every turn is in. */}
           {lastTurnResult && (
-            <div className="card-glass p-4 space-y-2 text-center max-w-md">
+            <div className="card-glass p-4 space-y-1.5 text-center max-w-md">
               <div className="inline-flex items-center gap-2 chip-emerald">
                 <Check className="w-3 h-3" />
-                Turn submitted!
+                Turn submitted
               </div>
-              <div className="text-2xl font-bold text-zinc-100">
-                Score: {lastTurnResult.ai_score.toFixed(1)}/100
-              </div>
-              {lastTurnResult.score_breakdown && (
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div className="bg-zinc-800/50 rounded-lg p-2">
-                    <div className="text-zinc-400">Pronunciation</div>
-                    <div className="text-zinc-100 font-semibold">
-                      {lastTurnResult.score_breakdown.pronunciation?.weighted?.toFixed(1) ?? "N/A"}/25
-                    </div>
-                  </div>
-                  <div className="bg-zinc-800/50 rounded-lg p-2">
-                    <div className="text-zinc-400">Fluency</div>
-                    <div className="text-zinc-100 font-semibold">
-                      {lastTurnResult.score_breakdown.fluency?.weighted?.toFixed(1) ?? "N/A"}/25
-                    </div>
-                  </div>
-                  <div className="bg-zinc-800/50 rounded-lg p-2">
-                    <div className="text-zinc-400">Content</div>
-                    <div className="text-zinc-100 font-semibold">
-                      {lastTurnResult.content_score?.toFixed(1) ?? "N/A"}/50
-                    </div>
-                  </div>
-                </div>
-              )}
-              {lastTurnResult.content_feedback && (
-                <p className="text-xs text-zinc-400 italic">
-                  "{lastTurnResult.content_feedback}"
-                </p>
-              )}
+              <p className="text-sm font-medium text-zinc-200">
+                {activeSpeaker
+                  ? `Speaker ${activeSpeaker.turn_index + 1} speaking`
+                  : "Waiting for the next speaker…"}
+              </p>
+              <p className="text-xs text-zinc-500">
+                Your score appears once the debate finishes.
+              </p>
             </div>
           )}
         </div>

@@ -187,6 +187,18 @@ class DebateRoomManager:
             secrets.choice(ROOM_CODE_ALPHABET) for _ in range(ROOM_CODE_LENGTH)
         )
 
+    def _find_motion(self, motion_id: str) -> Motion:
+        """Resolve a caller-chosen motion id against the catalog.
+
+        Raises 400 rather than silently falling back to a random motion, so a
+        stale or mistyped id is visible instead of starting a debate on a
+        different topic than the creator picked.
+        """
+        for motion in _load_motions():
+            if motion.id == motion_id:
+                return motion
+        raise HTTPException(status_code=400, detail="motion_not_found")
+
     def _pick_random_motion(self) -> Motion:
         motions = _load_motions()
         return random.choice(motions)
@@ -280,9 +292,17 @@ class DebateRoomManager:
     # Room lifecycle
     # ------------------------------------------------------------------
 
-    async def create_room(self, user: User, scoring_mode: str = "instant") -> DebateRoom:
+    async def create_room(
+        self,
+        user: User,
+        scoring_mode: str = "instant",
+        motion_id: Optional[str] = None,
+    ) -> DebateRoom:
         """Create a new room with a unique code and register the caller
         as the first participant.
+
+        ``motion_id`` lets the creator choose the motion; when omitted one is
+        picked at random, which is the original behaviour.
         """
         async with self._manager_lock:
             self._sweep_stale()
@@ -295,7 +315,11 @@ class DebateRoomManager:
             if code is None:
                 raise RuntimeError("Could not allocate a unique room code")
 
-            motion = self._pick_random_motion()
+            motion = (
+                self._find_motion(motion_id)
+                if motion_id
+                else self._pick_random_motion()
+            )
             now = time.time()
             first = ParticipantInternal(
                 participant_id=_new_participant_id(),
@@ -313,6 +337,7 @@ class DebateRoomManager:
                 motion_id=motion.id,
                 motion_title=motion.title,
                 motion_text=motion.text,
+                motion_chosen=bool(motion_id),
                 state="waiting",
                 paused=False,
                 scoring_mode=scoring_mode if scoring_mode in ("instant", "detailed") else "instant",

@@ -77,6 +77,10 @@ class GDRoom(BaseModel):
     topic_title: str
     topic_text: str
     topic_category: str
+    # True when the host picked this topic explicitly. A chosen topic is shown
+    # in the lobby (they already know it), while a randomly assigned one stays
+    # hidden until prep so nobody can prepare early.
+    topic_chosen: bool = False
     state: GDState = "waiting"
     scoring_mode: Literal["instant", "detailed"] = "instant"
     participants: list[GDParticipantInternal] = Field(default_factory=list)
@@ -132,6 +136,9 @@ class PublicGDRoom(BaseModel):
     state: GDState
     scoring_mode: Literal["instant", "detailed"] = "instant"
     topic: Optional[GDTopicPublic] = None
+    # Lets the client reveal a host-chosen topic in the lobby while keeping a
+    # randomly assigned one hidden until prep.
+    topic_chosen: bool = False
     participants: list[GDParticipantPublic] = Field(default_factory=list)
     active_speakers: list[GDActiveSpeaker] = Field(default_factory=list)
     prep_deadline: Optional[float] = None
@@ -167,7 +174,10 @@ def to_public(room: GDRoom) -> PublicGDRoom:
             title=room.topic_title,
             text=room.topic_text,
             category=room.topic_category,
-        ) if room.state != "waiting" else None,  # Hide topic in waiting
+        # Hidden while waiting so nobody prepares early — unless the host chose
+        # the topic deliberately, in which case it is theirs to share.
+        ) if (room.state != "waiting" or room.topic_chosen) else None,
+        topic_chosen=room.topic_chosen,
         participants=[
             GDParticipantPublic(
                 participant_id=p.participant_id,

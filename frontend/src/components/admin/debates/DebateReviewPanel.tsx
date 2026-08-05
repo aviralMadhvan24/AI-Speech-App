@@ -43,6 +43,7 @@ interface DebateRecord {
   turn_ids: string[];
   winner_participant_id: string | null;
   effective_scores: EffectiveScoreEntry[];
+  scoring_mode: "instant" | "detailed";
   created_at: number;
   completed_at: number;
 }
@@ -70,6 +71,9 @@ interface DebateTurn {
   } | null;
   submitted_at: number;
   forfeit_reason: "timeout" | "reconnect_timeout" | null;
+  // Detailed (pronunciation-inclusive) score, filled in by a background pass.
+  full_ai_score: number | null;
+  full_score_ready: boolean;
 }
 
 interface DebateDetailResponse {
@@ -226,6 +230,13 @@ export function DebateReviewPanel({
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
+  // In detailed mode the pronunciation-inclusive score lands later, from a
+  // background pass. Refresh until every non-forfeit turn has it, so a teacher
+  // is not left reviewing provisional numbers.
+  const detailedPending =
+    record?.scoring_mode === "detailed" &&
+    turns.some((t) => t.forfeit_reason === null && !t.full_score_ready);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -263,6 +274,12 @@ export function DebateReviewPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!detailedPending) return;
+    const timer = setInterval(() => void load(), 20000);
+    return () => clearInterval(timer);
+  }, [detailedPending, load]);
 
   // Auto-clear the winner toast after a few seconds.
   useEffect(() => {
@@ -392,6 +409,18 @@ export function DebateReviewPanel({
         </div>
       )}
 
+      {/* Scoped notice: the turns below stay reviewable while the detailed
+          pronunciation pass finishes in the background. */}
+      {detailedPending && (
+        <div className="card-glass border-amber-500/30 bg-amber-500/5 px-4 py-3 flex items-start gap-3 text-sm text-amber-200">
+          <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
+          <div>
+            Detailed scores are still being prepared for this debate. Scores shown
+            below are provisional and will refresh automatically.
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="card-glass border-rose-500/40 px-4 py-3 flex items-start gap-3 text-sm text-rose-300">
           <Info className="w-4 h-4 mt-0.5 shrink-0" />
@@ -516,6 +545,23 @@ export function DebateReviewPanel({
                         </div>
                       </div>
                     </div>
+
+                    {/* Detailed score state for this turn */}
+                    {record?.scoring_mode === "detailed" && turn.forfeit_reason === null && (
+                      turn.full_score_ready && turn.full_ai_score != null ? (
+                        <p className="text-[11px] text-zinc-400">
+                          Detailed score (with pronunciation):{" "}
+                          <span className="font-semibold tabular-nums text-zinc-100">
+                            {turn.full_ai_score.toFixed(1)}/100
+                          </span>
+                        </p>
+                      ) : (
+                        <p className="inline-flex items-center gap-1.5 text-[11px] text-amber-300">
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                          Detailed score preparing…
+                        </p>
+                      )
+                    )}
 
                     {/* Turn audio playback */}
                     {turn.audio_url ? (
