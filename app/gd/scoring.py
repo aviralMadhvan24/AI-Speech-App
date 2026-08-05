@@ -263,7 +263,15 @@ def compute_leadership_score(
     - First speaker bonus (5 pts)
     - High engagement (5 pts): speech count > avg
     - Balanced (5 pts): interruption penalty
+
+    Someone who never spoke scores 0. The etiquette and first-speaker bonuses
+    are awarded from flags rather than from audio, so without this guard a
+    participant who produced no speech at all still collected points for "no
+    interruptions" and finished with a non-zero total.
     """
+    if participant.speech_count <= 0:
+        return 0.0
+
     score = 0.0
     
     # First speaker bonus
