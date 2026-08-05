@@ -1131,6 +1131,35 @@ class DebateRoomManager:
                 self._run_detailed_pronunciation(room.code, room.debate_id, room.motion_title, room.motion_text)
             )
 
+    @staticmethod
+    def _content_result_from_breakdown(breakdown: dict):
+        """Rebuild the instant pass's ``ContentScoreResult`` from a breakdown.
+
+        Lets the detailed pass reuse the content judgement instead of asking the
+        LLM to grade the same speech twice. Returns None when the stored
+        breakdown has no usable content detail.
+        """
+        from app.debate.content_scoring import ContentScoreResult
+
+        content = breakdown.get("content") or {}
+        details = content.get("details") or {}
+        if not details or content.get("total") is None:
+            return None
+
+        try:
+            return ContentScoreResult(
+                relevance=int(details.get("relevance", 0)),
+                arguments=int(details.get("arguments", 0)),
+                structure=int(details.get("structure", 0)),
+                vocabulary=int(details.get("vocabulary", 0)),
+                total=int(content["total"]),
+                feedback=str(content.get("feedback", "") or ""),
+                available=True,
+                off_topic=bool(details.get("off_topic", False)),
+            )
+        except (TypeError, ValueError):
+            return None
+
     def ensure_detailed_scoring(
         self, code: str, debate_id: str, motion_title: str, motion_text: str
     ) -> bool:
@@ -1206,8 +1235,10 @@ class DebateRoomManager:
                 # detailed score as a pronunciation-only constant.
                 transcript = turn.transcript or ""
                 prior_clarity = None
+                prior_content = None
                 if turn.score_breakdown:
                     prior_clarity = (turn.score_breakdown.get("fluency") or {}).get("raw")
+                    prior_content = self._content_result_from_breakdown(turn.score_breakdown)
 
                 try:
                     full_score, _unavailable, breakdown = await compute_full_score_with_pronunciation(
@@ -1216,6 +1247,7 @@ class DebateRoomManager:
                         motion_title=motion_title,
                         motion_text=motion_text,
                         prior_clarity_score=prior_clarity,
+                        prior_content=prior_content,
                     )
                     # Update persisted turn
                     debate_turns_store.update_turn_full_score(
