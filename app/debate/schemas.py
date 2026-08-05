@@ -156,6 +156,10 @@ class FinalStanding(BaseModel):
     is_winner: bool = False
     full_ai_score: Optional[float] = None  # Detailed score with pronunciation
     full_score_ready: bool = False
+    # Per-component breakdown ({pronunciation, fluency, content, ...}) copied
+    # from the participant's turn so the result screen can show where the
+    # score came from instead of just a single number.
+    score_breakdown: Optional[dict] = None
 
 
 class CompletedTurnPublic(BaseModel):
@@ -299,6 +303,11 @@ class DebateTurn(BaseModel):
     content_score: Optional[float] = None  # 0-50, from LLM content analysis
     content_feedback: Optional[str] = None  # One-line feedback from LLM
     score_breakdown: Optional[dict] = None  # Full breakdown: {pronunciation, fluency, content}
+    # ASR transcript for this turn. Persisted so the detailed (background)
+    # pronunciation pass can re-score content and align phonemes instead of
+    # starting from an empty string, which previously collapsed the detailed
+    # score down to pronunciation alone.
+    transcript: Optional[str] = None
     submitted_at: float  # unix seconds
     forfeit_reason: Optional[Literal["timeout", "reconnect_timeout"]] = None
     

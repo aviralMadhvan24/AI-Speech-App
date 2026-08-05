@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from app.core.llm_client import llm
+from app.core.llm_client import LLMUnavailableError, llm
 
 logger = logging.getLogger("debate.content_scoring")
 
@@ -63,10 +63,13 @@ SCORING RULES:
 **OFF-TOPIC = AUTOMATIC FAIL:**
 - ANY sentence unrelated to motion → relevance: 0-3, ALL other scores: max 5 each
 - Random topics (food, personal stuff, unrelated facts) → total under 15
+- "off_topic" means the speech does NOT address the motion. Judge this on
+  subject matter only. A SHORT speech that does address the motion is NOT
+  off-topic — set "off_topic": false for it.
 
-**LENGTH REQUIREMENTS:**
-- Under 50 words = all scores capped at 25%
-- Under 100 words = all scores capped at 50%
+**LENGTH:**
+- Do NOT reduce scores for a short speech. Length is penalised separately,
+  after your judgement. Score only what was actually said.
 
 **QUALITY:**
 - Restating motion without argument = relevance 0-4
@@ -78,20 +81,64 @@ CRITERIA:
 3. STRUCTURE (0-10): Clear stance → points → conclusion
 4. VOCABULARY (0-10): Persuasive language
 
-**FEEDBACK FORMAT - YOU MUST:**
-1. Quote 2-3 EXACT phrases from transcript in "quotation marks"
-2. For EACH quote, say what's wrong: off-topic/vague/unsupported/etc
-3. Give ONE specific fix suggestion
+**FEEDBACK CONTENT:**
+Quote 2-3 exact phrases from the transcript, say what is wrong with each one
+(off-topic / vague / unsupported), and end with ONE specific fix suggestion.
 
 EXAMPLE FEEDBACK:
-"Your phrase 'pizza is really delicious' is completely OFF-TOPIC - the motion is about technology. Also, 'I think it's bad' lacks evidence - say WHY with examples like 'Technology causes X because Y'. Add specific arguments with data or real-world examples."
+"The phrase 'pizza is really delicious' is completely OFF-TOPIC - the motion is about technology. 'I think it's bad' lacks evidence - say WHY, for example 'Technology causes X because Y'. Add specific arguments with data or real-world examples."
 
 BAD FEEDBACK (too generic):
 "The speech lacks relevance" - NO! Quote the actual problematic words!
 
-Return one JSON object only. Do not use Markdown or add any text before or after it.
-{{"relevance": 0, "arguments": 0, "structure": 0, "vocabulary": 0, "total": 0, "off_topic": false, "feedback": "Specific feedback quoting the transcript"}}
+**OUTPUT FORMAT - FOLLOW EXACTLY:**
+- Return ONE JSON object. No Markdown, no text before or after it.
+- "feedback" MUST be a single plain string. Never a list, never nested objects.
+- When quoting the speech inside "feedback", use single quotes ('like this').
+  Never use double quotes inside the string, as that breaks the JSON.
+- All six score fields are integers.
+
+{{"relevance": 0, "arguments": 0, "structure": 0, "vocabulary": 0, "total": 0, "off_topic": false, "feedback": "One string quoting the transcript with single quotes"}}
 """
+
+
+def _coerce_feedback(raw: object) -> str:
+    """Flatten LLM feedback into one readable sentence-style string.
+
+    The prompt asks for a plain string, but models sometimes return a list of
+    ``{quote, issue, fix}`` objects instead. Passing that straight to ``str()``
+    would surface a Python repr (``[{'quote': ...}]``) to the student, so the
+    parts are joined into prose instead.
+    """
+    if isinstance(raw, str):
+        return raw.strip()
+
+    if isinstance(raw, dict):
+        raw = [raw]
+
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for item in raw:
+            if isinstance(item, str):
+                parts.append(item.strip())
+                continue
+            if not isinstance(item, dict):
+                continue
+            quote = str(item.get("quote", "")).strip().strip('"')
+            issue = str(item.get("issue", "")).strip()
+            fix = str(item.get("fix", "")).strip()
+            sentence = ""
+            if quote:
+                sentence = f"'{quote}'"
+            if issue:
+                sentence = f"{sentence} - {issue}" if sentence else issue
+            if fix:
+                sentence = f"{sentence}. {fix}" if sentence else fix
+            if sentence:
+                parts.append(sentence.rstrip(".") + ".")
+        return " ".join(parts).strip()
+
+    return str(raw).strip() if raw is not None else ""
 
 
 def _create_unavailable_result(error: str) -> ContentScoreResult:
@@ -138,7 +185,11 @@ async def score_debate_content(
     
     try:
         prompt = _build_scoring_prompt(transcript.strip(), motion_title, motion_text)
-        result = await llm.generate_json(prompt, max_tokens=500)
+        try:
+            result = await llm.generate_json(prompt, max_tokens=500)
+        except LLMUnavailableError as exc:
+            logger.warning("content scoring skipped: %s", exc)
+            return _create_unavailable_result(f"Content not scored: {exc}.")
 
         if not result:
             return _create_unavailable_result("Could not parse LLM response")
@@ -190,19 +241,29 @@ async def score_debate_content(
             length_penalty = 1.0
             penalty_reason = None
         
+        # Relevance as judged on the speech's actual content, before the length
+        # penalty scales it down. The off-topic decision below must use this:
+        # being brief is not the same as ignoring the motion, and mixing the two
+        # let a short on-topic turn get branded off-topic.
+        relevance_on_merit = relevance
+
         if length_penalty < 1.0:
             relevance = int(relevance * length_penalty)
             arguments = int(arguments * length_penalty)
             structure = int(structure * length_penalty)
             vocabulary = int(vocabulary * length_penalty)
             logger.info(f"Applied length penalty {length_penalty} for {word_count} words")
-        
+
+        # A speech is off-topic when the judge says so outright, or when
+        # relevance collapsed on merit - never merely because it was short.
+        off_topic_final = is_off_topic or relevance_on_merit <= 3
+
         total = relevance + arguments + structure + vocabulary
-        feedback = str(result.get("feedback", ""))[:500]  # Allow longer detailed feedback
+        feedback = _coerce_feedback(result.get("feedback", ""))[:500]
         
         # Prepend warnings to feedback
         warnings = []
-        if is_off_topic:
+        if off_topic_final:
             warnings.append("⚠️ OFF-TOPIC CONTENT DETECTED")
         if penalty_reason:
             warnings.append(penalty_reason)
@@ -212,12 +273,13 @@ async def score_debate_content(
 
         logger.info(
             f"Content scored: relevance={relevance}, arguments={arguments}, "
-            f"structure={structure}, vocabulary={vocabulary}, total={total}, words={word_count}"
+            f"structure={structure}, vocabulary={vocabulary}, total={total}, "
+            f"words={word_count}, off_topic={off_topic_final} "
+            f"(relevance_on_merit={relevance_on_merit})"
         )
 
-        # A speech is treated as off-topic when the judge says so outright, or
-        # when relevance collapsed to near-zero. Surfaced on the result so the
-        # final score can gate on it rather than relying on the total alone.
+        # `off_topic` is surfaced on the result so the final score can gate on
+        # it rather than relying on the total alone.
         return ContentScoreResult(
             relevance=relevance,
             arguments=arguments,
@@ -226,7 +288,7 @@ async def score_debate_content(
             total=total,
             feedback=feedback or "Score computed successfully",
             available=True,
-            off_topic=is_off_topic or relevance <= 3,
+            off_topic=off_topic_final,
         )
 
     except Exception as e:

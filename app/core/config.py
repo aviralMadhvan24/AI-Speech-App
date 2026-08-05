@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -64,6 +65,37 @@ class Settings(BaseSettings):
     # Path to the Firebase service-account JSON. Loaded from `.env` so users
     # don't have to also export it as a process env var.
     GOOGLE_APPLICATION_CREDENTIALS: str | None = None
+
+    # --- LiveKit (live audio rooms + per-participant egress recording) ---
+    # Read through Settings so a local `.env` works. `LIVEKIT_INTERNAL_URL` is
+    # used for server-to-server API calls (egress), bypassing the public proxy.
+    LIVEKIT_URL: str = ""
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+    LIVEKIT_INTERNAL_URL: str = ""
+
+    # --- Dev mode (single-player testing) ---
+    # Lower the minimum-participant gate so one person can drive a debate / GD
+    # room end-to-end. Read through Settings (not `os.getenv`) because nothing
+    # in `app/` exports `.env` into the process environment, so `os.getenv`
+    # only ever sees these when they're real env vars.
+    DEBATE_DEV_MODE: bool = False
+    GD_DEV_MODE: bool = False
+
+    @field_validator("DEBATE_DEV_MODE", "GD_DEV_MODE", mode="before")
+    @classmethod
+    def _strip_inline_comment(cls, value: object) -> object:
+        """Tolerate ``VALUE  # trailing comment`` from systemd EnvironmentFile.
+
+        ``python-dotenv`` strips unquoted trailing comments when reading
+        ``.env`` directly, but systemd's ``EnvironmentFile=`` only treats
+        ``#`` as a comment at the start of a line. In production these flags
+        arrive as ``"true      # Single player debate testing"``, which is not
+        parseable as a bool, so the comment is removed before validation.
+        """
+        if isinstance(value, str) and "#" in value:
+            return value.split("#", 1)[0].strip()
+        return value
 
     class Config:
         env_file = ".env"

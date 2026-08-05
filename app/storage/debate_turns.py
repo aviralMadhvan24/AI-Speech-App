@@ -122,10 +122,15 @@ def update_turn_full_score(
     turn_id: str,
     full_ai_score: float,
     full_score_ready: bool = True,
+    score_breakdown: Optional[dict] = None,
 ) -> Optional[DebateTurn]:
     """Rewrite the file with the target turn's full_ai_score and
     full_score_ready updated in place. Return the updated DebateTurn or
     None if turn_id is unknown.
+
+    When ``score_breakdown`` is supplied it replaces the stored breakdown, so
+    the detailed pass's pronunciation-inclusive components are what the result
+    screen ends up showing.
     """
     rows = read_jsonl(_PATH)
     updated: Optional[DebateTurn] = None
@@ -138,12 +143,13 @@ def update_turn_full_score(
             out_rows.append(row)
             continue
         if turn.turn_id == turn_id:
-            turn = turn.model_copy(
-                update={
-                    "full_ai_score": full_ai_score,
-                    "full_score_ready": full_score_ready,
-                }
-            )
+            changes: dict = {
+                "full_ai_score": full_ai_score,
+                "full_score_ready": full_score_ready,
+            }
+            if score_breakdown is not None:
+                changes["score_breakdown"] = score_breakdown
+            turn = turn.model_copy(update=changes)
             updated = turn
         out_rows.append(turn.model_dump())
 

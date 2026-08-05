@@ -26,6 +26,29 @@ export interface ParticipantPublic {
   is_forfeit: boolean;
 }
 
+// Per-component score breakdown attached to a turn / standing.
+// pronunciation + fluency are weighted out of 25 each, content out of 50.
+export interface ScoreBreakdown {
+  pronunciation?: { raw: number | null; weighted: number | null; weight: string };
+  fluency?: { raw: number | null; weighted: number | null; weight: string };
+  content?: {
+    total: number | null;
+    weight: string;
+    feedback?: string;
+    details?: {
+      relevance?: number;
+      arguments?: number;
+      structure?: number;
+      vocabulary?: number;
+      total?: number;
+      off_topic?: boolean;
+    } | null;
+  };
+  final_score?: number;
+  scoring_unavailable?: boolean;
+  content_missing?: boolean;
+}
+
 export interface FinalStanding {
   participant_id: string;
   display_name: string;
@@ -38,6 +61,7 @@ export interface FinalStanding {
   is_winner: boolean;
   full_ai_score: number | null;
   full_score_ready: boolean;
+  score_breakdown: ScoreBreakdown | null;
 }
 
 export interface CompletedTurnPublic {
@@ -108,12 +132,7 @@ export interface TurnUploadResponse {
   audio_url: string | null;  // URL to play back this turn's audio
   content_score: number | null;
   content_feedback: string | null;
-  score_breakdown: {
-    pronunciation?: { raw: number | null; weighted: number | null; weight: string };
-    fluency?: { raw: number | null; weighted: number | null; weight: string };
-    content?: { total: number | null; weight: string; feedback: string };
-    final_score?: number;
-  } | null;
+  score_breakdown: ScoreBreakdown | null;
   state: PublicDebateRoom;
 }
 

@@ -228,8 +228,8 @@ def compute_ai_score(
 
 
 async def compute_ai_score_with_content(
-    pronunciation: PronunciationResult,
-    fluency: FluencyResult,
+    pronunciation: Optional[PronunciationResult],
+    fluency: Optional[FluencyResult],
     transcript: str,
     motion_title: str,
     motion_text: str,
@@ -397,6 +397,7 @@ async def compute_full_score_with_pronunciation(
     transcript: str,
     motion_title: str,
     motion_text: str,
+    prior_clarity_score: Optional[float] = None,
 ) -> tuple[float, bool, dict]:
     """Compute the full detailed score including pronunciation analysis.
 
@@ -404,11 +405,18 @@ async def compute_full_score_with_pronunciation(
     It runs the (slow) Wav2Vec2 pronunciation model, then recomputes
     the score with pronunciation included at 25% weight.
 
+    ``prior_clarity_score`` carries the fluency clarity value already
+    computed during the instant pass. It must be supplied, otherwise the
+    recompute drops fluency (25% of the rubric) and — together with an
+    empty ``transcript`` dropping content (50%) — collapses the detailed
+    score to a pronunciation-only number that never changes.
+
     Args:
         audio_path: Path to the processed audio file on disk.
         transcript: The transcribed text from the turn.
         motion_title: Debate motion title.
         motion_text: Debate motion full text.
+        prior_clarity_score: Fluency clarity (0-100) from the instant pass.
 
     Returns:
         Tuple of (full_score, scoring_unavailable, breakdown_dict)
@@ -431,16 +439,18 @@ async def compute_full_score_with_pronunciation(
         transcription=transcription,
     )
 
-    # Build a fluency result from the transcript for consistency
-    # (we don't have the audio asset here, but fluency was already computed
-    # in the instant pass — we just need pronunciation to be real this time)
-    fluency = FluencyResult(
-        words_per_minute=None,
-        clarity_score=None,
-        filler_word_count=0,
-        filler_words=[],
-        pace_assessment="unknown",
-    )
+    # Carry the instant pass's fluency clarity forward so fluency keeps its
+    # 25% weight in the recompute. Re-deriving it here is not possible: the
+    # audio asset and word timings are no longer in scope.
+    #
+    # `FluencyResult.clarity_score` / `words_per_minute` are plain floats, not
+    # Optional, so passing None raises a ValidationError - which is exactly why
+    # this function used to fail on every call. When there is no prior clarity
+    # value, pass no fluency at all; the scorer treats that as "absent" and
+    # rebalances the weights.
+    fluency: Optional[FluencyResult] = None
+    if prior_clarity_score is not None:
+        fluency = FluencyResult(clarity_score=float(prior_clarity_score))
 
     # Recompute the full score WITH pronunciation
     full_score, unavailable, breakdown = await compute_ai_score_with_content(

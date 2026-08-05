@@ -16,6 +16,7 @@ from typing import Dict, Optional
 from fastapi import HTTPException, WebSocket
 
 from app.auth import User
+from app.core.config import settings
 from app.core.livekit_client import livekit
 from app.core.egress_client import egress_client
 from app.storage import custom_topics, users_store
@@ -41,13 +42,13 @@ PREP_SECONDS = 10  # short prep for testing/demo
 DISCUSSION_SECONDS = 900  # 15 minutes discussion
 
 # Dev mode allows single-player testing (set GD_DEV_MODE=true in .env)
-_DEV_MODE = os.getenv("GD_DEV_MODE", "").lower() in ("true", "1", "yes")
+_DEV_MODE = settings.GD_DEV_MODE
 MIN_PARTICIPANTS = 1 if _DEV_MODE else 5
 
 # Log dev mode status at startup
 import logging as _logging
 _startup_logger = _logging.getLogger("gd.room_manager")
-_startup_logger.info(f"GD_DEV_MODE={os.getenv('GD_DEV_MODE', 'NOT_SET')}, _DEV_MODE={_DEV_MODE}, MIN_PARTICIPANTS={MIN_PARTICIPANTS}")
+_startup_logger.info(f"GD_DEV_MODE={_DEV_MODE}, MIN_PARTICIPANTS={MIN_PARTICIPANTS}")
 
 MAX_PARTICIPANTS = 10
 GC_TTL_SECONDS = 60 * 60

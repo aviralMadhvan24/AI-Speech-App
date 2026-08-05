@@ -14,6 +14,7 @@ from typing import Optional
 import httpx
 
 from app.asr.schemas import TranscribedWord, TranscriptionResult
+from app.core.config import settings
 from app.pronunciation.transcript_cleaner import normalize_transcript
 
 logger = logging.getLogger("groq_whisper")
@@ -22,9 +23,19 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 
 
+def _groq_api_key() -> Optional[str]:
+    """Resolve the Groq key from Settings, falling back to the process env.
+
+    Reading `os.getenv` alone missed keys defined in `.env`, because nothing in
+    `app/` exports that file into the environment - which silently downgraded
+    every transcription to the slower local Whisper model.
+    """
+    return settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY")
+
+
 def is_groq_configured() -> bool:
     """Check if Groq Whisper is available."""
-    return bool(os.getenv("GROQ_API_KEY"))
+    return bool(_groq_api_key())
 
 
 async def transcribe_with_groq(audio_path: Path) -> Optional[TranscriptionResult]:
@@ -32,7 +43,7 @@ async def transcribe_with_groq(audio_path: Path) -> Optional[TranscriptionResult
     
     Returns None if API fails - caller should fall back to local Whisper.
     """
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = _groq_api_key()
     if not api_key:
         return None
     

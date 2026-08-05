@@ -1,23 +1,28 @@
 """LiveKit API client for live audio rooms.
 
-Environment variables:
+Configuration (via `.env` or real environment variables):
 - LIVEKIT_API_KEY: LiveKit API key
 - LIVEKIT_API_SECRET: LiveKit API secret
 - LIVEKIT_URL: LiveKit server URL (e.g., wss://your-project.livekit.cloud)
+
+These are read through `settings` rather than `os.getenv`, because nothing in
+`app/` exports `.env` into the process environment. Reading them directly from
+`os.getenv` left live audio silently disabled during local development.
 """
 
 import logging
-import os
 import time
 from typing import Optional
 
 import jwt
 
+from app.core.config import settings
+
 logger = logging.getLogger("livekit_client")
 
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
+LIVEKIT_API_KEY = settings.LIVEKIT_API_KEY
+LIVEKIT_API_SECRET = settings.LIVEKIT_API_SECRET
+LIVEKIT_URL = settings.LIVEKIT_URL
 
 
 class LiveKitClient:

@@ -21,3 +21,4 @@ kaldiio
 transformers
 firebase-admin
 PyJWT
+livekit-api==1.0.6
