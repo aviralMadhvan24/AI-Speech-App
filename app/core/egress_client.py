@@ -7,6 +7,7 @@ on the server at /opt/livekit/egress-out/.
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 from livekit import api
@@ -42,6 +43,20 @@ class EgressClient:
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_secret and self.url)
 
+    @staticmethod
+    async def _close_api(lk_api: Optional[LiveKitAPI]) -> None:
+        """Close a LiveKitAPI client, ignoring shutdown errors.
+
+        Called from `finally` blocks, so it must never raise and mask the
+        original failure.
+        """
+        if lk_api is None:
+            return
+        try:
+            await lk_api.aclose()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not raise
+            logger.debug("Ignoring LiveKitAPI close error: %s", type(exc).__name__)
+
     def _get_api(self) -> LiveKitAPI:
         """Create LiveKitAPI client."""
         # Use internal URL for server-to-server communication
@@ -72,12 +87,16 @@ class EgressClient:
             logger.warning("Egress not available - LiveKit not configured")
             return None
 
+        # `aclose()` must run on the failure path too, otherwise every failed
+        # attempt leaks an aiohttp session and connector ("Unclosed client
+        # session" errors), which piles up fast because this method is retried.
+        lk_api = None
         try:
             lk_api = self._get_api()
-            
+
             # File output path (inside the egress container mapped to /out)
             filepath = f"/out/{output_filename}"
-            
+
             request = TrackEgressRequest(
                 room_name=room_name,
                 track_id=track_sid,
@@ -85,41 +104,44 @@ class EgressClient:
                     filepath=filepath,
                 ),
             )
-            
+
             response = await lk_api.egress.start_track_egress(request)
             egress_id = response.egress_id
-            
+
             # Track it
             if room_name not in self._active_egresses:
                 self._active_egresses[room_name] = {}
             self._active_egresses[room_name][participant_identity] = egress_id
-            
+
             logger.info(
                 f"Started track egress: room={room_name}, "
                 f"participant={participant_identity}, egress_id={egress_id}, "
                 f"file={output_filename}"
             )
-            await lk_api.aclose()
             return egress_id
-            
+
         except Exception as e:
             logger.error(f"Failed to start track egress: {type(e).__name__}: {e}")
             return None
+        finally:
+            await self._close_api(lk_api)
 
     async def stop_egress(self, egress_id: str) -> bool:
         """Stop a specific egress by ID."""
         if not self.is_available:
             return False
 
+        lk_api = None
         try:
             lk_api = self._get_api()
             await lk_api.egress.stop_egress(StopEgressRequest(egress_id=egress_id))
             logger.info(f"Stopped egress: {egress_id}")
-            await lk_api.aclose()
             return True
         except Exception as e:
             logger.error(f"Failed to stop egress {egress_id}: {type(e).__name__}: {e}")
             return False
+        finally:
+            await self._close_api(lk_api)
 
     async def stop_all_for_room(self, room_name: str) -> dict[str, str]:
         """Stop all active egresses for a room.
@@ -141,31 +163,35 @@ class EgressClient:
         """List all egresses for a room (from LiveKit server)."""
         if not self.is_available:
             return []
+        lk_api = None
         try:
             lk_api = self._get_api()
             response = await lk_api.egress.list_egress(
                 ListEgressRequest(room_name=room_name)
             )
-            await lk_api.aclose()
             return list(response.items)
         except Exception as e:
             logger.error(f"Failed to list egresses: {type(e).__name__}: {e}")
             return []
+        finally:
+            await self._close_api(lk_api)
 
     async def get_room_participants(self, room_name: str) -> list:
         """Get current participants in a LiveKit room with their track SIDs."""
         if not self.is_available:
             return []
+        lk_api = None
         try:
             lk_api = self._get_api()
             response = await lk_api.room.list_participants(
                 api.ListParticipantsRequest(room=room_name)
             )
-            await lk_api.aclose()
             return list(response.participants)
         except Exception as e:
             logger.error(f"Failed to list participants: {type(e).__name__}: {e}")
             return []
+        finally:
+            await self._close_api(lk_api)
 
     async def start_all_track_egresses(self, room_name: str, session_id: str) -> dict[str, str]:
         """Start egress for ALL audio tracks in a room.
