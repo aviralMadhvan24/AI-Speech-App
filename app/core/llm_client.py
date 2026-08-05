@@ -19,6 +19,16 @@ from app.core.config import settings
 logger = logging.getLogger("llm_client")
 
 
+class LLMUnavailableError(RuntimeError):
+    """No LLM provider could be reached.
+
+    Distinguished from a malformed response so callers can report the real
+    cause. `is_available` cannot detect this on its own: the Ollama URL has a
+    default value, so it always looks configured even when nothing is
+    listening on it.
+    """
+
+
 class LLMClient:
     """Unified LLM client - uses Groq in production, Ollama locally."""
 
@@ -73,6 +83,14 @@ class LLMClient:
                         "max_tokens": max_tokens,
                     },
                 )
+                if resp.status_code == 400:
+                    salvaged = self._salvage_failed_generation(resp)
+                    if salvaged:
+                        logger.warning(
+                            "Groq rejected its own JSON (json_validate_failed); "
+                            "recovering the raw generation instead of losing the score"
+                        )
+                        return salvaged
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
@@ -82,6 +100,57 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Groq request failed: {type(e).__name__}: {e}")
             raise
+
+    @staticmethod
+    def _repair_json_quotes(json_str: str) -> str:
+        """Fix the doubled-double-quote pattern models produce when quoting text.
+
+        Two distinct mistakes need different repairs:
+
+        1. A whole value wrapped twice - ``"quote": ""some text""`` - where the
+           outer pair is the real delimiter, so the extra pair is dropped.
+        2. A stray inner pair inside an otherwise valid string - ``"the word
+           ""x"" is wrong"`` - where the inner quotes must become single quotes,
+           since dropping them would terminate the string early.
+        """
+        # Case 1: the doubled quotes span an entire value.
+        repaired = re.sub(
+            r':\s*""([^"]*)""\s*(?=[,}\]])',
+            lambda m: ': "%s"' % m.group(1),
+            json_str,
+        )
+        if repaired != json_str:
+            try:
+                json.JSONDecoder().raw_decode(repaired.lstrip())
+                return repaired
+            except json.JSONDecodeError:
+                pass
+
+        # Case 2: collapse any remaining doubled quotes to single quotes.
+        return re.sub(r'""([^"]+?)""', r"'\1'", repaired)
+
+    @staticmethod
+    def _salvage_failed_generation(resp: httpx.Response) -> Optional[str]:
+        """Pull the model's raw output out of a Groq ``json_validate_failed`` 400.
+
+        In JSON mode Groq validates the completion and, when the model emits
+        malformed JSON, answers 400 with the rejected text under
+        ``error.failed_generation``. That text still holds the rubric scores, so
+        returning it lets the caller's own parser/repair pass have a go rather
+        than throwing the whole turn's content score away.
+        """
+        try:
+            payload = resp.json()
+        except Exception:  # noqa: BLE001 - body may not be JSON at all
+            return None
+
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return None
+        if error.get("code") != "json_validate_failed":
+            return None
+        failed = error.get("failed_generation")
+        return failed if isinstance(failed, str) and failed.strip() else None
 
     async def _ollama_generate(self, prompt: str, max_tokens: int) -> str:
         """Generate using local Ollama server."""
@@ -98,15 +167,26 @@ class LLMClient:
                 )
                 resp.raise_for_status()
                 return resp.json()["response"]
-        except httpx.ConnectError:
-            logger.warning("Ollama not running - content scoring unavailable")
-            raise
+        except httpx.ConnectError as e:
+            logger.warning(
+                "Ollama not reachable at %s - content scoring unavailable",
+                self.ollama_url,
+            )
+            raise LLMUnavailableError(
+                f"no LLM provider reachable (set GROQ_API_KEY, or start Ollama "
+                f"at {self.ollama_url})"
+            ) from e
         except Exception as e:
             logger.error(f"Ollama request failed: {type(e).__name__}: {e}")
             raise
 
     async def generate_json(self, prompt: str, max_tokens: int = 500) -> Optional[dict]:
-        """Generate and parse JSON response from LLM."""
+        """Generate and parse JSON response from LLM.
+
+        Returns None when the response could not be parsed. Raises
+        `LLMUnavailableError` when no provider could be reached, so callers can
+        tell "the model replied with junk" apart from "there is no model".
+        """
         try:
             response = await self.generate(prompt, max_tokens)
             # Extract JSON from response (handle markdown code blocks). First
@@ -182,13 +262,24 @@ class LLMClient:
                 return ''.join(result)
             
             json_str = sanitize_json(json_str)
-            decoded = json.JSONDecoder().raw_decode(json_str.lstrip())
+            try:
+                decoded = json.JSONDecoder().raw_decode(json_str.lstrip())
+            except json.JSONDecodeError:
+                repaired = self._repair_json_quotes(json_str)
+                if repaired == json_str:
+                    raise
+                logger.warning("Repairing doubled quotes in LLM JSON response")
+                decoded = json.JSONDecoder().raw_decode(repaired.lstrip())
             parsed = decoded[0]
             if not isinstance(parsed, dict):
                 logger.warning("LLM JSON response was not an object")
                 return None
             return parsed
             
+        except LLMUnavailableError:
+            # Propagate: this is a configuration/connectivity problem, not a
+            # parsing problem, and reporting it as the latter is misleading.
+            raise
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parse error: {e}")
             return None

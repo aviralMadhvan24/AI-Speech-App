@@ -505,6 +505,19 @@ async def get_debate_detail(
     if not (is_teacher or is_participant):
         raise HTTPException(status_code=403, detail="not_authorized")
 
+    # A detailed debate whose background pronunciation pass never finished (for
+    # example the process restarted before it completed) would otherwise stay
+    # "Result is being prepared" forever. Opening the result re-drives it.
+    if record.scoring_mode == "detailed" and any(
+        not s.full_score_ready for s in record.final_standings
+    ):
+        debate_room_manager.ensure_detailed_scoring(
+            code=record.code,
+            debate_id=record.debate_id,
+            motion_title=record.motion_title,
+            motion_text=record.motion_text,
+        )
+
     return DebateDetailResponse(
         debate_id=record.debate_id,
         code=record.code,

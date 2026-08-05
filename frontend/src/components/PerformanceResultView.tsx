@@ -4,8 +4,10 @@ import {
   getDebateDetail,
   type DebateDetailResponse,
   type FinalStanding,
+  type ScoreBreakdown,
 } from "../debateApi";
 import { getGDSessionDetail, type GDResultsResponse } from "../gdApi";
+import { DebateTurnsAudio } from "./DebateTurnsAudio";
 
 type PerformanceResultKind = "debate" | "gd";
 
@@ -55,6 +57,8 @@ function DebateResult({ result }: { result: DebateDetailResponse }) {
       ? scoredStandings[0]
       : null;
 
+  const playableTurns = result.turn_audio.filter((turn) => turn.audio_url);
+
   if (pending) return pendingResultCard("debate");
 
   return (
@@ -74,6 +78,92 @@ function DebateResult({ result }: { result: DebateDetailResponse }) {
           return <DebateStanding key={standing.participant_id} standing={standing} score={score} rank={index + 1} isWinner={winner?.standing.participant_id === standing.participant_id} />;
         })}
       </div>
+      {playableTurns.length > 0 ? (
+        <DebateTurnsAudio turns={result.turn_audio} title="Turn Playback" />
+      ) : (
+        <p className="rounded-xl border border-zinc-700/70 bg-zinc-800/40 p-4 text-xs text-zinc-500">
+          No turn audio was saved for this debate.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function componentTone(value: number | null | undefined, max: number): string {
+  if (value == null) return "text-zinc-500";
+  const pct = (value / max) * 100;
+  if (pct >= 70) return "text-emerald-300";
+  if (pct >= 40) return "text-zinc-100";
+  return "text-amber-300";
+}
+
+/** Per-component breakdown: pronunciation /25, fluency /25, content /50. */
+function ScoreBreakdownPanel({
+  breakdown,
+  contentScore,
+}: {
+  breakdown: ScoreBreakdown | null;
+  contentScore: number | null;
+}) {
+  if (!breakdown) return null;
+
+  const pronunciation = breakdown.pronunciation?.weighted ?? null;
+  const fluency = breakdown.fluency?.weighted ?? null;
+  const content = breakdown.content?.total ?? contentScore ?? null;
+  const details = breakdown.content?.details ?? null;
+
+  const rows: { label: string; value: number | null; max: number; note?: string }[] = [
+    { label: "Pronunciation", value: pronunciation, max: 25, note: breakdown.pronunciation?.raw != null ? `raw ${Math.round(breakdown.pronunciation.raw)}/100` : undefined },
+    { label: "Fluency", value: fluency, max: 25, note: breakdown.fluency?.raw != null ? `clarity ${Math.round(breakdown.fluency.raw)}/100` : undefined },
+    { label: "Content", value: content, max: 50 },
+  ];
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-zinc-700/60 pt-3">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+        Score breakdown
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {rows.map((row) => (
+          <div key={row.label} className="rounded-lg bg-zinc-800/60 p-2">
+            <div className="text-[11px] text-zinc-400">{row.label}</div>
+            <div className={`text-sm font-semibold tabular-nums ${componentTone(row.value, row.max)}`}>
+              {row.value != null ? row.value.toFixed(1) : "Not scored"}
+              <span className="text-[11px] font-normal text-zinc-500">/{row.max}</span>
+            </div>
+            {row.note && <div className="text-[10px] text-zinc-500">{row.note}</div>}
+          </div>
+        ))}
+      </div>
+
+      {details && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-zinc-800/40 p-2 text-[11px] text-zinc-400 sm:grid-cols-4">
+          {[
+            { label: "Relevance", value: details.relevance, max: 15 },
+            { label: "Arguments", value: details.arguments, max: 15 },
+            { label: "Structure", value: details.structure, max: 10 },
+            { label: "Vocabulary", value: details.vocabulary, max: 10 },
+          ].map((item) => (
+            <div key={item.label} className="flex items-center justify-between gap-2">
+              <span>{item.label}</span>
+              <span className="tabular-nums text-zinc-200">
+                {item.value != null ? item.value : "—"}/{item.max}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {breakdown.content_missing && (
+        <p className="text-[11px] leading-relaxed text-amber-300/80">
+          Content could not be assessed, so delivery was scored out of 50.
+        </p>
+      )}
+      {details?.off_topic && (
+        <p className="text-[11px] leading-relaxed text-rose-300/80">
+          Flagged as off-topic: the speech did not address the motion.
+        </p>
+      )}
     </div>
   );
 }
@@ -97,6 +187,7 @@ function DebateStanding({ standing, score, rank, isWinner }: { standing: FinalSt
         {isWinner && <Trophy className="h-4 w-4 text-amber-300" aria-label="Winner" />}
       </div>
       {standing.content_feedback && <p className="mt-3 border-l-2 border-violet-500/40 pl-3 text-xs leading-relaxed text-zinc-400">{standing.content_feedback}</p>}
+      <ScoreBreakdownPanel breakdown={standing.score_breakdown} contentScore={standing.content_score} />
     </article>
   );
 }
@@ -151,15 +242,45 @@ export function PerformanceResultView({ kind, id, onBack }: PerformanceResultVie
 
   useEffect(() => {
     let active = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
     setResult(null);
     setError(null);
-    const load = kind === "debate" ? getDebateDetail(id) : getGDSessionDetail(id);
-    void load.then((data) => {
-      if (active) setResult(data);
-    }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : "Could not load this result.");
-    });
-    return () => { active = false; };
+
+    // A detailed debate finishes scoring in a background task, so the first
+    // response is often still "being prepared". Poll until it lands instead of
+    // making the user reload the page.
+    const isStillPending = (data: DebateDetailResponse | GDResultsResponse): boolean => {
+      if (kind !== "debate") return false;
+      const debate = data as DebateDetailResponse;
+      return (
+        debate.scoring_mode === "detailed" &&
+        debate.final_standings.some((standing) => !standing.full_score_ready)
+      );
+    };
+
+    const fetchResult = () => {
+      const load = kind === "debate" ? getDebateDetail(id) : getGDSessionDetail(id);
+      void load
+        .then((data) => {
+          if (!active) return;
+          setResult(data);
+          if (!isStillPending(data) && timer) {
+            clearInterval(timer);
+            timer = undefined;
+          }
+        })
+        .catch((reason: unknown) => {
+          if (active) setError(reason instanceof Error ? reason.message : "Could not load this result.");
+        });
+    };
+
+    fetchResult();
+    timer = setInterval(fetchResult, 15000);
+
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
   }, [kind, id]);
 
   const title = kind === "debate" ? "Debate Result" : "Group Discussion Result";

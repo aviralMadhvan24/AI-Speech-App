@@ -35,6 +35,7 @@ from fastapi import HTTPException, WebSocket
 from app.asr.schemas import TranscriptionResult
 from app.audio.schemas import AudioAsset
 from app.auth import User
+from app.core.config import settings
 from app.core.livekit_client import livekit
 from app.debate.audio_store import _content_type_for_ext, get_audio_store
 from app.debate.schemas import (
@@ -78,7 +79,7 @@ RECONNECT_GRACE_SECONDS = 30
 
 # Debate is head-to-head: exactly two speakers, one turn each.
 # Dev mode allows single-player testing (set DEBATE_DEV_MODE=true in .env)
-_DEV_MODE = os.getenv("DEBATE_DEV_MODE", "").lower() in ("true", "1", "yes")
+_DEV_MODE = settings.DEBATE_DEV_MODE
 MIN_PARTICIPANTS = 1 if _DEV_MODE else 2
 MAX_PARTICIPANTS = 2
 GC_TTL_SECONDS = 60 * 60
@@ -86,7 +87,7 @@ GC_TTL_SECONDS = 60 * 60
 # Log dev mode status at startup
 import logging as _logging
 _startup_logger = _logging.getLogger("debate.room_manager")
-_startup_logger.info(f"DEBATE_DEV_MODE={os.getenv('DEBATE_DEV_MODE', 'NOT_SET')}, _DEV_MODE={_DEV_MODE}, MIN_PARTICIPANTS={MIN_PARTICIPANTS}")
+_startup_logger.info(f"DEBATE_DEV_MODE={_DEV_MODE}, MIN_PARTICIPANTS={MIN_PARTICIPANTS}")
 
 
 MOTIONS_PATH = Path("app/data/debate_motions.json")
@@ -166,6 +167,9 @@ class DebateRoomManager:
         # Which participant a pending "reconnect" timer is waiting for.
         self._reconnect_targets: Dict[str, str] = {}
         self._manager_lock = asyncio.Lock()
+        # debate_ids with an in-flight detailed pronunciation pass, so a
+        # re-drive request cannot start a second one for the same debate.
+        self._detailed_jobs: set[str] = set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -645,6 +649,7 @@ class DebateRoomManager:
                 content_score=content_score,
                 content_feedback=content_feedback,
                 score_breakdown=score_breakdown,
+                transcript=transcript_text or None,
             )
 
             debate_turns_store.save_turn(turn)
@@ -1066,6 +1071,7 @@ class DebateRoomManager:
                 effective_score=round(compute_effective_score(t), 1),
                 is_forfeit=forfeit_by_pid.get(t.participant_id, False),
                 is_winner=(t.participant_id == winner_id),
+                score_breakdown=t.score_breakdown,
             )
             for idx, t in enumerate(ranked)
         ]
@@ -1125,6 +1131,32 @@ class DebateRoomManager:
                 self._run_detailed_pronunciation(room.code, room.debate_id, room.motion_title, room.motion_text)
             )
 
+    def ensure_detailed_scoring(
+        self, code: str, debate_id: str, motion_title: str, motion_text: str
+    ) -> bool:
+        """Re-drive the detailed pronunciation pass for a stuck debate.
+
+        The pass is spawned with ``asyncio.create_task`` at finalize time and
+        is therefore in-process only: a restart (or ``--reload``) kills it and
+        nothing else ever retries, leaving ``full_score_ready`` false forever.
+        Callers that observe an unfinished detailed debate use this to restart
+        the work. Returns True when a new job was started.
+        """
+        if debate_id in self._detailed_jobs:
+            return False
+
+        turns = debate_turns_store.list_turns_for_debate(debate_id)
+        if not turns:
+            return False
+        if all(t.full_score_ready or t.forfeit_reason is not None for t in turns):
+            return False
+
+        logger.info("detailed_scoring_redrive debate_id=%s", debate_id)
+        asyncio.create_task(
+            self._run_detailed_pronunciation(code, debate_id, motion_title, motion_text)
+        )
+        return True
+
     async def _run_detailed_pronunciation(
         self, code: str, debate_id: str, motion_title: str, motion_text: str
     ) -> None:
@@ -1136,6 +1168,7 @@ class DebateRoomManager:
         """
         from app.debate.service import compute_full_score_with_pronunciation
 
+        self._detailed_jobs.add(debate_id)
         try:
             await asyncio.sleep(2.0)  # Brief pause for any pending I/O
             turns = debate_turns_store.list_turns_for_debate(debate_id)
@@ -1167,32 +1200,29 @@ class DebateRoomManager:
                     )
                     continue
 
-                transcript = ""
-                # Load transcript from the persisted turn or analysis
-                if turn.score_breakdown and turn.score_breakdown.get("content", {}).get("details"):
-                    # Try to get transcript from content details
-                    pass
-                # Use a simple approach: re-read from the stored data
-                # The transcript was used during content scoring; we can
-                # reconstruct it from what we have or just run pronunciation only
-                # Actually the transcript was used to generate content_score.
-                # We'll pass it for pronunciation alignment.
-                # For now, use empty string which will make pronunciation use
-                # the audio directly without text alignment.
-                transcript = transcript or ""
+                # Reuse the instant pass's signals. Without the transcript the
+                # content stage (50% of the rubric) is skipped, and without the
+                # clarity value fluency (25%) is dropped too — which left the
+                # detailed score as a pronunciation-only constant.
+                transcript = turn.transcript or ""
+                prior_clarity = None
+                if turn.score_breakdown:
+                    prior_clarity = (turn.score_breakdown.get("fluency") or {}).get("raw")
 
                 try:
-                    full_score, _unavailable, _breakdown = await compute_full_score_with_pronunciation(
+                    full_score, _unavailable, breakdown = await compute_full_score_with_pronunciation(
                         audio_path=audio_path,
                         transcript=transcript,
                         motion_title=motion_title,
                         motion_text=motion_text,
+                        prior_clarity_score=prior_clarity,
                     )
                     # Update persisted turn
                     debate_turns_store.update_turn_full_score(
                         turn_id=turn.turn_id,
                         full_ai_score=full_score,
                         full_score_ready=True,
+                        score_breakdown=breakdown,
                     )
                     logger.info(
                         "detailed_score_done turn=%s full_score=%.2f",
@@ -1223,6 +1253,10 @@ class DebateRoomManager:
                     if t and t.full_ai_score is not None:
                         standing.full_ai_score = t.full_ai_score
                         standing.full_score_ready = True
+                        standing.score_breakdown = t.score_breakdown
+                        if t.content_score is not None:
+                            standing.content_score = t.content_score
+                            standing.content_feedback = t.content_feedback
                 await self.broadcast(code)
 
             # Re-persist the durable record so the My Performance detail view
@@ -1237,6 +1271,10 @@ class DebateRoomManager:
                         if t and t.full_ai_score is not None:
                             standing.full_ai_score = t.full_ai_score
                             standing.full_score_ready = True
+                            standing.score_breakdown = t.score_breakdown
+                            if t.content_score is not None:
+                                standing.content_score = t.content_score
+                                standing.content_feedback = t.content_feedback
                         else:
                             # No pronunciation available for this speaker —
                             # mark ready so the UI stops waiting on it.
@@ -1259,6 +1297,8 @@ class DebateRoomManager:
                 debate_id,
                 f"{type(exc).__name__}: {exc}",
             )
+        finally:
+            self._detailed_jobs.discard(debate_id)
 
     async def _maybe_abandon(self, code: str) -> None:
         """If too few connected non-forfeit speakers remain, transition the

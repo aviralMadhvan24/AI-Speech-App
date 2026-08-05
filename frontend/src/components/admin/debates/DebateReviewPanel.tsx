@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
   Info,
   Loader2,
   MessageSquareText,
+  Pause,
+  Play,
   RefreshCw,
   Trophy,
 } from "lucide-react";
@@ -51,6 +53,9 @@ interface DebateTurn {
   participant_id: string;
   turn_index: number;
   analysis_id: string | null;
+  // App route serving this turn's recording, or null for forfeits / storage
+  // failures. Requires an Authorization header, so playback goes through fetch.
+  audio_url: string | null;
   ai_score: number;
   scoring_unavailable: boolean;
   teacher_override_score: number | null;
@@ -179,6 +184,47 @@ export function DebateReviewPanel({
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   const [winnerToast, setWinnerToast] = useState<string | null>(null);
+  const [playingTurnId, setPlayingTurnId] = useState<string | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // The audio route is auth-guarded, so it is fetched with the bearer token and
+  // played from an object URL rather than assigned straight to <audio src>.
+  const handlePlayTurn = useCallback(
+    async (turn: DebateTurn) => {
+      if (!turn.audio_url) return;
+      setAudioError(null);
+
+      if (playingTurnId === turn.turn_id) {
+        audioRef.current?.pause();
+        setPlayingTurnId(null);
+        return;
+      }
+      audioRef.current?.pause();
+
+      try {
+        const token = await getCurrentIdToken();
+        const response = await fetch(turn.audio_url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error("Audio not available");
+        const blob = await response.blob();
+
+        const audio = new Audio(URL.createObjectURL(blob));
+        audioRef.current = audio;
+        audio.onended = () => setPlayingTurnId(null);
+        audio.onerror = () => setPlayingTurnId(null);
+        await audio.play();
+        setPlayingTurnId(turn.turn_id);
+      } catch {
+        setPlayingTurnId(null);
+        setAudioError("Could not play this turn's audio.");
+      }
+    },
+    [playingTurnId],
+  );
+
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -470,6 +516,38 @@ export function DebateReviewPanel({
                         </div>
                       </div>
                     </div>
+
+                    {/* Turn audio playback */}
+                    {turn.audio_url ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handlePlayTurn(turn)}
+                          aria-label={
+                            playingTurnId === turn.turn_id
+                              ? `Pause turn ${turn.turn_index + 1} audio`
+                              : `Play turn ${turn.turn_index + 1} audio`
+                          }
+                          className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+                        >
+                          {playingTurnId === turn.turn_id ? (
+                            <><Pause className="h-3.5 w-3.5" aria-hidden /> Pause</>
+                          ) : (
+                            <><Play className="h-3.5 w-3.5" aria-hidden /> Play turn audio</>
+                          )}
+                        </button>
+                        {playingTurnId === turn.turn_id && (
+                          <span className="text-[11px] text-zinc-500">Playing…</span>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-zinc-500">
+                        No audio saved for this turn.
+                      </p>
+                    )}
+                    {audioError && playingTurnId === null && (
+                      <p className="text-[11px] text-rose-300">{audioError}</p>
+                    )}
 
                     {/* Score breakdown */}
                     {turn.score_breakdown && (

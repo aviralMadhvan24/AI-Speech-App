@@ -7,7 +7,6 @@ on the server at /opt/livekit/egress-out/.
 
 import asyncio
 import logging
-import os
 from typing import Optional
 
 from livekit import api
@@ -19,11 +18,13 @@ from livekit.protocol.egress import (
     ListEgressRequest,
 )
 
+from app.core.config import settings
+
 logger = logging.getLogger("egress_client")
 
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
+LIVEKIT_API_KEY = settings.LIVEKIT_API_KEY
+LIVEKIT_API_SECRET = settings.LIVEKIT_API_SECRET
+LIVEKIT_URL = settings.LIVEKIT_URL
 EGRESS_OUTPUT_DIR = "/opt/livekit/egress-out"
 
 
@@ -44,7 +45,7 @@ class EgressClient:
     def _get_api(self) -> LiveKitAPI:
         """Create LiveKitAPI client."""
         # Use internal URL for server-to-server communication
-        internal_url = os.getenv("LIVEKIT_INTERNAL_URL", "")
+        internal_url = settings.LIVEKIT_INTERNAL_URL
         if internal_url:
             http_url = internal_url
         else:
