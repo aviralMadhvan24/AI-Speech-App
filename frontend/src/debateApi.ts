@@ -96,6 +96,8 @@ export interface PublicDebateRoom {
   paused: boolean;
   scoring_mode: "instant" | "detailed";
   motion: MotionPublic | null;
+  // True when the creator picked the motion. Random motions stay hidden until prep.
+  motion_chosen: boolean;
   participants: ParticipantPublic[];
   active_turn_index: number | null;
   prep_deadline: number | null;
@@ -245,11 +247,21 @@ function pickUploadMime(rawType: string): { mime: string; ext: string } {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function createDebateRoom(scoringMode: "instant" | "detailed" = "instant"): Promise<CreateRoomResponse> {
+/**
+ * Create a debate room. Pass `motionId` to debate a specific motion; omit it
+ * and the backend picks one at random.
+ */
+export async function createDebateRoom(
+  scoringMode: "instant" | "detailed" = "instant",
+  motionId?: string | null,
+): Promise<CreateRoomResponse> {
   return fetchJson<CreateRoomResponse>("/debate/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scoring_mode: scoringMode }),
+    body: JSON.stringify({
+      scoring_mode: scoringMode,
+      ...(motionId ? { motion_id: motionId } : {}),
+    }),
   });
 }
 

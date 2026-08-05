@@ -1,5 +1,6 @@
 """GD speech analysis service - runs analyze pipeline for each speech."""
 
+import asyncio
 from typing import Optional
 from uuid import uuid4
 
@@ -26,9 +27,16 @@ async def analyze_speech_audio(
     analysis_id = str(uuid4())
 
     audio_asset = await save_uploaded_audio(file)
-    audio_asset = preprocess_audio_asset(audio_asset)
 
-    transcription = transcribe_audio(audio_asset.processed_path)
+    # Everything below is synchronous and CPU/IO bound (ffmpeg, Whisper, the
+    # phoneme model). This runs while a discussion is live, so calling it
+    # inline blocked the event loop and stalled every other participant's
+    # websocket until one speech finished analysing.
+    audio_asset = await asyncio.to_thread(preprocess_audio_asset, audio_asset)
+
+    transcription = await asyncio.to_thread(
+        transcribe_audio, audio_asset.processed_path
+    )
     logger.info(
         stage_log(
             "gd_asr_done",
@@ -40,7 +48,8 @@ async def analyze_speech_audio(
     # Use transcript as expected text for pronunciation assessment
     expected_text = transcription.text if transcription.text else None
 
-    pronunciation = assess_pronunciation(
+    pronunciation = await asyncio.to_thread(
+        assess_pronunciation,
         audio_path=audio_asset.processed_path,
         expected_text=expected_text,
         transcription=transcription,

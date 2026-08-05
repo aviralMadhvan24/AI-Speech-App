@@ -37,6 +37,8 @@ export interface PublicGDRoom {
   state: GDState;
   scoring_mode: "instant" | "detailed";
   topic: GDTopic | null;
+  // True when the host picked the topic. Random topics stay hidden until prep.
+  topic_chosen: boolean;
   participants: GDParticipantPublic[];
   active_speakers: GDActiveSpeaker[];
   prep_deadline: number | null;
@@ -182,11 +184,21 @@ function pickUploadMime(rawType: string): { mime: string; ext: string } {
 // API functions
 // ---------------------------------------------------------------------------
 
-export async function createGDRoom(scoringMode: "instant" | "detailed" = "instant"): Promise<CreateGDRoomResponse> {
+/**
+ * Create a GD room. Pass `topicId` to discuss a specific topic; omit it and the
+ * backend picks one at random.
+ */
+export async function createGDRoom(
+  scoringMode: "instant" | "detailed" = "instant",
+  topicId?: string | null,
+): Promise<CreateGDRoomResponse> {
   return fetchJson<CreateGDRoomResponse>("/gd/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scoring_mode: scoringMode }),
+    body: JSON.stringify({
+      scoring_mode: scoringMode,
+      ...(topicId ? { topic_id: topicId } : {}),
+    }),
   });
 }
 

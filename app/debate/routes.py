@@ -165,6 +165,8 @@ def _may_access_debate_audio(user: User, *, code: str, turn: DebateTurn) -> bool
 class CreateDebateRoomRequest(BaseModel):
     """Request body for POST /debate/rooms."""
     scoring_mode: Literal["instant", "detailed"] = "instant"
+    # Motion chosen by the creator. Omit to get a random one from the catalog.
+    motion_id: Optional[str] = None
 
 
 @router.post("/rooms", response_model=CreateRoomResponse)
@@ -172,7 +174,11 @@ async def create_room(
     body: CreateDebateRoomRequest = CreateDebateRoomRequest(),
     current_user: User = Depends(require_user),
 ) -> CreateRoomResponse:
-    room = await debate_room_manager.create_room(current_user, scoring_mode=body.scoring_mode)
+    room = await debate_room_manager.create_room(
+        current_user,
+        scoring_mode=body.scoring_mode,
+        motion_id=body.motion_id,
+    )
     first = room.participants[0]
     return CreateRoomResponse(
         room_code=room.code,

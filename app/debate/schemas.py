@@ -75,6 +75,10 @@ class DebateRoom(BaseModel):
     motion_id: str
     motion_title: str
     motion_text: str
+    # True when the creator picked this motion explicitly. A chosen motion is
+    # shown in the lobby (they already know it), while a randomly assigned one
+    # stays hidden until prep so nobody can prepare early.
+    motion_chosen: bool = False
     state: DebateState = "waiting"
     paused: bool = False
     scoring_mode: Literal["instant", "detailed"] = "instant"
@@ -193,6 +197,9 @@ class PublicDebateRoom(BaseModel):
     # active audio phases (Requirement 1.1).
     livekit_room: Optional[str] = None
     motion: Optional[MotionPublic] = None
+    # Lets the client reveal a creator-chosen motion in the lobby while keeping
+    # a randomly assigned one hidden until prep.
+    motion_chosen: bool = False
     participants: list[ParticipantPublic] = Field(default_factory=list)
     active_turn_index: Optional[int] = None
     prep_deadline: Optional[float] = None
@@ -221,11 +228,20 @@ def to_public(room: DebateRoom) -> PublicDebateRoom:
         state=room.state,
         paused=room.paused,
         scoring_mode=room.scoring_mode,
-        motion=MotionPublic(
-            id=room.motion_id,
-            title=room.motion_title,
-            text=room.motion_text,
+        # Hidden while waiting so nobody prepares early — unless the creator
+        # chose the motion deliberately, in which case it is theirs to share.
+        # Previously this was always sent and only hidden by the client, so the
+        # motion was readable on the wire before prep.
+        motion=(
+            MotionPublic(
+                id=room.motion_id,
+                title=room.motion_title,
+                text=room.motion_text,
+            )
+            if (room.state != "waiting" or room.motion_chosen)
+            else None
         ),
+        motion_chosen=room.motion_chosen,
         participants=[
             ParticipantPublic(
                 participant_id=p.participant_id,

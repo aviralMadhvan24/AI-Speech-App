@@ -136,6 +136,17 @@ class GDRoomManager:
             secrets.choice(ROOM_CODE_ALPHABET) for _ in range(ROOM_CODE_LENGTH)
         )
 
+    def _find_topic(self, topic_id: str) -> GDTopic:
+        """Resolve a caller-chosen topic id against the catalog.
+
+        Raises 400 instead of falling back to a random topic, so a stale or
+        mistyped id does not silently start the discussion on something else.
+        """
+        for topic in _load_topics():
+            if topic.id == topic_id:
+                return topic
+        raise HTTPException(status_code=400, detail="topic_not_found")
+
     def _pick_random_topic(self) -> GDTopic:
         return random.choice(_load_topics())
 
@@ -186,8 +197,17 @@ class GDRoomManager:
     # Room lifecycle
     # ------------------------------------------------------------------
 
-    async def create_room(self, user: User, scoring_mode: str = "instant") -> GDRoom:
-        """Create new GD room."""
+    async def create_room(
+        self,
+        user: User,
+        scoring_mode: str = "instant",
+        topic_id: Optional[str] = None,
+    ) -> GDRoom:
+        """Create new GD room.
+
+        ``topic_id`` lets the host choose the topic; when omitted one is picked
+        at random, which is the original behaviour.
+        """
         async with self._manager_lock:
             code: Optional[str] = None
             for _ in range(8):
@@ -198,7 +218,9 @@ class GDRoomManager:
             if code is None:
                 raise RuntimeError("Could not allocate room code")
 
-            topic = self._pick_random_topic()
+            topic = (
+                self._find_topic(topic_id) if topic_id else self._pick_random_topic()
+            )
             now = time.time()
             first = GDParticipantInternal(
                 participant_id=_new_participant_id(),
@@ -216,6 +238,7 @@ class GDRoomManager:
                 topic_title=topic.title,
                 topic_text=topic.text,
                 topic_category=topic.category,
+                topic_chosen=bool(topic_id),
                 state="waiting",
                 scoring_mode=scoring_mode if scoring_mode in ("instant", "detailed") else "instant",
                 participants=[first],

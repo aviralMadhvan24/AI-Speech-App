@@ -42,6 +42,7 @@ import {
 } from "../lib/roomSession";
 import { useToast } from "./Toast";
 import { Avatar } from "./Avatar";
+import { TopicSelect } from "./TopicSelect";
 
 interface GDArenaViewProps {
   onBack: () => void;
@@ -127,6 +128,8 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [topics, setTopics] = useState<GDTopic[]>([]);
+  // null = let the backend pick a random topic.
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [readyBusy, setReadyBusy] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [creating, setCreating] = useState(false);
@@ -349,7 +352,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     setCreating(true);
     setJoinError(null);
     try {
-      const response = await createGDRoom(scoringMode);
+      const response = await createGDRoom(scoringMode, selectedTopicId);
       saveRoomSession("gd", response.room_code, {
         participantId: response.participant_id,
         savedAt: Date.now(),
@@ -365,7 +368,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
     } finally {
       setCreating(false);
     }
-  }, [toast, navigate, scoringMode]);
+  }, [toast, navigate, scoringMode, selectedTopicId]);
 
   const handleJoinRoom = useCallback(async () => {
     const cleaned = joinCodeInput.trim().toUpperCase();
@@ -504,9 +507,20 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               </div>
             </div>
             <p className="text-sm text-zinc-400">
-              A topic will be auto-assigned. 5-10 participants can join.
+              Pick a topic or leave it random. 5-10 participants can join.
               Once everyone is ready: 2 min prep + 15 min discussion.
             </p>
+            {/* Topic picker. Mirrors the selectable list further down the page. */}
+            <TopicSelect
+              label="Topic"
+              options={topics}
+              value={selectedTopicId}
+              onChange={setSelectedTopicId}
+              randomLabel="Random topic"
+              accent="emerald"
+              disabled={topics.length === 0}
+              emptyLabel="Loading topics…"
+            />
             {/* Scoring mode toggle */}
             <div className="space-y-2">
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Scoring mode</p>
@@ -608,15 +622,37 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
               Available Topics ({topics.length})
             </h2>
             <p className="text-xs text-zinc-500">
-              A random topic is assigned on room creation.
+              Tap a topic to use it for your next room, or leave it unselected for
+              a random one.
             </p>
             <ul className="max-h-64 overflow-y-auto space-y-2 pr-1">
-              {topics.slice(0, 10).map((t) => (
-                <li key={t.id} className="bg-zinc-900/40 border border-zinc-800/60 rounded-xl px-3 py-2">
-                  <div className="text-sm font-medium text-zinc-100">{t.title}</div>
-                  <div className="text-xs text-zinc-400 mt-0.5">{t.text}</div>
-                </li>
-              ))}
+              {topics.map((t) => {
+                const isSelected = selectedTopicId === t.id;
+                return (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => setSelectedTopicId(isSelected ? null : t.id)}
+                      className={`w-full rounded-xl border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 ${
+                        isSelected
+                          ? "border-emerald-500/60 bg-emerald-600/15"
+                          : "border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-sm font-medium text-zinc-100">{t.title}</div>
+                        {isSelected && (
+                          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-zinc-400">{t.text}</div>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         )}
@@ -707,9 +743,25 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
         <div className="text-5xl md:text-6xl font-mono font-bold tracking-[0.35em] gradient-text">
           {roomCode}
         </div>
+        {/* A host-chosen topic is shown right away; a random one stays hidden
+            (the server does not even send it) until prep. */}
+        {state?.topic_chosen && topic ? (
+          <div className="mx-auto max-w-2xl rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
+              Topic
+            </div>
+            <h3 className="mt-1 text-lg font-semibold leading-snug text-zinc-100">
+              {topic.title}
+            </h3>
+            <p className="mt-1 text-sm leading-relaxed text-zinc-400">{topic.text}</p>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-400 max-w-xl mx-auto">
+            Topic hidden until prep phase.
+          </p>
+        )}
         <p className="text-sm text-zinc-400 max-w-xl mx-auto">
-          Topic hidden until prep phase. Need 5-10 people. GD auto-starts when
-          all ready (min 5).
+          Need 5-10 people. GD auto-starts when all ready (min 5).
         </p>
         
         {/* Countdown timer when all ready */}

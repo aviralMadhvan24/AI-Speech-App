@@ -21,6 +21,7 @@ Public callables:
   content analysis (relevance, arguments, structure, vocabulary).
 """
 
+import asyncio
 from typing import Optional
 from uuid import uuid4
 
@@ -448,8 +449,15 @@ async def compute_full_score_with_pronunciation(
         language="en",
     )
 
-    # Run pronunciation assessment (the slow part: 60-110s on CPU)
-    pronunciation = assess_pronunciation(
+    # Run pronunciation assessment (the slow part: 60-110s on CPU).
+    #
+    # `assess_pronunciation` is synchronous and CPU-bound, so calling it
+    # directly from this coroutine blocked the event loop for its entire
+    # runtime - every other request (profile, admin, websockets) stalled until
+    # it finished, which looked like the whole app hanging. Run it on a worker
+    # thread so the server stays responsive while a detailed score is computed.
+    pronunciation = await asyncio.to_thread(
+        assess_pronunciation,
         audio_path=audio_path,
         expected_text=transcript,
         transcription=transcription,

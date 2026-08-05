@@ -214,6 +214,19 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
     void load();
   }, [load]);
 
+  // Detailed debates / GDs finish scoring in a background task, so entries can
+  // arrive as "Processing". Refresh until they resolve. The stats already on
+  // screen are kept during these refreshes.
+  const hasPendingResult =
+    (data?.recent_debates?.some((d) => d.result_pending) ?? false) ||
+    (data?.recent_gds?.some((g) => g.result_pending) ?? false);
+
+  useEffect(() => {
+    if (!hasPendingResult) return;
+    const timer = setInterval(() => void load(), 20000);
+    return () => clearInterval(timer);
+  }, [hasPendingResult, load]);
+
   useEffect(() => {
     void fetchPotd().then(setPotd).catch(() => undefined);
   }, []);
@@ -401,7 +414,10 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
         </div>
       </section>
 
-      {loading && (
+      {/* Only shown on the very first load. Once stats exist they stay on
+          screen during a refresh, so a single debate still preparing its
+          detailed result never blanks out the whole page. */}
+      {loading && !data && (
         <div className="card-glass p-8 flex items-center justify-center gap-2">
           <Loader2 className="w-5 h-5 animate-spin text-brand-300" />
           <span className="text-sm text-zinc-400">Loading your stats...</span>
