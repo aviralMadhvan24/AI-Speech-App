@@ -347,6 +347,28 @@ export function AdminReviewView({
               metrics={detail.submission.gesture_metrics}
             />
 
+            <div className="card-glass p-5">
+              <div className="text-[10px] uppercase tracking-widest text-sky-300 mb-2">
+                Pronunciation analysis
+              </div>
+              {detail.submission.pronunciation_state === "pending" ? (
+                <p className="text-sm text-amber-300">Processing in the background…</p>
+              ) : detail.submission.content_result?.pronunciation.available ? (
+                <>
+                  <div className="text-2xl font-semibold text-sky-100">
+                    {Math.round(detail.submission.content_result.pronunciation.score ?? 0)}/100
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-400 leading-relaxed">
+                    {detail.submission.content_result.pronunciation.feedback}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  {detail.submission.content_result?.pronunciation.feedback || "Not available."}
+                </p>
+              )}
+            </div>
+
             <div className="card-glass p-5 space-y-5">
               <div>
                 <h3 className="text-base font-semibold text-zinc-100 inline-flex items-center gap-2">

@@ -10,6 +10,7 @@ and persists a submission record awaiting teacher review.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter
@@ -25,6 +26,7 @@ from app.auth import User
 from app.auth import require_user
 from app.storage import reviews_store
 from app.storage import submissions_store
+from app.storage.submissions import PronunciationSnapshot
 
 from .schemas import InterviewAnalysisResponse
 from .schemas import MySubmissionDetail
@@ -108,13 +110,25 @@ async def submit_for_review(
         gesture_session_id=body.gesture_session_id,
         gesture_score=body.gesture_score,
         gesture_metrics=[m.model_dump() for m in body.gesture_metrics],
+        content_result=(
+            body.content_result.model_dump() if body.content_result is not None else None
+        ),
         duration_seconds=body.duration_seconds,
+        pronunciation_state=(
+            "pending"
+            if body.content_result
+            and body.content_result.speech_asset_id
+            and body.content_result.transcript.strip()
+            else "not_requested"
+        ),
     )
     logger.info(
         "interview_submission user=%s submission=%s",
         current_user.email,
         submission.submission_id,
     )
+    if submission.pronunciation_state == "pending":
+        asyncio.create_task(_run_delayed_pronunciation(submission.submission_id))
     return InterviewSubmitResponse(submission_id=submission.submission_id)
 
 
@@ -169,6 +183,16 @@ class AnswerScoreRequest(BaseModel):
     question_category: str = "general"
 
 
+class InterviewPronunciationResponse(BaseModel):
+    """Compact pronunciation result safe to return and persist with an answer."""
+
+    available: bool = False
+    score: float | None = None
+    provider: str | None = None
+    feedback: str = ""
+    issue_count: int = 0
+
+
 class AnswerScoreResponse(BaseModel):
     """AI content score for an interview answer."""
     relevance: int = 0
@@ -182,6 +206,43 @@ class AnswerScoreResponse(BaseModel):
     available: bool = False
     error: str | None = None
     transcript: str = ""
+    speech_asset_id: str | None = None
+    pronunciation: InterviewPronunciationResponse = Field(
+        default_factory=InterviewPronunciationResponse
+    )
+
+
+def _summarize_pronunciation(result) -> InterviewPronunciationResponse:
+    """Turn the detailed pronunciation-engine result into interview feedback.
+
+    Interview answers are open ended, so there is no pre-written reference
+    sentence.  We use the ASR transcript as the reference text for the
+    acoustic/phoneme comparison.  This is useful coaching feedback, but it is
+    deliberately described as approximate because ASR can mask an error.
+    """
+    if not result.available or result.overall_score is None:
+        return InterviewPronunciationResponse(
+            available=False,
+            provider=result.provider,
+            feedback=result.message or "Pronunciation scoring is unavailable.",
+            issue_count=len(result.phoneme_errors),
+        )
+
+    score = float(result.overall_score)
+    if score >= 85:
+        feedback = "Pronunciation was clear overall. Keep your current pace."
+    elif score >= 70:
+        feedback = "Mostly clear pronunciation. Slow down slightly on difficult words."
+    else:
+        feedback = "Some sounds were unclear. Practice the highlighted words slowly."
+
+    return InterviewPronunciationResponse(
+        available=True,
+        score=score,
+        provider=result.provider,
+        feedback=feedback,
+        issue_count=len(result.phoneme_errors),
+    )
 
 
 @router.post("/score-answer", response_model=AnswerScoreResponse)
@@ -212,10 +273,17 @@ async def score_answer(
         question_prompt[:50],
     )
     
-    # Step 1: Save and preprocess audio
+    # Step 1: Save and preprocess audio. The Interview Studio reuses the
+    # same MediaRecorder blob the analyze endpoint already accepts at 100 MB,
+    # so raise `save_uploaded_audio`'s default 25 MB cap to match — otherwise a
+    # longer 720p answer hits 413 here while `/interview/analyze` succeeds.
     try:
-        audio_asset = await save_uploaded_audio(audio)
+        audio_asset = await save_uploaded_audio(audio, max_bytes=_MAX_UPLOAD_BYTES)
         audio_asset = preprocess_audio_asset(audio_asset)
+    except HTTPException:
+        # Preserve specific codes (e.g. 415 unsupported format, 413 too large)
+        # so the frontend can tell apart "wrong format" from "processing error".
+        raise
     except Exception as exc:
         logger.warning(f"Audio processing failed: {exc}")
         raise HTTPException(
@@ -232,32 +300,107 @@ async def score_answer(
         return AnswerScoreResponse(
             error="Transcription failed",
             feedback="Could not transcribe your answer. Please try again.",
+            speech_asset_id=audio_asset.audio_id,
         )
-    
-    if not transcript or len(transcript.strip()) < 20:
+
+    if not transcript.strip():
         return AnswerScoreResponse(
             transcript=transcript,
-            feedback="Your answer was too short or unclear. Try speaking louder and longer (30+ seconds).",
-            error="transcript_too_short",
+            feedback="Could not hear a clear answer. Try speaking louder and closer to the microphone.",
+            error="transcript_empty",
+            speech_asset_id=audio_asset.audio_id,
         )
-    
-    # Step 3: Score content with LLM
-    result = await score_interview_answer(
+
+    # Content feedback is immediate. Pronunciation is intentionally delayed
+    # until the student submits, matching Debate/GD's detailed-score flow.
+    content_result = await score_interview_answer(
         transcript=transcript,
         question_prompt=question_prompt,
         question_category=question_category,
     )
-    
-    return AnswerScoreResponse(
-        relevance=result.relevance,
-        structure=result.structure,
-        depth=result.depth,
-        communication=result.communication,
-        total=result.total,
-        feedback=result.feedback,
-        strengths=result.strengths,
-        improvements=result.improvements,
-        available=result.available,
-        error=result.error,
-        transcript=transcript,
+    pronunciation = InterviewPronunciationResponse(
+        available=False,
+        feedback="Pronunciation analysis will be available shortly after you submit.",
     )
+
+    if len(transcript.strip()) < 20:
+        return AnswerScoreResponse(
+            transcript=transcript,
+            feedback="Your answer was too short for content feedback. Try speaking for at least 30 seconds.",
+            error="transcript_too_short",
+            pronunciation=pronunciation,
+            speech_asset_id=audio_asset.audio_id,
+        )
+
+    return AnswerScoreResponse(
+        relevance=content_result.relevance,
+        structure=content_result.structure,
+        depth=content_result.depth,
+        communication=content_result.communication,
+        total=content_result.total,
+        feedback=content_result.feedback,
+        strengths=content_result.strengths,
+        improvements=content_result.improvements,
+        available=content_result.available,
+        error=content_result.error,
+        transcript=transcript,
+        pronunciation=pronunciation,
+        speech_asset_id=audio_asset.audio_id,
+    )
+
+
+async def _run_delayed_pronunciation(submission_id: str) -> None:
+    """Run the slow acoustic pass after an interview has been submitted."""
+    from pathlib import Path
+
+    from app.asr.schemas import TranscriptionResult
+    from app.pronunciation.service import assess_pronunciation
+
+    try:
+        await asyncio.sleep(1)
+        submission = submissions_store.get(submission_id)
+        content = submission.content_result if submission else None
+        asset_id = content.speech_asset_id if content else None
+        if not asset_id or not content or not content.transcript.strip():
+            raise ValueError("missing_saved_speech_asset")
+        # audio_id is generated as a UUID by save_uploaded_audio; reject any
+        # unexpected value before composing a filesystem path.
+        import uuid
+        uuid.UUID(asset_id)
+        audio_path = Path("temp") / f"processed_{asset_id}.wav"
+        if not audio_path.is_file():
+            raise FileNotFoundError("processed_audio_missing")
+
+        transcription = TranscriptionResult(
+            text=content.transcript,
+            normalized_text=content.transcript,
+            provider="stored_interview_transcript",
+            model="stored",
+        )
+        result = await asyncio.to_thread(
+            assess_pronunciation,
+            str(audio_path),
+            content.transcript,
+            transcription,
+            submission_id,
+        )
+        summary = _summarize_pronunciation(result)
+        submissions_store.update_pronunciation(
+            submission_id,
+            PronunciationSnapshot(
+                available=summary.available,
+                score=summary.score,
+                provider=summary.provider,
+                feedback=summary.feedback,
+                issue_count=summary.issue_count,
+            ),
+            "completed" if summary.available else "failed",
+        )
+        logger.info("interview_pronunciation_complete submission=%s", submission_id)
+    except Exception as exc:
+        logger.warning("interview_pronunciation_failed submission=%s err=%s", submission_id, type(exc).__name__)
+        submissions_store.update_pronunciation(
+            submission_id,
+            PronunciationSnapshot(feedback="Pronunciation scoring could not be completed."),
+            "failed",
+        )

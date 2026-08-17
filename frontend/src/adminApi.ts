@@ -16,6 +16,21 @@ export interface AdminGestureMetric {
   flag: string;
 }
 
+export interface AdminPronunciationResult {
+  available: boolean;
+  score: number | null;
+  provider: string | null;
+  feedback: string;
+  issue_count: number;
+}
+
+export interface AdminContentResult {
+  total: number;
+  feedback: string;
+  transcript: string;
+  pronunciation: AdminPronunciationResult;
+}
+
 export interface AdminSubmission {
   submission_id: string;
   student_email: string;
@@ -27,6 +42,8 @@ export interface AdminSubmission {
   gesture_session_id: string | null;
   gesture_score: number;
   gesture_metrics: AdminGestureMetric[];
+  content_result: AdminContentResult | null;
+  pronunciation_state: "not_requested" | "pending" | "completed" | "failed";
   duration_seconds: number;
   status: SubmissionStatus;
   submitted_at: string;
