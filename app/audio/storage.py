@@ -16,7 +16,14 @@ SUPPORTED_AUDIO_TYPES = {
     "audio/mp4",
     "audio/x-m4a",
     "audio/webm",
-    "audio/ogg"
+    "audio/ogg",
+    # Video containers that carry an audio track. The Interview Studio
+    # records video+audio with MediaRecorder and reuses that same webm blob
+    # for content scoring (see `scoreInterviewAnswer` in api.ts). ffmpeg in
+    # `preprocessing` extracts the audio track regardless of container, so
+    # we accept these here rather than force the frontend to strip video.
+    "video/webm",
+    "video/mp4",
 }
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -29,7 +36,22 @@ def _get_extension(filename: str | None):
     return filename.rsplit(".", 1)[-1].lower()
 
 
-async def save_uploaded_audio(file: UploadFile):
+async def save_uploaded_audio(
+    file: UploadFile,
+    max_bytes: int | None = None,
+):
+    """Persist an uploaded audio/video container to ``uploads/`` and return metadata.
+
+    ``max_bytes`` lets a caller raise the cap above the default
+    ``MAX_UPLOAD_BYTES`` (25 MB). The Interview Studio reuses the same
+    MediaRecorder blob for content scoring that ``/interview/analyze``
+    already accepts at 100 MB — passing that cap here keeps the two
+    endpoints consistent so a longer 720p answer doesn't hit 413 on
+    ``/interview/score-answer`` while ``/interview/analyze`` succeeds.
+    """
+    if max_bytes is None:
+        max_bytes = MAX_UPLOAD_BYTES
+
     if file.content_type not in SUPPORTED_AUDIO_TYPES:
         raise HTTPException(
             status_code=415,
@@ -52,7 +74,7 @@ async def save_uploaded_audio(file: UploadFile):
 
             size_bytes += len(chunk)
 
-            if size_bytes > MAX_UPLOAD_BYTES:
+            if size_bytes > max_bytes:
                 raise HTTPException(
                     status_code=413,
                     detail="Audio file is too large"

@@ -14,6 +14,7 @@ from pydantic import Field
 
 from app.storage import InterviewReview
 from app.storage import InterviewSubmission
+from app.storage.submissions import ContentScoreSnapshot
 
 
 class GestureMetric(BaseModel):
@@ -55,6 +56,7 @@ class InterviewSubmitRequest(BaseModel):
     gesture_session_id: Optional[str] = None
     gesture_score: int = 0
     gesture_metrics: list[GestureMetric] = Field(default_factory=list)
+    content_result: Optional[ContentScoreSnapshot] = None
     duration_seconds: float = 0.0
 
 

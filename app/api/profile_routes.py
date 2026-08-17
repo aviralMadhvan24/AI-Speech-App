@@ -78,6 +78,8 @@ class InterviewSummary(BaseModel):
     combined_score: Optional[float]
     status: str
     submitted_at: str
+    pronunciation_score: Optional[float] = None
+    pronunciation_pending: bool = False
 
 
 class BattleSummary(BaseModel):
@@ -387,6 +389,10 @@ async def get_profile_summary(
                         combined_score=combined,
                         status=row.get("status", "pending"),
                         submitted_at=row.get("submitted_at", ""),
+                        pronunciation_score=(
+                            (row.get("content_result") or {}).get("pronunciation", {}).get("score")
+                        ),
+                        pronunciation_pending=row.get("pronunciation_state") == "pending",
                     ))
             except Exception as e:
                 logger.warning(f"Skipping malformed interview row: {e}")

@@ -273,6 +273,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
   const applyReviewIfPresent = useCallback(async (submissionId: string): Promise<boolean> => {
     try {
       const detail = await fetchMySubmission(submissionId);
+      setContentResult(detail.contentResult);
       if (detail.review) {
         setTeacherRubric(reviewToRubricItems(detail.review.rubric, detail.review.comment));
         setTeacherComment(detail.review.comment);
@@ -352,9 +353,10 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
         // render the same body-language breakdown the student saw at analyze
         // time, without re-running the video through ss3.
         setGestureScores(gestureScoresFromMetrics(detail.gestureMetrics));
-        // Content score isn't persisted on the submission record, so it can't
-        // be reconstructed when reopening a past submission — clear it.
-        setContentResult(null);
+        // Speech feedback is persisted alongside the gesture snapshot, so a
+        // submitted interview has the same content/pronunciation evidence
+        // after a reload.
+        setContentResult(detail.contentResult);
         elapsedAtAnalyzeRef.current = Math.round(detail.durationSeconds);
         gestureSessionIdRef.current = null; // video already stored in ss3 by session id
 
@@ -550,12 +552,38 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
 
     // Kick off AI content scoring in parallel (fire-and-forget). Whisper
     // reads the audio track of the same recording. Failures are non-fatal —
-    // gesture analysis and teacher review still work without it.
+    // gesture analysis and teacher review still work without it. On failure
+    // we drop into the "unavailable" branch (rather than leaving the spinner
+    // pinned at `null`) so the user sees a clear message instead of an
+    // eternal "Scoring what you said…" loader.
     void scoreInterviewAnswer(blob, question.prompt, question.category)
       .then((res) => setContentResult(res))
       .catch((err) => {
         console.warn("interview content scoring failed", err);
-        setContentResult(null);
+        setContentResult({
+          relevance: 0,
+          structure: 0,
+          depth: 0,
+          communication: 0,
+          total: 0,
+          feedback:
+            err instanceof Error && err.message
+              ? `Content scoring is unavailable — ${err.message}`
+              : "Content scoring is unavailable right now. Your body-language score is fine.",
+          strengths: "",
+          improvements: "",
+          available: false,
+          error: err instanceof Error ? err.message : "content_scoring_failed",
+          transcript: "",
+          speechAssetId: null,
+          pronunciation: {
+            available: false,
+            score: null,
+            provider: null,
+            feedback: "Pronunciation scoring is unavailable right now.",
+            issueCount: 0,
+          },
+        });
       });
 
     // Indeterminate progress driver — actual call duration is unknown
@@ -609,6 +637,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
           score: g.value,
           flag: g.flag,
         })),
+        contentResult,
         durationSeconds: elapsedAtAnalyzeRef.current,
       });
       submissionIdRef.current = submissionId;
@@ -635,7 +664,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
       setSubmitError(message);
       setStage("analyze");
     }
-  }, [gestureScores, question, navigate, startReviewPolling]);
+  }, [gestureScores, contentResult, question, navigate, startReviewPolling]);
 
   const handleRestart = useCallback(() => {
     // Drop back to the entry URL so a reload lands on the pick stage rather
@@ -1053,6 +1082,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                         contentResult.error ||
                         "Content scoring is unavailable right now."}
                     </p>
+                    <PronunciationCard pronunciation={contentResult.pronunciation} />
                   </div>
                 ) : (
                   <div className="card-glass p-5 space-y-4 animate-fade-in-up">
@@ -1105,6 +1135,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                         {contentResult.improvements}
                       </p>
                     )}
+                    <PronunciationCard pronunciation={contentResult.pronunciation} />
                   </div>
                 )}
               </div>
@@ -1119,10 +1150,16 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                 onClick={() => {
                   void submitForReview();
                 }}
+                disabled={contentResult === null}
                 className="btn-primary inline-flex items-center gap-2 px-5 py-2.5"
+                title={
+                  contentResult === null
+                    ? "Wait for content and pronunciation scoring to finish"
+                    : "Submit for teacher review"
+                }
               >
                 <Send className="w-4 h-4" />
-                Submit for teacher review
+                {contentResult === null ? "Finishing speech analysis…" : "Submit for teacher review"}
               </button>
             </div>
           )}
@@ -1157,6 +1194,15 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
               ({pollAttempts} attempts)
             </span>
           </div>
+          {contentResult && (
+            <div className="mx-auto max-w-md text-left card-glass p-4">
+              <div className="flex items-center justify-between text-xs uppercase tracking-widest text-amber-300">
+                <span>Saved speech analysis</span>
+                {contentResult.available && <span>{contentResult.total}/100 content</span>}
+              </div>
+              <PronunciationCard pronunciation={contentResult.pronunciation} />
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
             <button
               type="button"
@@ -1320,6 +1366,21 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
             </div>
           </div>
 
+          {contentResult && (
+            <div className="card-glass p-6 text-left">
+              <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-widest text-sky-300">
+                <span>AI speech analysis</span>
+                {contentResult.available && <span>{contentResult.total}/100 content</span>}
+              </div>
+              {contentResult.feedback && (
+                <p className="mt-3 text-sm text-zinc-300 leading-relaxed">
+                  {contentResult.feedback}
+                </p>
+              )}
+              <PronunciationCard pronunciation={contentResult.pronunciation} />
+            </div>
+          )}
+
           <div className="card-glass border-emerald-500/40 px-4 py-3 flex items-start gap-3 text-sm text-emerald-200">
             <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-emerald-300" />
             <span>
@@ -1330,6 +1391,42 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function PronunciationCard({
+  pronunciation,
+}: {
+  pronunciation: InterviewContentResult["pronunciation"];
+}) {
+  if (!pronunciation.available) {
+    return (
+      <p className="mt-3 text-[12px] text-zinc-500 leading-relaxed">
+        Pronunciation: {pronunciation.feedback || "Unavailable for this answer."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-xl bg-sky-500/5 border border-sky-500/20 px-3 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-widest text-sky-300">
+          Pronunciation (approx.)
+        </span>
+        <span className="font-semibold tabular-nums text-sky-100">
+          {Math.round(pronunciation.score ?? 0)}/100
+        </span>
+      </div>
+      <p className="mt-1.5 text-[12px] text-zinc-300 leading-relaxed">
+        {pronunciation.feedback}
+        {pronunciation.issueCount > 0
+          ? ` ${pronunciation.issueCount} sound issue${pronunciation.issueCount === 1 ? "" : "s"} detected.`
+          : ""}
+      </p>
+      <p className="mt-1 text-[10px] text-zinc-500">
+        Uses your automatic transcript as the reference, so treat this as coaching feedback.
+      </p>
     </div>
   );
 }

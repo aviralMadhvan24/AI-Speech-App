@@ -38,6 +38,32 @@ class GestureMetricSnapshot(BaseModel):
     flag: str = "ok"
 
 
+class PronunciationSnapshot(BaseModel):
+    available: bool = False
+    score: Optional[float] = None
+    provider: Optional[str] = None
+    feedback: str = ""
+    issue_count: int = 0
+
+
+class ContentScoreSnapshot(BaseModel):
+    relevance: int = 0
+    structure: int = 0
+    depth: int = 0
+    communication: int = 0
+    total: int = 0
+    feedback: str = ""
+    strengths: str = ""
+    improvements: str = ""
+    available: bool = False
+    error: Optional[str] = None
+    transcript: str = ""
+    # Server-issued reference to the processed WAV kept until the delayed
+    # pronunciation worker has consumed it. Never rendered to clients.
+    speech_asset_id: Optional[str] = None
+    pronunciation: PronunciationSnapshot = Field(default_factory=PronunciationSnapshot)
+
+
 class InterviewSubmission(BaseModel):
     submission_id: str = Field(default_factory=lambda: str(uuid4()))
     student_email: str
@@ -50,6 +76,10 @@ class InterviewSubmission(BaseModel):
     gesture_session_id: Optional[str] = None
     gesture_score: int = 0
     gesture_metrics: list[GestureMetricSnapshot] = Field(default_factory=list)
+    # Speech analysis is generated alongside the gesture result and retained
+    # so students and teachers can revisit the feedback after a page reload.
+    content_result: Optional[ContentScoreSnapshot] = None
+    pronunciation_state: Literal["not_requested", "pending", "completed", "failed"] = "not_requested"
     duration_seconds: float = 0.0
     status: SubmissionStatus = "pending"
     submitted_at: str
@@ -111,7 +141,9 @@ class SubmissionsStore:
         gesture_session_id: Optional[str],
         gesture_score: int,
         gesture_metrics: list[dict],
+        content_result: Optional[dict],
         duration_seconds: float,
+        pronunciation_state: Literal["not_requested", "pending", "completed", "failed"] = "not_requested",
     ) -> InterviewSubmission:
         record = InterviewSubmission(
             student_email=student_email.lower(),
@@ -126,12 +158,50 @@ class SubmissionsStore:
                 GestureMetricSnapshot(**m) if isinstance(m, dict) else m
                 for m in gesture_metrics
             ],
+            content_result=(
+                ContentScoreSnapshot(**content_result)
+                if isinstance(content_result, dict)
+                else content_result
+            ),
+            pronunciation_state=pronunciation_state,
             duration_seconds=float(duration_seconds or 0.0),
             status="pending",
             submitted_at=_now(),
         )
         append_jsonl(self.path, record.model_dump())
         return record
+
+    def update_pronunciation(
+        self,
+        submission_id: str,
+        pronunciation: PronunciationSnapshot,
+        state: Literal["completed", "failed"],
+    ) -> Optional[InterviewSubmission]:
+        """Persist the result produced by the delayed pronunciation worker."""
+        rows = read_jsonl(self.path)
+        updated: Optional[InterviewSubmission] = None
+        out: list[dict] = []
+        for raw in rows:
+            try:
+                record = InterviewSubmission(**raw)
+            except Exception:
+                out.append(raw)
+                continue
+            if record.submission_id == submission_id:
+                content = record.content_result or ContentScoreSnapshot()
+                record = record.model_copy(
+                    update={
+                        "content_result": content.model_copy(
+                            update={"pronunciation": pronunciation}
+                        ),
+                        "pronunciation_state": state,
+                    }
+                )
+                updated = record
+            out.append(record.model_dump())
+        if updated is not None:
+            overwrite_jsonl(self.path, out)
+        return updated
 
     def mark_reviewed(
         self,

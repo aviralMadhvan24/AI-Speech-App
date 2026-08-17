@@ -242,6 +242,7 @@ export async function submitInterviewForReview(payload: {
   questionCategory: string;
   gestureScore: number;
   metrics: InterviewGestureMetric[];
+  contentResult: InterviewContentResult | null;
   durationSeconds: number;
 }): Promise<{ submissionId: string }> {
   const body = {
@@ -255,6 +256,29 @@ export async function submitInterviewForReview(payload: {
       score: m.score,
       flag: m.flag,
     })),
+    content_result: payload.contentResult
+      ? {
+          relevance: payload.contentResult.relevance,
+          structure: payload.contentResult.structure,
+          depth: payload.contentResult.depth,
+          communication: payload.contentResult.communication,
+          total: payload.contentResult.total,
+          feedback: payload.contentResult.feedback,
+          strengths: payload.contentResult.strengths,
+          improvements: payload.contentResult.improvements,
+          available: payload.contentResult.available,
+          error: payload.contentResult.error,
+          transcript: payload.contentResult.transcript,
+          speech_asset_id: payload.contentResult.speechAssetId,
+          pronunciation: {
+            available: payload.contentResult.pronunciation.available,
+            score: payload.contentResult.pronunciation.score,
+            provider: payload.contentResult.pronunciation.provider,
+            feedback: payload.contentResult.pronunciation.feedback,
+            issue_count: payload.contentResult.pronunciation.issueCount,
+          },
+        }
+      : null,
     duration_seconds: payload.durationSeconds,
   };
   const raw = await fetchJson<{ submission_id: string }>(
@@ -285,6 +309,7 @@ export interface StudentSubmissionSummary {
 export interface StudentSubmissionDetail extends StudentSubmissionSummary {
   gestureMetrics: InterviewGestureMetric[];
   durationSeconds: number;
+  contentResult: InterviewContentResult | null;
   review: {
     rubric: {
       structure: number;
@@ -311,6 +336,7 @@ interface SubmissionWire {
   submitted_at: string;
   reviewed_at: string | null;
   duration_seconds: number;
+  content_result: InterviewContentWire | null;
 }
 
 interface ReviewWire {
@@ -359,6 +385,7 @@ export async function fetchMySubmission(
       flag: m.flag || "ok",
     })),
     durationSeconds: Number(data.submission.duration_seconds ?? 0),
+    contentResult: toContentResult(data.submission.content_result),
     review: data.review
       ? {
           rubric: data.review.rubric,
@@ -445,6 +472,16 @@ export interface InterviewContentResult {
   available: boolean;
   error: string | null;
   transcript: string;
+  speechAssetId: string | null;
+  pronunciation: InterviewPronunciationResult;
+}
+
+export interface InterviewPronunciationResult {
+  available: boolean;
+  score: number | null;
+  provider: string | null;
+  feedback: string;
+  issueCount: number;
 }
 
 interface InterviewContentWire {
@@ -459,6 +496,44 @@ interface InterviewContentWire {
   available: boolean;
   error: string | null;
   transcript: string;
+  speech_asset_id?: string | null;
+  pronunciation?: {
+    available: boolean;
+    score: number | null;
+    provider: string | null;
+    feedback: string;
+    issue_count: number;
+  };
+}
+
+function toContentResult(
+  raw: InterviewContentWire | null | undefined,
+): InterviewContentResult | null {
+  if (!raw) return null;
+  return {
+    relevance: raw.relevance ?? 0,
+    structure: raw.structure ?? 0,
+    depth: raw.depth ?? 0,
+    communication: raw.communication ?? 0,
+    total: raw.total ?? 0,
+    feedback: raw.feedback ?? "",
+    strengths: raw.strengths ?? "",
+    improvements: raw.improvements ?? "",
+    available: !!raw.available,
+    error: raw.error ?? null,
+    transcript: raw.transcript ?? "",
+    speechAssetId: raw.speech_asset_id ?? null,
+    pronunciation: {
+      available: !!raw.pronunciation?.available,
+      score:
+        typeof raw.pronunciation?.score === "number"
+          ? raw.pronunciation.score
+          : null,
+      provider: raw.pronunciation?.provider ?? null,
+      feedback: raw.pronunciation?.feedback ?? "",
+      issueCount: Number(raw.pronunciation?.issue_count ?? 0),
+    },
+  };
 }
 
 /**
@@ -495,17 +570,5 @@ export async function scoreInterviewAnswer(
     },
   );
 
-  return {
-    relevance: raw.relevance ?? 0,
-    structure: raw.structure ?? 0,
-    depth: raw.depth ?? 0,
-    communication: raw.communication ?? 0,
-    total: raw.total ?? 0,
-    feedback: raw.feedback ?? "",
-    strengths: raw.strengths ?? "",
-    improvements: raw.improvements ?? "",
-    available: !!raw.available,
-    error: raw.error ?? null,
-    transcript: raw.transcript ?? "",
-  };
+  return toContentResult(raw)!;
 }

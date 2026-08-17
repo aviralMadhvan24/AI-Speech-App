@@ -62,6 +62,8 @@ interface InterviewSummary {
   combined_score: number | null;
   status: string;
   submitted_at: string;
+  pronunciation_score: number | null;
+  pronunciation_pending: boolean;
 }
 
 interface BattleSummary {
@@ -650,6 +652,11 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
                       </div>
                       <div className="text-xs text-zinc-500">
                         Gesture: {i.gesture_score}
+                        {i.pronunciation_pending
+                          ? " · Pronunciation: processing"
+                          : i.pronunciation_score != null
+                            ? ` · Pronunciation: ${Math.round(i.pronunciation_score)}`
+                            : ""}
                         {i.teacher_score != null && ` · Teacher: ${i.teacher_score}`}
                       </div>
                     </div>
