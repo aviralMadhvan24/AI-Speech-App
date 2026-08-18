@@ -294,6 +294,12 @@ export async function submitInterviewForReview(payload: {
 
 // ---- Student-visible submission history + review poll ----
 
+export type PronunciationState =
+  | "not_requested"
+  | "pending"
+  | "completed"
+  | "failed";
+
 export interface StudentSubmissionSummary {
   submissionId: string;
   questionPrompt: string;
@@ -304,6 +310,8 @@ export interface StudentSubmissionSummary {
   status: "pending" | "reviewed" | "abandoned";
   submittedAt: string;
   reviewedAt: string | null;
+  /** Progress of the delayed acoustic pass kicked off at submit time. */
+  pronunciationState: PronunciationState;
 }
 
 export interface StudentSubmissionDetail extends StudentSubmissionSummary {
@@ -337,6 +345,7 @@ interface SubmissionWire {
   reviewed_at: string | null;
   duration_seconds: number;
   content_result: InterviewContentWire | null;
+  pronunciation_state?: PronunciationState;
 }
 
 interface ReviewWire {
@@ -360,6 +369,7 @@ function toSummary(raw: SubmissionWire): StudentSubmissionSummary {
     status: raw.status,
     submittedAt: raw.submitted_at,
     reviewedAt: raw.reviewed_at,
+    pronunciationState: raw.pronunciation_state ?? "not_requested",
   };
 }
 

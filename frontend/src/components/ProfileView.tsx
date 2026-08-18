@@ -159,6 +159,7 @@ interface ProfileViewProps {
   onAvatarChange?: () => void | Promise<void>;
   onOpenDebateResult: (debateId: string) => void;
   onOpenGDResult: (sessionId: string) => void;
+  onOpenInterviewResult: (submissionId: string) => void;
 }
 
 function formatDate(dateStr: string | number): string {
@@ -184,7 +185,7 @@ function activityColor(level: number): string {
   return "bg-zinc-800";
 }
 
-export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, onOpenGDResult }: ProfileViewProps) {
+export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, onOpenGDResult, onOpenInterviewResult }: ProfileViewProps) {
   const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -216,12 +217,14 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
     void load();
   }, [load]);
 
-  // Detailed debates / GDs finish scoring in a background task, so entries can
-  // arrive as "Processing". Refresh until they resolve. The stats already on
-  // screen are kept during these refreshes.
+  // Detailed debates / GDs finish scoring in a background task, and interviews
+  // run their pronunciation pass the same way, so entries can arrive as
+  // "Processing". Refresh until they resolve. The stats already on screen are
+  // kept during these refreshes.
   const hasPendingResult =
     (data?.recent_debates?.some((d) => d.result_pending) ?? false) ||
-    (data?.recent_gds?.some((g) => g.result_pending) ?? false);
+    (data?.recent_gds?.some((g) => g.result_pending) ?? false) ||
+    (data?.recent_interviews?.some((i) => i.pronunciation_pending) ?? false);
 
   useEffect(() => {
     if (!hasPendingResult) return;
@@ -639,27 +642,34 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
               </h2>
               <ul className="space-y-2">
                 {data.recent_interviews.map((i) => (
-                  <li key={i.submission_id} className="bg-zinc-800/50 rounded-lg p-3 flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-zinc-100 truncate">{i.question_prompt}</div>
-                      <div className="text-xs text-zinc-500">
-                        {formatDate(i.submitted_at)} · {i.status}
+                  <li key={i.submission_id} className="bg-zinc-800/50 rounded-lg overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => onOpenInterviewResult(i.submission_id)}
+                      className="w-full p-3 flex items-center gap-3 text-left hover:bg-zinc-800/70 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-zinc-100 truncate">{i.question_prompt}</div>
+                        <div className="text-xs text-zinc-500">
+                          {formatDate(i.submitted_at)} · {i.status}
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-zinc-100">
-                        {i.combined_score != null ? Math.round(i.combined_score) : i.gesture_score}
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-zinc-100">
+                          {i.combined_score != null ? Math.round(i.combined_score) : i.gesture_score}
+                        </div>
+                        <div className="text-xs text-zinc-500">
+                          Gesture: {i.gesture_score}
+                          {i.pronunciation_pending
+                            ? " · Pronunciation: processing"
+                            : i.pronunciation_score != null
+                              ? ` · Pronunciation: ${Math.round(i.pronunciation_score)}`
+                              : ""}
+                          {i.teacher_score != null && ` · Teacher: ${i.teacher_score}`}
+                        </div>
                       </div>
-                      <div className="text-xs text-zinc-500">
-                        Gesture: {i.gesture_score}
-                        {i.pronunciation_pending
-                          ? " · Pronunciation: processing"
-                          : i.pronunciation_score != null
-                            ? ` · Pronunciation: ${Math.round(i.pronunciation_score)}`
-                            : ""}
-                        {i.teacher_score != null && ` · Teacher: ${i.teacher_score}`}
-                      </div>
-                    </div>
+                      <ChevronDown className="w-4 h-4 -rotate-90 text-zinc-400" aria-hidden />
+                    </button>
                   </li>
                 ))}
               </ul>

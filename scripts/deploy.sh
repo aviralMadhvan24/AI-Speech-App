@@ -1,367 +1,311 @@
 #!/bin/bash
-# One-command deployment script for AWS EC2 Ubuntu 22.04
-# 
-# Usage:
-#   1. Launch EC2 t3.medium with Ubuntu 22.04
-#   2. SSH in: ssh -i key.pem ubuntu@your-ip
-#   3. Run: curl -sL https://your-repo/deploy.sh | bash
-#      OR: git clone repo && cd softskills && bash scripts/deploy.sh
+# Deploy the Soft Skills platform to the production EC2 instance.
+#
+# TARGET (this script deploys to this instance only):
+#   Instance : i-0b1cf8a2c1a05a01b  "softskills-production"  (t3.large)
+#   Region   : ap-south-1           AWS account 102001485145
+#   Address  : 15.207.25.230        https://15.207.25.230.nip.io
+#
+# Usage — from your machine:
+#   ssh -i ~/.ssh/softskills-final-key.pem ubuntu@15.207.25.230 \
+#       'bash /home/ubuntu/softskills2/scripts/deploy.sh'
+#
+# Usage — once you are on the box:
+#   bash /home/ubuntu/softskills2/scripts/deploy.sh
+#
+# Options:
+#   --remote NAME    git remote to pull from   (default: upstream-aviral)
+#   --branch NAME    branch to deploy          (default: main)
+#   --clean-install  force `npm ci` even when node_modules is present
+#   --skip-frontend  backend only; skips the Vite build
+#
+# This is an UPDATE script, not a provisioning script. It deliberately never
+# touches `.env`, `.firebase-admin.json`, the systemd units, or the Caddyfile —
+# those are configured on the box and are not reproduced from the repo. See
+# "Reference configuration" at the bottom of this file for their current
+# contents if you ever need to rebuild the instance from scratch.
 
-set -e  # Exit on error
+set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════
-# Configuration - EDIT THESE
+# Configuration
 # ═══════════════════════════════════════════════════════════════════
 
-REPO_URL="${REPO_URL:-https://github.com/YOUR_USERNAME/softskills2.git}"
-APP_DIR="/home/ubuntu/softskills"
-DOMAIN="${DOMAIN:-}"  # Optional: leave empty for IP-based access
+APP_DIR="/home/ubuntu/softskills2"
+BACKEND_SERVICE="softskills-backend"
+SS3_SERVICE="softskills-ss3"
+BACKEND_PORT=8000
+SS3_PORT=8001
+PUBLIC_URL="https://15.207.25.230.nip.io"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+GIT_REMOTE="upstream-aviral"
+GIT_BRANCH="main"
+CLEAN_INSTALL=0
+SKIP_FRONTEND=0
 
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --remote)        GIT_REMOTE="$2"; shift 2 ;;
+        --branch)        GIT_BRANCH="$2"; shift 2 ;;
+        --clean-install) CLEAN_INSTALL=1; shift ;;
+        --skip-frontend) SKIP_FRONTEND=1; shift ;;
+        -h|--help)       sed -n '2,28p' "$0"; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_ok() { echo -e "${GREEN}[✓]${NC} $1"; }
+log_ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_err() { echo -e "${RED}[✗]${NC} $1"; }
+log_err()  { echo -e "${RED}[✗]${NC} $1"; }
 
 # ═══════════════════════════════════════════════════════════════════
-# Pre-flight checks
+# 1. Guard: refuse to run anywhere that is not the production box
 # ═══════════════════════════════════════════════════════════════════
+#
+# Deploying into a half-matching host is how you end up with a second,
+# parallel install. Verify the layout up front and bail out loudly.
 
-if [ "$EUID" -eq 0 ]; then
-    log_err "Do not run as root. Run as ubuntu user with sudo access."
+log_info "Step 1/6: Verifying this is the production instance..."
+
+if [ "$(id -u)" -eq 0 ]; then
+    log_err "Do not run as root — the services run as the 'ubuntu' user."
     exit 1
 fi
 
-log_info "Starting Soft Skills Platform deployment..."
-log_info "Instance: $(hostname), User: $(whoami)"
-
-# ═══════════════════════════════════════════════════════════════════
-# 1. System Updates & Dependencies
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 1/9: Updating system packages..."
-sudo apt update -qq
-sudo apt upgrade -y -qq
-
-log_info "Installing system dependencies..."
-sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-    python3.11 python3.11-venv python3-pip \
-    ffmpeg \
-    nginx \
-    git \
-    build-essential \
-    htop curl \
-    software-properties-common
-
-# Node.js 20
-if ! command -v node &> /dev/null || [ "$(node -v | cut -d. -f1)" != "v20" ]; then
-    log_info "Installing Node.js 20..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - > /dev/null
-    sudo apt install -y nodejs
-fi
-
-log_ok "Dependencies installed"
-log_info "Python: $(python3.11 --version)"
-log_info "Node: $(node --version)"
-
-# ═══════════════════════════════════════════════════════════════════
-# 2. Increase Swap (Helps builds on smaller instances)
-# ═══════════════════════════════════════════════════════════════════
-
-if [ ! -f /swapfile ]; then
-    log_info "Step 2/9: Setting up 2GB swap file..."
-    sudo fallocate -l 2G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile > /dev/null
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
-    log_ok "Swap enabled"
-else
-    log_ok "Swap already configured"
-fi
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. Clone Repository
-# ═══════════════════════════════════════════════════════════════════
-
-if [ ! -d "$APP_DIR" ]; then
-    log_info "Step 3/9: Cloning repository..."
-    git clone "$REPO_URL" "$APP_DIR"
-else
-    log_info "Step 3/9: Repository exists, pulling latest..."
-    cd "$APP_DIR" && git pull
-fi
-cd "$APP_DIR"
-log_ok "Code ready at $APP_DIR"
-
-# ═══════════════════════════════════════════════════════════════════
-# 4. Python Virtual Environment + Dependencies
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 4/9: Setting up Python environment..."
-cd "$APP_DIR"
-
-if [ ! -d "venv" ]; then
-    python3.11 -m venv venv
-fi
-
-source venv/bin/activate
-pip install --upgrade pip --quiet
-
-log_info "Installing Python dependencies (may take 5-10 min)..."
-pip install --no-cache-dir -r requirements.txt --quiet
-
-log_ok "Python environment ready"
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. Frontend Build
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 5/9: Building frontend..."
-cd "$APP_DIR/frontend"
-
-if [ ! -d "node_modules" ]; then
-    npm ci --silent
-fi
-
-npm run build --silent
-log_ok "Frontend built to frontend/dist/"
-
-# ═══════════════════════════════════════════════════════════════════
-# 6. Setup ss3 Gesture Service
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 6/9: Setting up ss3 gesture service..."
-cd "$APP_DIR/ss3"
-
-if [ ! -d "venv-ss3" ]; then
-    python3.11 -m venv venv-ss3
-fi
-
-source venv-ss3/bin/activate
-pip install --upgrade pip --quiet
-pip install --no-cache-dir -r requirements.txt --quiet
-deactivate
-log_ok "ss3 service ready"
-
-# ═══════════════════════════════════════════════════════════════════
-# 7. Environment Configuration
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 7/9: Checking environment configuration..."
-cd "$APP_DIR"
-
-if [ ! -f ".env" ]; then
-    log_warn ".env file missing - creating template"
-    cat > .env <<'EOF'
-# EDIT THIS FILE - Add your API keys!
-
-# Pronunciation provider (hf_phoneme = full, mock = lightweight)
-PRONUNCIATION_PROVIDER=hf_phoneme
-HF_PHONEME_MODEL_NAME=facebook/wav2vec2-lv-60-espeak-cv-ft
-
-# Groq API (get free at https://console.groq.com/keys)
-GROQ_API_KEY=
-
-# Firebase (paste full JSON as single line)
-FIREBASE_SERVICE_ACCOUNT_JSON=
-AUTH_BYPASS=false
-
-# Storage
-UPLOAD_DIR=uploads
-OUTPUT_DIR=outputs
-TEMP_DIR=temp
-
-# ss3 gesture service
-CSA_SERVICE_URL=http://127.0.0.1:8001
-CSA_DATA_DIR=/home/ubuntu/softskills/outputs/ss3
-CSA_ANALYZE_TIMEOUT_SECONDS=180
-
-# Teachers (comma-separated)
-TEACHER_EMAILS=teacher@kiet.edu
-EOF
-    chmod 600 .env
-    log_warn "IMPORTANT: Edit .env and add:"
-    log_warn "  - GROQ_API_KEY"
-    log_warn "  - FIREBASE_SERVICE_ACCOUNT_JSON"
-    log_warn "  - TEACHER_EMAILS"
-    log_warn "Run: nano .env"
-    log_warn ""
-    log_warn "After editing, re-run this script to finish setup"
-    exit 1
-fi
-
-# Validate critical env vars
-if grep -q "^GROQ_API_KEY=$" .env; then
-    log_err "GROQ_API_KEY not set in .env"
-    log_err "Get free key at: https://console.groq.com/keys"
-    exit 1
-fi
-
-if grep -q "^FIREBASE_SERVICE_ACCOUNT_JSON=$" .env; then
-    log_warn "FIREBASE_SERVICE_ACCOUNT_JSON empty - auth may fail"
-fi
-
-log_ok "Environment configured"
-
-# ═══════════════════════════════════════════════════════════════════
-# 8. Systemd Services
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 8/9: Setting up systemd services..."
-
-sudo tee /etc/systemd/system/softskills-ss3.service > /dev/null <<'EOF'
-[Unit]
-Description=Soft Skills SS3 Gesture Service
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/softskills/ss3
-Environment="PATH=/home/ubuntu/softskills/ss3/venv-ss3/bin"
-ExecStart=/home/ubuntu/softskills/ss3/venv-ss3/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8001
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo tee /etc/systemd/system/softskills-backend.service > /dev/null <<'EOF'
-[Unit]
-Description=Soft Skills FastAPI Backend
-After=network.target softskills-ss3.service
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/softskills
-Environment="PATH=/home/ubuntu/softskills/venv/bin"
-EnvironmentFile=/home/ubuntu/softskills/.env
-ExecStart=/home/ubuntu/softskills/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 2
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable softskills-ss3 softskills-backend > /dev/null 2>&1
-sudo systemctl restart softskills-ss3 softskills-backend
-
-# Wait for services
-sleep 5
-
-if sudo systemctl is-active --quiet softskills-backend; then
-    log_ok "Backend service running"
-else
-    log_err "Backend failed to start"
-    sudo journalctl -u softskills-backend -n 20
-    exit 1
-fi
-
-if sudo systemctl is-active --quiet softskills-ss3; then
-    log_ok "ss3 service running"
-else
-    log_warn "ss3 failed to start (Interview Studio may not work)"
-fi
-
-# ═══════════════════════════════════════════════════════════════════
-# 9. Nginx Reverse Proxy
-# ═══════════════════════════════════════════════════════════════════
-
-log_info "Step 9/9: Configuring Nginx..."
-
-sudo tee /etc/nginx/sites-available/softskills > /dev/null <<'EOF'
-client_max_body_size 50M;
-
-server {
-    listen 80 default_server;
-    server_name _;
-
-    # WebSocket routes
-    location ~ ^/(gd|debate|battle)/ws/ {
-        proxy_pass http://localhost:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-
-    # Everything else
-    location / {
-        proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-    }
-
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript;
+preflight_error=0
+require_path() {
+    if [ ! -e "$1" ]; then
+        log_err "Missing $1 — $2"
+        preflight_error=1
+    fi
 }
-EOF
 
-sudo ln -sf /etc/nginx/sites-available/softskills /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
+require_path "$APP_DIR"                     "expected the app checkout here"
+require_path "$APP_DIR/venv/bin/python"     "backend virtualenv is not set up"
+require_path "$APP_DIR/ss3/venv-ss3/bin/python" "ss3 virtualenv is not set up"
+require_path "$APP_DIR/.env"                "backend environment file is missing"
+require_path "/etc/systemd/system/${BACKEND_SERVICE}.service" "backend service is not installed"
+require_path "/etc/systemd/system/${SS3_SERVICE}.service"     "ss3 service is not installed"
 
-if sudo nginx -t 2>&1 | grep -q "successful"; then
-    sudo systemctl reload nginx
-    log_ok "Nginx configured"
-else
-    log_err "Nginx config invalid"
+if ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    log_err "Caddy is not installed — this host does not serve the app."
+    preflight_error=1
+fi
+
+if [ "$preflight_error" -ne 0 ]; then
+    log_err "This host does not look like softskills-production."
+    log_err "This script only deploys to i-0b1cf8a2c1a05a01b (15.207.25.230)."
+    log_err "It will not provision a new machine — set one up before deploying."
     exit 1
 fi
 
+log_ok "Host verified ($(hostname))"
+
 # ═══════════════════════════════════════════════════════════════════
-# Verification
+# 2. Pull the code
 # ═══════════════════════════════════════════════════════════════════
 
-log_info "Verifying deployment..."
+log_info "Step 2/6: Pulling ${GIT_REMOTE}/${GIT_BRANCH}..."
+cd "$APP_DIR"
 
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "unknown")
-sleep 3
+if ! git remote get-url "$GIT_REMOTE" >/dev/null 2>&1; then
+    log_err "Git remote '${GIT_REMOTE}' is not configured. Available:"
+    git remote -v >&2
+    exit 1
+fi
 
-if curl -sf http://localhost:8080/health > /dev/null; then
-    log_ok "Backend health check passed"
+# Vite rewrites these on every build, so they are always dirty and would
+# block the merge. They are generated output — safe to discard.
+git checkout -- frontend/tsconfig.tsbuildinfo ss3/frontend/tsconfig.tsbuildinfo 2>/dev/null || true
+
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    log_err "Uncommitted changes on the box would be overwritten:"
+    git status --short >&2
+    log_err "Commit, stash, or discard them before deploying."
+    exit 1
+fi
+
+BEFORE="$(git rev-parse --short HEAD)"
+GIT_TERMINAL_PROMPT=0 git fetch "$GIT_REMOTE" "$GIT_BRANCH"
+
+# --ff-only: a deploy should fast-forward. A merge commit created here would
+# mean the box has history the remote does not, which needs a human.
+if ! git merge --ff-only "${GIT_REMOTE}/${GIT_BRANCH}"; then
+    log_err "Cannot fast-forward to ${GIT_REMOTE}/${GIT_BRANCH}."
+    log_err "The box has diverged from the remote — resolve this by hand."
+    exit 1
+fi
+
+AFTER="$(git rev-parse --short HEAD)"
+if [ "$BEFORE" = "$AFTER" ]; then
+    log_ok "Already up to date at ${AFTER}"
 else
-    log_warn "Backend health check failed"
+    log_ok "Updated ${BEFORE} → ${AFTER}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# Success!
+# 3. Python dependencies
 # ═══════════════════════════════════════════════════════════════════
 
+log_info "Step 3/6: Installing Python dependencies..."
+"$APP_DIR/venv/bin/pip" install --no-cache-dir -q -r "$APP_DIR/requirements.txt"
+log_ok "Backend dependencies ready ($("$APP_DIR/venv/bin/python" --version))"
+
+# ss3 has its own virtualenv (mediapipe/opencv pins conflict with the backend).
+if [ -f "$APP_DIR/ss3/requirements.txt" ]; then
+    "$APP_DIR/ss3/venv-ss3/bin/pip" install --no-cache-dir -q -r "$APP_DIR/ss3/requirements.txt"
+    log_ok "ss3 dependencies ready"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. Frontend build
+# ═══════════════════════════════════════════════════════════════════
+
+if [ "$SKIP_FRONTEND" -eq 1 ]; then
+    log_warn "Step 4/6: Skipping frontend build (--skip-frontend)"
+else
+    log_info "Step 4/6: Building frontend..."
+    cd "$APP_DIR/frontend"
+
+    if [ "$CLEAN_INSTALL" -eq 1 ] || [ ! -d node_modules ]; then
+        log_info "Installing npm packages (npm ci)..."
+        npm ci
+    fi
+
+    # Caddy serves frontend/dist straight off disk, so a failed build here
+    # must abort the deploy rather than leave a stale bundle live.
+    npm run build
+    log_ok "Frontend built to frontend/dist/"
+    cd "$APP_DIR"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Restart services
+# ═══════════════════════════════════════════════════════════════════
+
+log_info "Step 5/6: Restarting services..."
+sudo systemctl restart "$SS3_SERVICE" "$BACKEND_SERVICE"
+
+for service in "$BACKEND_SERVICE" "$SS3_SERVICE"; do
+    if systemctl is-active --quiet "$service"; then
+        log_ok "$service is active"
+    else
+        log_err "$service failed to start:"
+        sudo journalctl -u "$service" -n 30 --no-pager >&2
+        exit 1
+    fi
+done
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. Health checks
+# ═══════════════════════════════════════════════════════════════════
+#
+# The backend preloads the Whisper model on startup (~15s), during which the
+# port is not yet accepting connections. An immediate curl failing is normal,
+# so poll rather than treating the first refusal as a deploy failure.
+
+log_info "Step 6/6: Waiting for the backend to come up..."
+
+backend_ok=0
+for attempt in $(seq 1 12); do
+    if curl -sf --max-time 5 "http://localhost:${BACKEND_PORT}/health" >/dev/null 2>&1; then
+        backend_ok=1
+        log_ok "Backend healthy on :${BACKEND_PORT} (after ~$((attempt * 5))s)"
+        break
+    fi
+    sleep 5
+done
+
+if [ "$backend_ok" -ne 1 ]; then
+    log_err "Backend never became healthy on :${BACKEND_PORT}"
+    sudo journalctl -u "$BACKEND_SERVICE" -n 30 --no-pager >&2
+    exit 1
+fi
+
+if curl -sf --max-time 5 "http://127.0.0.1:${SS3_PORT}/" >/dev/null 2>&1 \
+   || curl -s --max-time 5 -o /dev/null "http://127.0.0.1:${SS3_PORT}/"; then
+    log_ok "ss3 responding on :${SS3_PORT}"
+else
+    log_warn "ss3 not responding on :${SS3_PORT} — Interview Studio gestures may fail"
+fi
+
+if curl -sf --max-time 10 "${PUBLIC_URL}/health" >/dev/null 2>&1; then
+    log_ok "Public endpoint healthy"
+else
+    log_warn "Could not reach ${PUBLIC_URL}/health from the box (check Caddy)"
+fi
+
 echo ""
-echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║              🎉 DEPLOYMENT COMPLETE! 🎉                        ║"
-echo "╠═══════════════════════════════════════════════════════════════╣"
-echo "║                                                                 ║"
-echo "║  App URL: http://$PUBLIC_IP                                     "
-echo "║                                                                 ║"
-echo "║  Next Steps:                                                    ║"
-echo "║  1. Open Firebase Console                                       ║"
-echo "║  2. Add authorized domain: $PUBLIC_IP                           "
-echo "║  3. Test at: http://$PUBLIC_IP                                  "
-echo "║                                                                 ║"
-echo "║  Management Commands:                                           ║"
-echo "║    View logs: sudo journalctl -u softskills-backend -f          ║"
-echo "║    Restart:   sudo systemctl restart softskills-backend         ║"
-echo "║    Status:    sudo systemctl status softskills-backend          ║"
-echo "║                                                                 ║"
-echo "╚═══════════════════════════════════════════════════════════════╝"
+log_ok "Deployment complete — ${BEFORE} → ${AFTER}"
 echo ""
+echo "  App:      ${PUBLIC_URL}"
+echo "  Logs:     sudo journalctl -u ${BACKEND_SERVICE} -f"
+echo "  Restart:  sudo systemctl restart ${BACKEND_SERVICE}"
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════
+# Reference configuration (NOT applied by this script)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Recorded so the instance can be rebuilt if it is ever lost. These files are
+# owned by the box; this script only reads the code, never rewrites config.
+#
+# ── /etc/systemd/system/softskills-backend.service ──
+#   [Unit]
+#   Description=SoftSkills Backend API
+#   After=network.target
+#   [Service]
+#   Type=simple
+#   User=ubuntu
+#   WorkingDirectory=/home/ubuntu/softskills2
+#   ExecStart=/home/ubuntu/softskills2/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+#   Restart=always
+#   RestartSec=5
+#   EnvironmentFile=/home/ubuntu/softskills2/.env
+#   [Install]
+#   WantedBy=multi-user.target
+#
+# ── /etc/systemd/system/softskills-ss3.service ──
+#   [Unit]
+#   Description=SoftSkills ss3 Gesture Analysis Service
+#   After=network.target
+#   [Service]
+#   Type=simple
+#   User=ubuntu
+#   WorkingDirectory=/home/ubuntu/softskills2/ss3
+#   ExecStart=/home/ubuntu/softskills2/ss3/venv-ss3/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
+#   Restart=always
+#   RestartSec=5
+#   [Install]
+#   WantedBy=multi-user.target
+#
+# ── /etc/caddy/Caddyfile ──
+#   15.207.25.230.nip.io {
+#       handle /livekit-ws/* {
+#           uri strip_prefix /livekit-ws
+#           reverse_proxy localhost:7880
+#       }
+#       handle /ss3/* {
+#           root * /home/ubuntu/softskills2/ss3/frontend/dist
+#           uri strip_prefix /ss3
+#           try_files {path} /index.html
+#           file_server
+#       }
+#       handle /assets/* {
+#           root * /home/ubuntu/softskills2/frontend/dist
+#           file_server
+#       }
+#       @backend {
+#           path /admin* /analyze* /attempts* /auth* /battle* /debate* /gd* /health* /interview* /potd* /profile* /livekit* /uploads* /outputs* /ws* /docs* /redoc* /openapi.json
+#       }
+#       handle @backend {
+#           reverse_proxy localhost:8000
+#       }
+#       handle {
+#           root * /home/ubuntu/softskills2/frontend/dist
+#           try_files {path} /index.html
+#           file_server
+#       }
+#   }

@@ -335,7 +335,7 @@ function PerformanceResultRoute({
   kind,
   onBack,
 }: {
-  kind: "debate" | "gd";
+  kind: "debate" | "gd" | "interview";
   onBack: () => void;
 }) {
   const { resultId } = useParams();
@@ -891,6 +891,7 @@ export default function App() {
                     onAvatarChange={refreshProfile}
                     onOpenDebateResult={(debateId) => navigate(`/profile/debates/${debateId}`)}
                     onOpenGDResult={(sessionId) => navigate(`/profile/gds/${sessionId}`)}
+                    onOpenInterviewResult={(submissionId) => navigate(`/profile/interviews/${submissionId}`)}
                   />
                 }
               />
@@ -901,6 +902,10 @@ export default function App() {
               <Route
                 path="/profile/gds/:resultId"
                 element={<PerformanceResultRoute kind="gd" onBack={() => navigate("/profile")} />}
+              />
+              <Route
+                path="/profile/interviews/:resultId"
+                element={<PerformanceResultRoute kind="interview" onBack={() => navigate("/profile")} />}
               />
 
               <Route path="*" element={<Navigate to="/" replace />} />
