@@ -11,6 +11,7 @@ from app.buddy.service import SpeakerRanking
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
+from app.storage.buddy import BuddySession
 from app.storage.buddy import MentorRecord
 
 
@@ -101,4 +102,29 @@ class CreateCycleRequest(BaseModel):
 
 class CyclesResponse(BaseModel):
     cycles: list[BuddyCycle] = Field(default_factory=list)
+    total: int = 0
+
+
+# --- Sessions ---
+
+
+class PlanSessionRequest(BaseModel):
+    """Plan a unit of practice inside the pair's open cycle."""
+
+    scheduled_at: str
+    topic: str = ""
+    # async_voice | live_call | in_person — validated in the route so a bad
+    # value reads as a 400 rather than a schema error.
+    mode: str = "async_voice"
+
+
+class CompleteSessionRequest(BaseModel):
+    """Close out a session. The note lands on whichever side is calling."""
+
+    note: str = ""
+    duration_minutes: Optional[int] = None
+
+
+class SessionsResponse(BaseModel):
+    sessions: list[BuddySession] = Field(default_factory=list)
     total: int = 0

@@ -35,6 +35,7 @@ from app.storage import submissions_store
 from app.storage import users_store
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import CycleBaseline
+from app.storage.buddy import buddy_sessions_store
 
 logger = logging.getLogger("buddy.growth")
 
@@ -75,6 +76,22 @@ class TrendPoint(BaseModel):
     live_speaking: Optional[float] = None
 
 
+class SessionConsistency(BaseModel):
+    """Did the pairing actually happen, separately from how it scored.
+
+    A flat score with every session kept is a different story from a flat score
+    with none, so this is reported alongside the axes rather than folded in.
+    """
+
+    planned: int = 0
+    completed: int = 0
+    missed: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.planned + self.completed + self.missed
+
+
 class CycleReport(BaseModel):
     """Everything the cycle panel renders, for one pair."""
 
@@ -83,6 +100,7 @@ class CycleReport(BaseModel):
     trend: list[TrendPoint] = Field(default_factory=list)
     activity: list[ActivityItem] = Field(default_factory=list)
     counts: dict[str, int] = Field(default_factory=dict)
+    sessions: SessionConsistency = Field(default_factory=SessionConsistency)
     # False when there is too little scored work to draw a line through.
     enough_for_trend: bool = False
 
@@ -301,6 +319,8 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
     activity.sort(key=lambda item: item.at, reverse=True)
     trend = sorted(by_date.values(), key=lambda point: point.at)
 
+    sessions = buddy_sessions_store.list_for_cycle(cycle.cycle_id)
+
     return CycleReport(
         cycle=cycle,
         axes=axes,
@@ -311,5 +331,10 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
             "debate": sum(1 for a in activity if a.kind == "debate"),
             "gd": sum(1 for a in activity if a.kind == "gd"),
         },
+        sessions=SessionConsistency(
+            planned=sum(1 for s in sessions if s.status == "planned"),
+            completed=sum(1 for s in sessions if s.status == "completed"),
+            missed=sum(1 for s in sessions if s.status == "missed"),
+        ),
         enough_for_trend=len(trend) >= MIN_TREND_POINTS,
     )

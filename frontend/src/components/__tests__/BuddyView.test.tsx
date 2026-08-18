@@ -6,7 +6,7 @@
  * own behaviour: how conversations are grouped, that opening a thread clears
  * the unread badge, and that an ended pairing is read-only.
  */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BuddyView } from "../BuddyView";
@@ -19,8 +19,18 @@ const markConversationRead = vi.fn();
 const sendVoiceNote = vi.fn();
 const fetchVoiceNoteUrl = vi.fn();
 const fetchPairActivity = vi.fn();
+const fetchSessions = vi.fn();
+const planSession = vi.fn();
+const completeSession = vi.fn();
+const missSession = vi.fn();
+const cancelSession = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
+  fetchSessions: (...args: unknown[]) => fetchSessions(...args),
+  planSession: (...args: unknown[]) => planSession(...args),
+  completeSession: (...args: unknown[]) => completeSession(...args),
+  missSession: (...args: unknown[]) => missSession(...args),
+  cancelSession: (...args: unknown[]) => cancelSession(...args),
   fetchMyBuddies: (...args: unknown[]) => fetchMyBuddies(...args),
   fetchMessages: (...args: unknown[]) => fetchMessages(...args),
   sendMessage: (...args: unknown[]) => sendMessage(...args),
@@ -104,6 +114,7 @@ beforeEach(() => {
   });
   markConversationRead.mockResolvedValue({ marked: 0 });
   fetchPairActivity.mockResolvedValue(emptyReport());
+  fetchSessions.mockResolvedValue({ sessions: [], total: 0 });
 });
 
 /** A pair between cycles: nothing to track, so nothing to show. */
@@ -114,7 +125,27 @@ function emptyReport() {
     trend: [],
     activity: [],
     counts: {},
+    sessions: { planned: 0, completed: 0, missed: 0 },
     enough_for_trend: false,
+  };
+}
+
+function session(overrides: Record<string, unknown> = {}) {
+  return {
+    session_id: "s-1",
+    pair_id: "pair-1",
+    cycle_id: "c-1",
+    topic: "Two-minute intro",
+    mode: "async_voice",
+    scheduled_at: "2026-08-20T15:00:00Z",
+    status: "planned",
+    completed_at: null,
+    duration_minutes: null,
+    mentor_notes: "",
+    mentee_reflection: "",
+    created_by: "mentor@kiet.edu",
+    created_at: "2026-08-18T10:00:00Z",
+    ...overrides,
   };
 }
 
@@ -528,6 +559,120 @@ describe("BuddyView — the cycle", () => {
     await user.click(screen.getByRole("tab", { name: "Conversation" }));
 
     expect(await screen.findByText("how did it go?")).toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — sessions", () => {
+  beforeEach(() => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: "mentor" })],
+      total: 1,
+    });
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+  });
+
+  async function openSessions() {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+    await user.click(await screen.findByRole("tab", { name: "Sessions" }));
+    return user;
+  }
+
+  it("explains that sessions need a cycle when none is running", async () => {
+    fetchPairActivity.mockResolvedValue(emptyReport());
+
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+
+    // No cycle means no tabs at all — the thread is the whole screen.
+    expect(screen.queryByRole("tab", { name: "Sessions" })).not.toBeInTheDocument();
+  });
+
+  it("plans a session with the chosen topic and mode", async () => {
+    planSession.mockResolvedValue(session());
+
+    const user = await openSessions();
+    await user.type(screen.getByLabelText("Topic"), "Two-minute intro");
+    await user.click(screen.getByRole("button", { name: /Plan it/ }));
+
+    await waitFor(() => expect(planSession).toHaveBeenCalled());
+    const [pairId, , topic, mode] = planSession.mock.calls[0];
+    expect(pairId).toBe("pair-1");
+    expect(topic).toBe("Two-minute intro");
+    expect(mode).toBe("async_voice");
+  });
+
+  it("shows a planned session with its mode and topic", async () => {
+    fetchSessions.mockResolvedValue({ sessions: [session()], total: 1 });
+
+    await openSessions();
+
+    expect(await screen.findByText("Two-minute intro")).toBeInTheDocument();
+    // Scoped to the row — "Voice notes" is also an option in the plan form.
+    const row = screen.getByRole("listitem");
+    expect(within(row).getByText(/Voice notes/)).toBeInTheDocument();
+    expect(within(row).getByText("planned")).toBeInTheDocument();
+  });
+
+  it("records the mentor's note when marking a session done", async () => {
+    fetchSessions.mockResolvedValue({ sessions: [session()], total: 1 });
+    completeSession.mockResolvedValue(session({ status: "completed" }));
+
+    const user = await openSessions();
+    await user.click(await screen.findByRole("button", { name: /Mark done/ }));
+    await user.type(screen.getByLabelText("Mentor notes"), "Rushed the opening");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(completeSession).toHaveBeenCalledWith("s-1", "Rushed the opening"),
+    );
+  });
+
+  it("keeps a missed session rather than hiding it", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "missed" })],
+      total: 1,
+    });
+
+    await openSessions();
+
+    expect(await screen.findByText("missed")).toBeInTheDocument();
+    expect(screen.getByText("Two-minute intro")).toBeInTheDocument();
+  });
+
+  it("shows both sides of a completed session without conflating them", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [
+        session({
+          status: "completed",
+          mentor_notes: "Rushed the opening",
+          mentee_reflection: "Need to slow down",
+        }),
+      ],
+      total: 1,
+    });
+
+    await openSessions();
+
+    expect(await screen.findByText("Rushed the opening")).toBeInTheDocument();
+    expect(screen.getByText("Need to slow down")).toBeInTheDocument();
+  });
+
+  it("counts kept sessions on the cycle header", async () => {
+    fetchPairActivity.mockResolvedValue({
+      ...emptyReport(),
+      cycle: cycle(),
+      sessions: { planned: 2, completed: 3, missed: 1 },
+    });
+
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+
+    expect(await screen.findByText(/3 of 6 sessions done/)).toBeInTheDocument();
+    expect(screen.getByText(/1 missed/)).toBeInTheDocument();
   });
 });
 

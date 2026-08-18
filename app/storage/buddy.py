@@ -32,6 +32,10 @@ MentorStatus = Literal["suggested", "approved", "rejected"]
 PairStatus = Literal["active", "ended"]
 MessageKind = Literal["text", "voice"]
 CycleStatus = Literal["active", "closed"]
+SessionStatus = Literal["planned", "completed", "missed"]
+# Async is the default on purpose: an exchange of voice notes across two days
+# is a real session here, not a failed live call.
+SessionMode = Literal["async_voice", "live_call", "in_person"]
 
 
 class MentorRecord(BaseModel):
@@ -138,10 +142,35 @@ class BuddyCycle(BaseModel):
         return self.starts_at <= when <= self.ends_at
 
 
+class BuddySession(BaseModel):
+    """One planned unit of practice inside a cycle.
+
+    Without this, twenty messages might be one good coaching conversation or
+    twenty days of "hi" — there is nothing to count, schedule, or miss. Notes
+    are kept per side: the mentor writes what they observed, the mentee writes
+    what they took away, and neither overwrites the other.
+    """
+
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    pair_id: str
+    cycle_id: str
+    topic: str = ""
+    mode: SessionMode = "async_voice"
+    scheduled_at: str
+    status: SessionStatus = "planned"
+    completed_at: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    mentor_notes: str = ""
+    mentee_reflection: str = ""
+    created_by: str
+    created_at: str
+
+
 _MENTORS_PATH = Path("outputs/buddy_mentors.jsonl")
 _PAIRS_PATH = Path("outputs/buddy_pairs.jsonl")
 _MESSAGES_PATH = Path("outputs/buddy_messages.jsonl")
 _CYCLES_PATH = Path("outputs/buddy_cycles.jsonl")
+_SESSIONS_PATH = Path("outputs/buddy_sessions.jsonl")
 
 
 def _now() -> str:
@@ -450,8 +479,106 @@ class BuddyCyclesStore:
         return closed
 
 
+class BuddySessionsStore:
+    path: Path
+
+    def __init__(self, path: Path = _SESSIONS_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[BuddySession]:
+        return _load(self.path, BuddySession)
+
+    def list_for_cycle(self, cycle_id: str) -> list[BuddySession]:
+        sessions = [s for s in self.list_all() if s.cycle_id == cycle_id]
+        sessions.sort(key=lambda s: s.scheduled_at)
+        return sessions
+
+    def get(self, session_id: str) -> Optional[BuddySession]:
+        for session in self.list_all():
+            if session.session_id == session_id:
+                return session
+        return None
+
+    # --- Write ---
+
+    def create(
+        self,
+        pair_id: str,
+        cycle_id: str,
+        scheduled_at: str,
+        created_by: str,
+        topic: str = "",
+        mode: SessionMode = "async_voice",
+    ) -> BuddySession:
+        record = BuddySession(
+            pair_id=pair_id,
+            cycle_id=cycle_id,
+            scheduled_at=scheduled_at,
+            topic=topic,
+            mode=mode,
+            created_by=created_by.lower(),
+            created_at=_now(),
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def _update(self, session_id: str, changes: dict) -> Optional[BuddySession]:
+        sessions = self.list_all()
+        updated: Optional[BuddySession] = None
+        for index, session in enumerate(sessions):
+            if session.session_id == session_id:
+                updated = session.model_copy(update=changes)
+                sessions[index] = updated
+                break
+        if updated is not None:
+            overwrite_jsonl(self.path, [s.model_dump() for s in sessions])
+        return updated
+
+    def complete(
+        self,
+        session_id: str,
+        note: str = "",
+        is_mentor: bool = False,
+        duration_minutes: Optional[int] = None,
+    ) -> Optional[BuddySession]:
+        """Mark a session done and record the caller's own note.
+
+        Deliberately idempotent: both sides complete the same session, each
+        writing into their own field, so whoever gets there second adds their
+        reflection without clobbering the first.
+        """
+        session = self.get(session_id)
+        if session is None:
+            return None
+
+        changes: dict = {
+            "status": "completed",
+            "completed_at": session.completed_at or _now(),
+        }
+        if note:
+            changes["mentor_notes" if is_mentor else "mentee_reflection"] = note
+        if duration_minutes is not None:
+            changes["duration_minutes"] = duration_minutes
+        return self._update(session_id, changes)
+
+    def mark_missed(self, session_id: str) -> Optional[BuddySession]:
+        return self._update(session_id, {"status": "missed"})
+
+    def delete(self, session_id: str) -> bool:
+        """Drop a planned session outright — used to cancel one, not to hide it."""
+        sessions = self.list_all()
+        remaining = [s for s in sessions if s.session_id != session_id]
+        if len(remaining) == len(sessions):
+            return False
+        overwrite_jsonl(self.path, [s.model_dump() for s in remaining])
+        return True
+
+
 # Module-level singletons — most callers just need the default file locations.
 mentors_store = MentorsStore()
 buddy_pairs_store = BuddyPairsStore()
 buddy_messages_store = BuddyMessagesStore()
 buddy_cycles_store = BuddyCyclesStore()
+buddy_sessions_store = BuddySessionsStore()

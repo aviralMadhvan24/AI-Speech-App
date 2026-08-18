@@ -31,10 +31,13 @@ from app.auth import require_user
 from app.buddy import growth
 from app.buddy import service
 from app.buddy.growth import CycleReport
+from app.buddy.schemas import CompleteSessionRequest
 from app.buddy.schemas import ConversationSummary
 from app.buddy.schemas import CreateCycleRequest
 from app.buddy.schemas import CreatePairRequest
 from app.buddy.schemas import CyclesResponse
+from app.buddy.schemas import PlanSessionRequest
+from app.buddy.schemas import SessionsResponse
 from app.buddy.schemas import MarkReadResponse
 from app.buddy.schemas import MentorCandidatesResponse
 from app.buddy.schemas import MentorDecisionRequest
@@ -47,9 +50,11 @@ from app.storage import users_store
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
+from app.storage.buddy import BuddySession
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
 from app.storage.buddy import buddy_pairs_store
+from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 logger = logging.getLogger("buddy.routes")
@@ -303,6 +308,162 @@ async def mark_read(
     _require_membership(pair_id, current_user)
     marked = buddy_messages_store.mark_read(pair_id, current_user.email)
     return MarkReadResponse(marked=marked)
+
+
+# ---------------------------------------------------------------------------
+# Sessions — the unit of practice inside a cycle
+# ---------------------------------------------------------------------------
+
+
+VALID_MODES = ("async_voice", "live_call", "in_person")
+
+
+def _session_for_member(session_id: str, user: User) -> BuddySession:
+    """Fetch a session and confirm the caller belongs to its pair."""
+    session = buddy_sessions_store.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="session_not_found",
+        )
+    _require_membership(session.pair_id, user)
+    return session
+
+
+@router.get("/pairs/{pair_id}/sessions", response_model=SessionsResponse)
+async def list_sessions(
+    pair_id: str,
+    current_user: User = Depends(require_user),
+) -> SessionsResponse:
+    """Sessions in the pair's open cycle, earliest first."""
+    _require_membership(pair_id, current_user)
+    cycle = buddy_cycles_store.active_for_pair(pair_id)
+    if cycle is None:
+        return SessionsResponse()
+    sessions = buddy_sessions_store.list_for_cycle(cycle.cycle_id)
+    return SessionsResponse(sessions=sessions, total=len(sessions))
+
+
+@router.post("/pairs/{pair_id}/sessions", response_model=BuddySession)
+async def plan_session(
+    pair_id: str,
+    body: PlanSessionRequest,
+    current_user: User = Depends(require_user),
+) -> BuddySession:
+    """Plan a session. Either side may — practice is not the mentor's to dictate."""
+    _require_active_membership(pair_id, current_user)
+
+    if body.mode not in VALID_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"mode must be one of {', '.join(VALID_MODES)}",
+        )
+
+    # A session belongs to a cycle: without a period to sit in, there is
+    # nothing for it to count towards.
+    cycle = buddy_cycles_store.active_for_pair(pair_id)
+    if cycle is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="no_active_cycle",
+        )
+
+    scheduled_at = body.scheduled_at.strip()
+    if not scheduled_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scheduled_at is required",
+        )
+
+    session = buddy_sessions_store.create(
+        pair_id=pair_id,
+        cycle_id=cycle.cycle_id,
+        scheduled_at=scheduled_at,
+        created_by=current_user.email,
+        topic=body.topic.strip()[:200],
+        mode=body.mode,
+    )
+    logger.info(
+        "buddy_session_planned pair=%s mode=%s by=%s",
+        pair_id,
+        body.mode,
+        current_user.email,
+    )
+    return session
+
+
+@router.post("/sessions/{session_id}/complete", response_model=BuddySession)
+async def complete_session(
+    session_id: str,
+    body: CompleteSessionRequest,
+    current_user: User = Depends(require_user),
+) -> BuddySession:
+    """Mark a session done, recording the caller's own note.
+
+    Both sides may call this on the same session — the mentor's observation and
+    the mentee's reflection are separate fields, so neither overwrites the other.
+    """
+    session = _session_for_member(session_id, current_user)
+    pair = buddy_pairs_store.get(session.pair_id)
+    is_mentor = pair is not None and pair.mentor_email.lower() == current_user.email.lower()
+
+    updated = buddy_sessions_store.complete(
+        session_id=session_id,
+        note=body.note.strip()[:2000],
+        is_mentor=is_mentor,
+        duration_minutes=body.duration_minutes,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="session_not_found",
+        )
+    logger.info(
+        "buddy_session_completed session=%s by=%s mentor=%s",
+        session_id,
+        current_user.email,
+        is_mentor,
+    )
+    return updated
+
+
+@router.post("/sessions/{session_id}/miss", response_model=BuddySession)
+async def miss_session(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> BuddySession:
+    """Record that a planned session did not happen.
+
+    Kept rather than deleted: a missed session is exactly the signal a teacher
+    needs to see when a pairing quietly stops working.
+    """
+    _session_for_member(session_id, current_user)
+    updated = buddy_sessions_store.mark_missed(session_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="session_not_found",
+        )
+    return updated
+
+
+@router.delete("/sessions/{session_id}", status_code=204, response_model=None)
+async def cancel_session(
+    session_id: str,
+    current_user: User = Depends(require_user),
+) -> None:
+    """Cancel a session that was never going to happen.
+
+    Only a session still in `planned` can go — once it has been completed or
+    marked missed it is part of the cycle's record.
+    """
+    session = _session_for_member(session_id, current_user)
+    if session.status != "planned":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="session_already_resolved",
+        )
+    buddy_sessions_store.delete(session_id)
 
 
 # ---------------------------------------------------------------------------

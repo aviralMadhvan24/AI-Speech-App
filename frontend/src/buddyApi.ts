@@ -162,12 +162,44 @@ export interface ActivityItem {
   score: number | null;
 }
 
+export type SessionStatus = "planned" | "completed" | "missed";
+export type SessionMode = "async_voice" | "live_call" | "in_person";
+
+export interface BuddySession {
+  session_id: string;
+  pair_id: string;
+  cycle_id: string;
+  topic: string;
+  mode: SessionMode;
+  scheduled_at: string;
+  status: SessionStatus;
+  completed_at: string | null;
+  duration_minutes: number | null;
+  mentor_notes: string;
+  mentee_reflection: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface SessionsResponse {
+  sessions: BuddySession[];
+  total: number;
+}
+
+/** Did the pairing actually happen, separately from how it scored. */
+export interface SessionConsistency {
+  planned: number;
+  completed: number;
+  missed: number;
+}
+
 export interface CycleReport {
   cycle: BuddyCycle | null;
   axes: GrowthAxis[];
   trend: TrendPoint[];
   activity: ActivityItem[];
   counts: Record<string, number>;
+  sessions: SessionConsistency;
   /** False when there are too few points to honestly draw a line. */
   enough_for_trend: boolean;
 }
@@ -341,6 +373,60 @@ export function fetchPairActivity(pairId: string): Promise<CycleReport> {
   return fetchJson<CycleReport>(
     `/buddy/pairs/${encodeURIComponent(pairId)}/activity`,
   );
+}
+
+// --- Sessions ---
+
+export function fetchSessions(pairId: string): Promise<SessionsResponse> {
+  return fetchJson<SessionsResponse>(
+    `/buddy/pairs/${encodeURIComponent(pairId)}/sessions`,
+  );
+}
+
+export function planSession(
+  pairId: string,
+  scheduledAt: string,
+  topic: string,
+  mode: SessionMode,
+): Promise<BuddySession> {
+  return postJson<BuddySession>(
+    `/buddy/pairs/${encodeURIComponent(pairId)}/sessions`,
+    { scheduled_at: scheduledAt, topic, mode },
+  );
+}
+
+/** Completing is per-side: the note lands on whichever side is calling. */
+export function completeSession(
+  sessionId: string,
+  note: string,
+  durationMinutes?: number | null,
+): Promise<BuddySession> {
+  return postJson<BuddySession>(
+    `/buddy/sessions/${encodeURIComponent(sessionId)}/complete`,
+    { note, duration_minutes: durationMinutes ?? null },
+  );
+}
+
+export function missSession(sessionId: string): Promise<BuddySession> {
+  return postJson<BuddySession>(
+    `/buddy/sessions/${encodeURIComponent(sessionId)}/miss`,
+  );
+}
+
+export async function cancelSession(sessionId: string): Promise<void> {
+  const url = `/buddy/sessions/${encodeURIComponent(sessionId)}`;
+  const headers = await authedHeaders();
+  const response = await fetch(`${API_BASE_URL}${url}`, {
+    method: "DELETE",
+    headers,
+  });
+  // 204: nothing to parse, so this cannot go through fetchJson.
+  if (!response.ok) {
+    const raw = await response.text().catch(() => "");
+    throw new Error(
+      `DELETE ${url} failed: ${response.status}${raw ? ` — ${detailOf(raw)}` : ""}`,
+    );
+  }
 }
 
 export function fetchCycles(): Promise<CyclesResponse> {

@@ -17,6 +17,7 @@ import { EmptyState } from "./EmptyState";
 import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { GrowthPanel } from "./buddy/GrowthPanel";
+import { SessionsPanel } from "./buddy/SessionsPanel";
 import {
   fetchMessages,
   fetchMyBuddies,
@@ -272,6 +273,14 @@ function CycleStrip({ report }: { report: CycleReport }) {
       {cycle.goal && (
         <p className="text-sm text-zinc-200 mt-1.5">{cycle.goal}</p>
       )}
+      {report.sessions && report.sessions.completed + report.sessions.planned > 0 && (
+        <p className="text-xs text-zinc-500 mt-1">
+          {report.sessions.completed} of{" "}
+          {report.sessions.completed + report.sessions.planned + report.sessions.missed}{" "}
+          sessions done
+          {report.sessions.missed > 0 && ` · ${report.sessions.missed} missed`}
+        </p>
+      )}
       <div className="mt-2 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
         <div
           className="h-full rounded-full bg-gradient-to-r from-teal-500 to-emerald-500"
@@ -304,7 +313,7 @@ function ThreadView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"chat" | "progress">("chat");
+  const [tab, setTab] = useState<"chat" | "sessions" | "progress">("chat");
   const [report, setReport] = useState<CycleReport | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -354,23 +363,21 @@ function ThreadView({
     void load(true);
   }, [load]);
 
-  // The cycle changes on the scale of weeks, so it is fetched once per open
-  // thread rather than polled alongside the messages.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await fetchPairActivity(pairId);
-        if (!cancelled) setReport(data);
-      } catch {
-        // The conversation is the point of this screen; a failed cycle fetch
-        // hides the progress tab rather than blocking the thread.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const refreshCycle = useCallback(async () => {
+    try {
+      setReport(await fetchPairActivity(pairId));
+    } catch {
+      // The conversation is the point of this screen; a failed cycle fetch
+      // hides the progress tab rather than blocking the thread.
+    }
   }, [pairId]);
+
+  // The cycle changes on the scale of weeks, so it is fetched when the thread
+  // opens rather than polled — and again whenever a session changes, since
+  // that moves the kept-sessions count in the header.
+  useEffect(() => {
+    void refreshCycle();
+  }, [refreshCycle]);
 
   // Poll for the partner's replies while the thread is open.
   useEffect(() => {
@@ -465,6 +472,7 @@ function ThreadView({
           {(
             [
               ["chat", "Conversation"],
+              ["sessions", "Sessions"],
               [
                 "progress",
                 conversation.my_role === "mentor" ? "Their progress" : "Your progress",
@@ -509,6 +517,13 @@ function ThreadView({
 
       {tab === "progress" && report ? (
         <GrowthPanel report={report} />
+      ) : tab === "sessions" ? (
+        <SessionsPanel
+          pairId={pairId}
+          isMentor={conversation.my_role === "mentor"}
+          hasCycle={Boolean(report?.cycle)}
+          onChanged={refreshCycle}
+        />
       ) : (
       <>
       <div className="card-glass p-4 max-h-[55vh] overflow-y-auto space-y-3">

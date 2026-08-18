@@ -12,10 +12,13 @@ from .buddy import BuddyMessage
 from .buddy import BuddyMessagesStore
 from .buddy import BuddyPair
 from .buddy import BuddyPairsStore
+from .buddy import BuddySession
+from .buddy import BuddySessionsStore
 from .buddy import CycleBaseline
 from .buddy import MentorRecord
 from .buddy import MentorsStore
 from .buddy import buddy_cycles_store
+from .buddy import buddy_sessions_store
 from .buddy import buddy_messages_store
 from .buddy import buddy_pairs_store
 from .buddy import mentors_store
@@ -37,6 +40,8 @@ __all__ = [
     "BuddyMessagesStore",
     "BuddyPair",
     "BuddyPairsStore",
+    "BuddySession",
+    "BuddySessionsStore",
     "CycleBaseline",
     "InterviewReview",
     "InterviewSubmission",
@@ -48,6 +53,7 @@ __all__ = [
     "UsersStore",
     "buddy_cycles_store",
     "buddy_messages_store",
+    "buddy_sessions_store",
     "buddy_pairs_store",
     "mentors_store",
     "reviews_store",
