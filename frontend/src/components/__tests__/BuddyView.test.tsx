@@ -6,7 +6,7 @@
  * own behaviour: how conversations are grouped, that opening a thread clears
  * the unread badge, and that an ended pairing is read-only.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BuddyView } from "../BuddyView";
@@ -292,6 +292,93 @@ describe("BuddyView — thread", () => {
 
     await user.click(play);
     await waitFor(() => expect(fetchVoiceNoteUrl).toHaveBeenCalledWith("m-1"));
+  });
+});
+
+describe("BuddyView — staying up to date", () => {
+  const thread = {
+    pair_id: "pair-1",
+    partner_email: "mentor@kiet.edu",
+    partner_name: "Ada Mentor",
+  };
+
+  it("refreshes the inbox so a reply appears without a page reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchMyBuddies.mockResolvedValue({
+        conversations: [conversation({ last_message_preview: "how did it go?" })],
+        total: 1,
+      });
+
+      renderView();
+      expect(await screen.findByText("how did it go?")).toBeInTheDocument();
+
+      fetchMyBuddies.mockResolvedValue({
+        conversations: [
+          conversation({ last_message_preview: "one more thing", unread_count: 1 }),
+        ],
+        total: 1,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+
+      expect(screen.getByText("one more thing")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes the inbox when the student comes back to the tab", async () => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation()],
+      total: 1,
+    });
+
+    renderView();
+    await waitFor(() => expect(fetchMyBuddies).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(fetchMyBuddies).toHaveBeenCalledTimes(2));
+  });
+
+  it("clears the badge for a reply that lands while the thread is open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchMyBuddies.mockResolvedValue({
+        conversations: [conversation()],
+        total: 1,
+      });
+      fetchMessages.mockResolvedValue({ ...thread, messages: [], total: 0 });
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      renderView();
+      await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+      await waitFor(() => expect(fetchMessages).toHaveBeenCalledWith("pair-1"));
+
+      // Nothing unread yet, so no read receipt is owed.
+      expect(markConversationRead).not.toHaveBeenCalled();
+
+      fetchMessages.mockResolvedValue({
+        ...thread,
+        messages: [message({ read_at: null })],
+        total: 1,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(await screen.findByText("how did it go?")).toBeInTheDocument();
+      await waitFor(() =>
+        expect(markConversationRead).toHaveBeenCalledWith("pair-1"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

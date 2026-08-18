@@ -36,6 +36,34 @@ interface BuddyViewProps {
 /** Poll interval for an open thread. Async mentorship, not live chat. */
 const POLL_MS = 15_000;
 
+/** The inbox only has to notice a new reply, so it refreshes more lazily. */
+const INBOX_POLL_MS = 20_000;
+
+/**
+ * Runs `onFocus` whenever the tab becomes visible again.
+ *
+ * Polling alone leaves the view stale for up to a full interval after a student
+ * switches back to the app, which is exactly what reads as "nothing shows up
+ * until I refresh the page". The callback is held in a ref so callers can pass
+ * an inline arrow without re-subscribing on every render.
+ */
+function useRefreshOnFocus(onFocus: () => void) {
+  const latest = useRef(onFocus);
+  latest.current = onFocus;
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") latest.current();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+}
+
 function displayNameOf(conversation: ConversationSummary): string {
   return conversation.partner_name || conversation.partner_email;
 }
@@ -234,6 +262,11 @@ function ThreadView({
   const readOnly = conversation.status !== "active";
   const pairId = conversation.pair_id;
 
+  // Held in a ref so `load` stays stable across the parent's re-renders — the
+  // poll below depends on it and must not be torn down every render.
+  const onActivityRef = useRef(onActivity);
+  onActivityRef.current = onActivity;
+
   const load = useCallback(
     async (showSpinner: boolean) => {
       if (showSpinner) setLoading(true);
@@ -241,35 +274,35 @@ function ThreadView({
         const data = await fetchMessages(pairId);
         setMessages(data.messages);
         setError(null);
+
+        // Anything the partner sent is on screen the moment it loads, whether
+        // that was opening the thread or a poll landing while it sits open.
+        // Leaving it unread would badge a conversation the student is reading.
+        const unseen = data.messages.some(
+          (message) =>
+            message.read_at === null &&
+            message.sender_email.toLowerCase() !== userEmail.toLowerCase(),
+        );
+        if (unseen) {
+          try {
+            const { marked } = await markConversationRead(pairId);
+            if (marked > 0) onActivityRef.current();
+          } catch {
+            // A failed read receipt is not worth interrupting the conversation.
+          }
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load messages.");
       } finally {
         if (showSpinner) setLoading(false);
       }
     },
-    [pairId],
+    [pairId, userEmail],
   );
 
-  // Open the thread: load it, then clear the unread badge.
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      await load(true);
-      if (cancelled) return;
-      try {
-        const { marked } = await markConversationRead(pairId);
-        if (marked > 0 && !cancelled) onActivity();
-      } catch {
-        // A failed read receipt is not worth interrupting the conversation.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // `onActivity` is a stable callback from the parent; re-running on the
-    // pair alone is what we want.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairId, load]);
+    void load(true);
+  }, [load]);
 
   // Poll for the partner's replies while the thread is open.
   useEffect(() => {
@@ -277,6 +310,11 @@ function ThreadView({
     const timer = setInterval(() => void load(false), POLL_MS);
     return () => clearInterval(timer);
   }, [load, readOnly]);
+
+  // Coming back to the tab should not wait out the poll interval.
+  useRefreshOnFocus(() => {
+    if (!readOnly) void load(false);
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -495,6 +533,21 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Keep the inbox live. Without this a reply only appeared after a full page
+  // reload: the list fetched once on mount and nothing refreshed it, so both
+  // the preview and the unread badge sat stale while the student waited.
+  // Paused while a thread is open — that view polls the pair itself, and
+  // closing it reloads the list anyway.
+  useEffect(() => {
+    if (openPairId) return;
+    const timer = setInterval(() => void load(), INBOX_POLL_MS);
+    return () => clearInterval(timer);
+  }, [load, openPairId]);
+
+  useRefreshOnFocus(() => {
+    if (!openPairId) void load();
+  });
 
   const open = conversations.find((c) => c.pair_id === openPairId) ?? null;
 
