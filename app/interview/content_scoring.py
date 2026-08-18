@@ -16,6 +16,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.core.llm_client import llm
+from app.core.llm_feedback import coerce_feedback
 
 logger = logging.getLogger("interview.content_scoring")
 
@@ -59,12 +60,13 @@ async def score_interview_answer(
     if not llm.is_available:
         return AnswerScoreResult(error="AI scoring service not available")
 
-    prompt = f"""You are an expert interview coach evaluating a student's answer. Be supportive but honest - they need real feedback to improve.
+    word_count = len(transcript.split())
+    prompt = f"""You are an expert interview coach evaluating a student's answer. Be supportive but honest - they need real feedback to improve. Your feedback must quote EXACT phrases from their answer.
 
 INTERVIEW QUESTION ({question_category}):
 "{question_prompt}"
 
-STUDENT'S ANSWER (transcribed from audio):
+STUDENT'S ANSWER ({word_count} words, transcribed from audio):
 "{transcript[:2000]}"
 
 Score the answer on these criteria (0-25 each, total 0-100):
@@ -93,17 +95,33 @@ Score the answer on these criteria (0-25 each, total 0-100):
    - 10-14: Some confusion or filler
    - 0-9: Unclear, hard to follow
 
-Respond with ONLY valid JSON:
-{{
-  "relevance": <0-25>,
-  "structure": <0-25>,
-  "depth": <0-25>,
-  "communication": <0-25>,
-  "total": <0-100>,
-  "feedback": "<2-3 sentence overall feedback>",
-  "strengths": "<what they did well, 1 sentence>",
-  "improvements": "<what to improve, 1 sentence>"
-}}"""
+**FEEDBACK CONTENT - QUOTE THE ANSWER:**
+Every text field must respond to what THIS student actually said. Quote their
+exact words back to them:
+
+- "feedback": quote 2-3 exact phrases, say what each one does well or badly,
+  and end with ONE specific fix.
+- "strengths": quote the single strongest phrase they said and say why it works.
+- "improvements": quote the weakest phrase and say exactly how to rewrite it.
+
+If the answer is off topic, quote the off-topic words rather than describing
+them, and score relevance accordingly.
+
+EXAMPLE FEEDBACK (good - quotes the answer):
+"You open with 'I led a team of four to ship the billing dashboard', which is a strong concrete setup. But 'it went pretty well' gives no result - replace it with the actual outcome, such as 'we cut support tickets by 30 percent'. Closing on 'yeah that's basically it' undercuts a solid answer - end on the result instead."
+
+BAD FEEDBACK (too generic):
+"Good structure but needs more specific examples." - NO! That sentence could describe any answer ever given. Quote their actual words.
+
+**OUTPUT FORMAT - FOLLOW EXACTLY:**
+- Return ONE JSON object. No Markdown, no text before or after it.
+- "feedback", "strengths" and "improvements" MUST each be a single plain
+  string. Never a list, never nested objects.
+- When quoting the answer inside a string, use single quotes ('like this').
+  Never use double quotes inside the string, as that breaks the JSON.
+- All five numeric fields are integers.
+
+{{"relevance": <0-25>, "structure": <0-25>, "depth": <0-25>, "communication": <0-25>, "total": <0-100>, "feedback": "<2-3 sentences quoting their exact words>", "strengths": "<quote the strongest phrase and why it works>", "improvements": "<quote the weakest phrase and how to rewrite it>"}}"""
 
     try:
         result = await llm.generate_json(prompt, max_tokens=400)
@@ -126,9 +144,9 @@ Respond with ONLY valid JSON:
             depth=depth,
             communication=communication,
             total=total,
-            feedback=str(result.get("feedback", ""))[:500],
-            strengths=str(result.get("strengths", ""))[:200],
-            improvements=str(result.get("improvements", ""))[:200],
+            feedback=coerce_feedback(result.get("feedback", ""))[:500],
+            strengths=coerce_feedback(result.get("strengths", ""))[:200],
+            improvements=coerce_feedback(result.get("improvements", ""))[:200],
             available=True,
         )
     except Exception as e:

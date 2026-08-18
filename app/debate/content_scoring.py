@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from app.core.llm_client import LLMUnavailableError, llm
+from app.core.llm_feedback import coerce_feedback
 
 logger = logging.getLogger("debate.content_scoring")
 
@@ -100,45 +101,6 @@ BAD FEEDBACK (too generic):
 
 {{"relevance": 0, "arguments": 0, "structure": 0, "vocabulary": 0, "total": 0, "off_topic": false, "feedback": "One string quoting the transcript with single quotes"}}
 """
-
-
-def _coerce_feedback(raw: object) -> str:
-    """Flatten LLM feedback into one readable sentence-style string.
-
-    The prompt asks for a plain string, but models sometimes return a list of
-    ``{quote, issue, fix}`` objects instead. Passing that straight to ``str()``
-    would surface a Python repr (``[{'quote': ...}]``) to the student, so the
-    parts are joined into prose instead.
-    """
-    if isinstance(raw, str):
-        return raw.strip()
-
-    if isinstance(raw, dict):
-        raw = [raw]
-
-    if isinstance(raw, list):
-        parts: list[str] = []
-        for item in raw:
-            if isinstance(item, str):
-                parts.append(item.strip())
-                continue
-            if not isinstance(item, dict):
-                continue
-            quote = str(item.get("quote", "")).strip().strip('"')
-            issue = str(item.get("issue", "")).strip()
-            fix = str(item.get("fix", "")).strip()
-            sentence = ""
-            if quote:
-                sentence = f"'{quote}'"
-            if issue:
-                sentence = f"{sentence} - {issue}" if sentence else issue
-            if fix:
-                sentence = f"{sentence}. {fix}" if sentence else fix
-            if sentence:
-                parts.append(sentence.rstrip(".") + ".")
-        return " ".join(parts).strip()
-
-    return str(raw).strip() if raw is not None else ""
 
 
 def _create_unavailable_result(error: str) -> ContentScoreResult:
@@ -259,7 +221,7 @@ async def score_debate_content(
         off_topic_final = is_off_topic or relevance_on_merit <= 3
 
         total = relevance + arguments + structure + vocabulary
-        feedback = _coerce_feedback(result.get("feedback", ""))[:500]
+        feedback = coerce_feedback(result.get("feedback", ""))[:500]
         
         # Prepend warnings to feedback
         warnings = []
