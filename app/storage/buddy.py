@@ -1,0 +1,336 @@
+"""Buddy mentorship storage — mentor approvals, pairs, and 1:1 messages.
+
+Three JSONL files, following the same store protocol as the rest of this
+package (see the package docstring for the migration note):
+
+- ``outputs/buddy_mentors.jsonl``  — one row per student considered as a mentor
+- ``outputs/buddy_pairs.jsonl``    — one row per mentor/mentee pairing
+- ``outputs/buddy_messages.jsonl`` — one row per chat message or voice note
+
+Messages are append-only on the hot path; only ``mark_read`` rewrites, and it
+touches a single pair's rows. Fine at classroom scale, revisit with a real DB.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from datetime import timezone
+from pathlib import Path
+from typing import Literal
+from typing import Optional
+
+from pydantic import BaseModel
+from pydantic import Field
+
+from ._jsonl import append_jsonl
+from ._jsonl import overwrite_jsonl
+from ._jsonl import read_jsonl
+
+
+MentorStatus = Literal["suggested", "approved", "rejected"]
+PairStatus = Literal["active", "ended"]
+MessageKind = Literal["text", "voice"]
+
+
+class MentorRecord(BaseModel):
+    """A student put forward as a speaking mentor.
+
+    ``speaking_score`` and ``sample_size`` are a snapshot taken when the row was
+    written, so the admin list stays stable between refreshes and a teacher can
+    see what they approved on. The live score is recomputed on demand by
+    ``app.buddy.service.rank_speakers``.
+    """
+
+    email: str
+    name: Optional[str] = None
+    status: MentorStatus = "suggested"
+    speaking_score: float = 0.0
+    sample_size: int = 0
+    decided_by: Optional[str] = None
+    decided_at: Optional[str] = None
+    created_at: str
+
+
+class BuddyPair(BaseModel):
+    """One mentor/mentee relationship, created by a teacher."""
+
+    pair_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    mentor_email: str
+    mentee_email: str
+    mentor_name: Optional[str] = None
+    mentee_name: Optional[str] = None
+    created_by: str
+    created_at: str
+    status: PairStatus = "active"
+    ended_at: Optional[str] = None
+
+    def involves(self, email: str) -> bool:
+        normalized = email.lower()
+        return normalized in (self.mentor_email.lower(), self.mentee_email.lower())
+
+    def partner_of(self, email: str) -> Optional[str]:
+        """The other participant's email, or None if `email` is not a member."""
+        normalized = email.lower()
+        if normalized == self.mentor_email.lower():
+            return self.mentee_email
+        if normalized == self.mentee_email.lower():
+            return self.mentor_email
+        return None
+
+
+class BuddyMessage(BaseModel):
+    """A single chat message. Voice notes carry an audio asset id instead of text."""
+
+    message_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    pair_id: str
+    sender_email: str
+    kind: MessageKind = "text"
+    body: str = ""
+    audio_id: Optional[str] = None
+    audio_path: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    sent_at: str
+    read_at: Optional[str] = None
+
+
+_MENTORS_PATH = Path("outputs/buddy_mentors.jsonl")
+_PAIRS_PATH = Path("outputs/buddy_pairs.jsonl")
+_MESSAGES_PATH = Path("outputs/buddy_messages.jsonl")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load(path: Path, model: type[BaseModel]) -> list:
+    """Parse every row, skipping any that no longer match the model."""
+    out = []
+    for row in read_jsonl(path):
+        try:
+            out.append(model(**row))
+        except Exception:
+            continue
+    return out
+
+
+class MentorsStore:
+    path: Path
+
+    def __init__(self, path: Path = _MENTORS_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[MentorRecord]:
+        return _load(self.path, MentorRecord)
+
+    def list_by_status(self, status: MentorStatus) -> list[MentorRecord]:
+        return [m for m in self.list_all() if m.status == status]
+
+    def get(self, email: str) -> Optional[MentorRecord]:
+        normalized = email.lower()
+        for mentor in self.list_all():
+            if mentor.email.lower() == normalized:
+                return mentor
+        return None
+
+    def is_approved(self, email: str) -> bool:
+        record = self.get(email)
+        return record is not None and record.status == "approved"
+
+    # --- Write ---
+
+    def set_status(
+        self,
+        email: str,
+        status: MentorStatus,
+        decided_by: str,
+        speaking_score: float = 0.0,
+        sample_size: int = 0,
+        name: Optional[str] = None,
+    ) -> MentorRecord:
+        """Approve or reject a mentor, creating the row if it is new."""
+        mentors = self.list_all()
+        normalized = email.lower()
+        now = _now()
+
+        for index, mentor in enumerate(mentors):
+            if mentor.email.lower() == normalized:
+                updated = mentor.model_copy(
+                    update={
+                        "status": status,
+                        "decided_by": decided_by,
+                        "decided_at": now,
+                        "speaking_score": speaking_score or mentor.speaking_score,
+                        "sample_size": sample_size or mentor.sample_size,
+                        "name": name or mentor.name,
+                    }
+                )
+                mentors[index] = updated
+                overwrite_jsonl(self.path, [m.model_dump() for m in mentors])
+                return updated
+
+        record = MentorRecord(
+            email=normalized,
+            name=name,
+            status=status,
+            speaking_score=speaking_score,
+            sample_size=sample_size,
+            decided_by=decided_by,
+            decided_at=now,
+            created_at=now,
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+
+class BuddyPairsStore:
+    path: Path
+
+    def __init__(self, path: Path = _PAIRS_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[BuddyPair]:
+        return _load(self.path, BuddyPair)
+
+    def list_active(self) -> list[BuddyPair]:
+        return [p for p in self.list_all() if p.status == "active"]
+
+    def list_for_user(self, email: str) -> list[BuddyPair]:
+        return [p for p in self.list_all() if p.involves(email)]
+
+    def get(self, pair_id: str) -> Optional[BuddyPair]:
+        for pair in self.list_all():
+            if pair.pair_id == pair_id:
+                return pair
+        return None
+
+    def find_active_between(self, mentor_email: str, mentee_email: str) -> Optional[BuddyPair]:
+        mentor = mentor_email.lower()
+        mentee = mentee_email.lower()
+        for pair in self.list_active():
+            if pair.mentor_email.lower() == mentor and pair.mentee_email.lower() == mentee:
+                return pair
+        return None
+
+    # --- Write ---
+
+    def create(
+        self,
+        mentor_email: str,
+        mentee_email: str,
+        created_by: str,
+        mentor_name: Optional[str] = None,
+        mentee_name: Optional[str] = None,
+    ) -> BuddyPair:
+        record = BuddyPair(
+            mentor_email=mentor_email.lower(),
+            mentee_email=mentee_email.lower(),
+            mentor_name=mentor_name,
+            mentee_name=mentee_name,
+            created_by=created_by,
+            created_at=_now(),
+            status="active",
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def end(self, pair_id: str) -> Optional[BuddyPair]:
+        pairs = self.list_all()
+        ended: Optional[BuddyPair] = None
+        for index, pair in enumerate(pairs):
+            if pair.pair_id == pair_id:
+                ended = pair.model_copy(
+                    update={"status": "ended", "ended_at": _now()}
+                )
+                pairs[index] = ended
+                break
+        if ended is not None:
+            overwrite_jsonl(self.path, [p.model_dump() for p in pairs])
+        return ended
+
+
+class BuddyMessagesStore:
+    path: Path
+
+    def __init__(self, path: Path = _MESSAGES_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[BuddyMessage]:
+        return _load(self.path, BuddyMessage)
+
+    def list_for_pair(self, pair_id: str) -> list[BuddyMessage]:
+        messages = [m for m in self.list_all() if m.pair_id == pair_id]
+        messages.sort(key=lambda m: m.sent_at)
+        return messages
+
+    def get(self, message_id: str) -> Optional[BuddyMessage]:
+        for message in self.list_all():
+            if message.message_id == message_id:
+                return message
+        return None
+
+    def unread_count(self, pair_id: str, for_email: str) -> int:
+        """Messages in this pair the given user has not read yet."""
+        normalized = for_email.lower()
+        return sum(
+            1
+            for m in self.list_for_pair(pair_id)
+            if m.sender_email.lower() != normalized and m.read_at is None
+        )
+
+    # --- Write ---
+
+    def create(
+        self,
+        pair_id: str,
+        sender_email: str,
+        kind: MessageKind = "text",
+        body: str = "",
+        audio_id: Optional[str] = None,
+        audio_path: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+    ) -> BuddyMessage:
+        record = BuddyMessage(
+            pair_id=pair_id,
+            sender_email=sender_email.lower(),
+            kind=kind,
+            body=body,
+            audio_id=audio_id,
+            audio_path=audio_path,
+            duration_seconds=duration_seconds,
+            sent_at=_now(),
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def mark_read(self, pair_id: str, reader_email: str) -> int:
+        """Mark every message the reader did NOT send as read. Returns the count."""
+        rows = self.list_all()
+        normalized = reader_email.lower()
+        now = _now()
+        changed = 0
+        out: list[dict] = []
+        for message in rows:
+            if (
+                message.pair_id == pair_id
+                and message.sender_email.lower() != normalized
+                and message.read_at is None
+            ):
+                message = message.model_copy(update={"read_at": now})
+                changed += 1
+            out.append(message.model_dump())
+        if changed:
+            overwrite_jsonl(self.path, out)
+        return changed
+
+
+# Module-level singletons — most callers just need the default file locations.
+mentors_store = MentorsStore()
+buddy_pairs_store = BuddyPairsStore()
+buddy_messages_store = BuddyMessagesStore()

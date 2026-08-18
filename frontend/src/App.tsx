@@ -13,6 +13,7 @@ import { AdminReviewView } from "./components/admin/AdminReviewView";
 import { AdminStudentDetailView } from "./components/admin/AdminStudentDetailView";
 import { BackgroundOrbs } from "./components/BackgroundOrbs";
 import { BattleLobbyView } from "./components/BattleLobbyView";
+import { BuddyView } from "./components/BuddyView";
 import { BattleResultView } from "./components/BattleResultView";
 import {
   BattleRehydrator,
@@ -502,6 +503,8 @@ export default function App() {
 
   const handleSelectPotd = useCallback(() => navigate("/potd"), [navigate]);
 
+  const handleSelectBuddy = useCallback(() => navigate("/buddy"), [navigate]);
+
   const handleStartPotd = useCallback((challenge: PotdChallenge) => {
     sessionStorage.setItem("potd.active", JSON.stringify(challenge));
     if (challenge.type === "pronunciation") navigate(`/practice?potdId=${encodeURIComponent(challenge.id)}`);
@@ -754,11 +757,19 @@ export default function App() {
                     onSelectAdmin={handleSelectAdmin}
                     onSelectProfile={handleSelectProfile}
                     onSelectPotd={handleSelectPotd}
+                    onSelectBuddy={handleSelectBuddy}
                   />
                 }
               />
 
               <Route path="/potd" element={<PotdView onBack={handleBackToMenu} onStart={handleStartPotd} />} />
+
+              <Route
+                path="/buddy"
+                element={
+                  <BuddyView userEmail={user.email} onBack={handleBackToMenu} />
+                }
+              />
 
               <Route
                 path="/pronunciation"

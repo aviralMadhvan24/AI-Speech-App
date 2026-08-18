@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   ArrowRight,
   Briefcase,
+  Handshake,
   LayoutDashboard,
   MessageSquareText,
   Mic,
@@ -24,6 +25,7 @@ interface MainMenuViewProps {
   onSelectAdmin?: () => void;
   onSelectProfile: () => void;
   onSelectPotd: () => void;
+  onSelectBuddy: () => void;
 }
 
 type FeatureStatus = "live" | "coming-soon";
@@ -54,6 +56,7 @@ export function MainMenuView({
   onSelectAdmin,
   onSelectProfile,
   onSelectPotd,
+  onSelectBuddy,
 }: MainMenuViewProps) {
   const features: Feature[] = useMemo(
     () => {
@@ -170,6 +173,22 @@ export function MainMenuView({
         onClick: onSelectGD,
         ariaLabel: "Open group discussion",
       },
+      {
+        id: "buddy",
+        title: "Speaking Buddy",
+        tagline: "Peer · New",
+        description:
+          "A 1:1 line to a peer mentor, paired by your teacher. Text and voice notes, answered whenever you're both free.",
+        icon: Handshake,
+        status: "live",
+        accent: "text-teal-300",
+        gradient: "from-teal-500/20 via-emerald-500/10 to-transparent",
+        ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(45,212,191,0.45)]",
+        iconGlow:
+          "bg-gradient-to-br from-teal-500 to-emerald-500 shadow-[0_0_18px_-4px_rgba(45,212,191,0.55)]",
+        onClick: onSelectBuddy,
+        ariaLabel: "Open speaking buddy",
+      },
     ];
 
       if (showAdmin && onSelectAdmin) {
@@ -202,6 +221,7 @@ export function MainMenuView({
       onSelectAdmin,
       onSelectProfile,
       onSelectPotd,
+      onSelectBuddy,
       showAdmin,
     ],
   );

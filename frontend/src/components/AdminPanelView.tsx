@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Download,
   HardDrive,
+  Handshake,
   LayoutDashboard,
   ListPlus,
   MessagesSquare,
@@ -12,6 +13,7 @@ import {
   Users,
   Users2,
 } from "lucide-react";
+import { AdminBuddiesView } from "./admin/AdminBuddiesView";
 import { AdminPendingView } from "./admin/AdminPendingView";
 import { AdminStudentsView } from "./admin/AdminStudentsView";
 import { AdminAnalyticsView } from "./admin/AdminAnalyticsView";
@@ -31,6 +33,7 @@ type AdminTab =
   | "leaderboard"
   | "debates"
   | "gd"
+  | "buddies"
   | "topics"
   | "exports"
   | "storage";
@@ -52,6 +55,7 @@ const TABS: Array<{
   { id: "leaderboard", label: "Leaderboard", icon: Trophy },
   { id: "debates", label: "Debates", icon: MessagesSquare },
   { id: "gd", label: "Group Discussions", icon: Users2 },
+  { id: "buddies", label: "Buddies", icon: Handshake },
   { id: "topics", label: "Topics", icon: ListPlus },
   { id: "exports", label: "Exports", icon: Download },
   { id: "storage", label: "Storage", icon: HardDrive },
@@ -165,6 +169,7 @@ export function AdminPanelView({
         {active === "gd" && (
           <PendingGDList onOpenSession={setSelectedGDSessionId} />
         )}
+        {active === "buddies" && <AdminBuddiesView />}
         {active === "topics" && <TopicManager />}
         {active === "exports" && <ExportReports />}
         {active === "storage" && <StorageStats />}
