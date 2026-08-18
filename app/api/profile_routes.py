@@ -142,7 +142,10 @@ class ActivityEventRequest(BaseModel):
     event: str
 
 
-@router.post("/activity", status_code=204)
+# response_model=None is required: this module uses `from __future__ import
+# annotations`, so FastAPI resolves the `-> None` return annotation to NoneType
+# and treats it as a response model, which is illegal for a 204.
+@router.post("/activity", status_code=204, response_model=None)
 async def record_activity(
     body: ActivityEventRequest,
     current_user: User = Depends(require_user),
