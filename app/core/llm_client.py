@@ -37,6 +37,10 @@ class LLMClient:
         # back to os.getenv so anything exported at runtime still wins.
         self.groq_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY")
         self.groq_model = os.getenv("GROQ_MODEL") or settings.GROQ_MODEL
+        effort = os.getenv("GROQ_REASONING_EFFORT")
+        self.groq_reasoning_effort = (
+            effort if effort is not None else settings.GROQ_REASONING_EFFORT
+        ).strip()
         self.ollama_url = (
             os.getenv("OLLAMA_URL") or settings.OLLAMA_URL or "http://localhost:11434"
         )
@@ -64,6 +68,22 @@ class LLMClient:
 
     async def _groq_generate(self, prompt: str, max_tokens: int) -> str:
         """Generate using Groq API (OpenAI-compatible)."""
+        payload = {
+            "model": self.groq_model,
+            "messages": [{"role": "user", "content": prompt}],
+            # Groq's OpenAI-compatible JSON mode prevents the
+            # debate judge from wrapping its rubric in prose or a
+            # markdown fence, which was the main source of the
+            # "Could not parse LLM response" fallback.
+            "response_format": {"type": "json_object"},
+            "temperature": 0.3,
+            "max_tokens": max_tokens,
+        }
+        # On a reasoning model the reasoning is billed against max_tokens, so an
+        # uncapped effort starves the JSON body the scorers actually need. See
+        # Settings.GROQ_REASONING_EFFORT.
+        if self.groq_reasoning_effort:
+            payload["reasoning_effort"] = self.groq_reasoning_effort
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -72,17 +92,7 @@ class LLMClient:
                         "Authorization": f"Bearer {self.groq_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": self.groq_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        # Groq's OpenAI-compatible JSON mode prevents the
-                        # debate judge from wrapping its rubric in prose or a
-                        # markdown fence, which was the main source of the
-                        # "Could not parse LLM response" fallback.
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.3,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                 )
                 if resp.status_code == 400:
                     salvaged = self._salvage_failed_generation(resp)

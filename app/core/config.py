@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # Verify a candidate against `GET /openai/v1/models` and confirm it honours
     # `response_format=json_object` before switching.
     GROQ_MODEL: str = "openai/gpt-oss-20b"
+    # gpt-oss models are reasoning models: their reasoning tokens are billed
+    # against `max_tokens`, and at the default effort they can exhaust the whole
+    # budget before emitting any JSON — Groq then answers 400 json_validate_failed
+    # with an empty `failed_generation`. Raising max_tokens does NOT fix it (1500
+    # still fails); capping the effort does, and costs ~5x fewer tokens. Set to
+    # "" for models that reject the parameter.
+    GROQ_REASONING_EFFORT: str = "low"
     OLLAMA_URL: str = "http://localhost:11434"
 
     # --- Auth ---
