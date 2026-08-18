@@ -18,6 +18,7 @@ from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
 from app.buddy.routes import router as buddy_router
+from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
 from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import mentors_store
@@ -35,6 +36,7 @@ def buddy_app(tmp_path, monkeypatch):
     monkeypatch.setattr(mentors_store, "path", tmp_path / "mentors.jsonl")
     monkeypatch.setattr(buddy_pairs_store, "path", tmp_path / "pairs.jsonl")
     monkeypatch.setattr(buddy_messages_store, "path", tmp_path / "messages.jsonl")
+    monkeypatch.setattr(buddy_cycles_store, "path", tmp_path / "cycles.jsonl")
 
     from app.storage import users_store
 
@@ -409,3 +411,132 @@ def test_mentor_candidates_reports_the_tuning_it_used(buddy_app):
 
     assert body["threshold"] == service.SUGGESTION_THRESHOLD
     assert body["min_sample_size"] == service.MIN_SAMPLE_SIZE
+
+
+# --- Cycles ---------------------------------------------------------------
+
+
+def _approve_and_pair(buddy_app, **extra):
+    """Approve a mentor and pair them, returning the create response."""
+    buddy_app.as_(TEACHER)
+    mentors_store.set_status(
+        email=MENTOR.email, status="approved", decided_by=TEACHER.email
+    )
+    return buddy_app.post(
+        "/buddy/admin/pairs",
+        json={
+            "mentor_email": MENTOR.email,
+            "mentee_email": MENTEE.email,
+            **extra,
+        },
+    )
+
+
+def test_pairing_opens_a_cycle_by_default(buddy_app):
+    """A pairing with no period is the gap cycles exist to close."""
+    response = _approve_and_pair(buddy_app)
+    assert response.status_code == 200
+
+    cycle = buddy_cycles_store.active_for_pair(response.json()["pair_id"])
+    assert cycle is not None
+    assert cycle.mentee_email == MENTEE.email
+    assert cycle.starts_at < cycle.ends_at
+
+
+def test_a_teacher_can_pair_without_starting_a_cycle(buddy_app):
+    response = _approve_and_pair(buddy_app, cycle_weeks=0)
+    assert buddy_cycles_store.active_for_pair(response.json()["pair_id"]) is None
+
+
+def test_the_cycle_carries_the_goal_the_teacher_set(buddy_app):
+    response = _approve_and_pair(
+        buddy_app, cycle_weeks=6, goal="Cut filler words", focus_area="fluency"
+    )
+    cycle = buddy_cycles_store.active_for_pair(response.json()["pair_id"])
+
+    assert cycle.goal == "Cut filler words"
+    assert cycle.focus_area == "fluency"
+
+
+def test_a_second_cycle_on_an_open_one_is_refused(buddy_app, pair):
+    buddy_app.as_(TEACHER)
+    first = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4}
+    )
+    assert first.status_code == 200
+
+    second = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4}
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"] == "cycle_already_active"
+
+
+def test_closing_a_cycle_allows_a_renewal(buddy_app, pair):
+    buddy_app.as_(TEACHER)
+    cycle_id = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4}
+    ).json()["cycle_id"]
+
+    assert buddy_app.post(f"/buddy/admin/cycles/{cycle_id}/close").status_code == 200
+    assert (
+        buddy_app.post(
+            "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4}
+        ).status_code
+        == 200
+    )
+    assert len(buddy_cycles_store.list_for_pair(pair.pair_id)) == 2
+
+
+def test_an_absurd_cycle_length_is_rejected(buddy_app, pair):
+    buddy_app.as_(TEACHER)
+    response = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 500}
+    )
+    assert response.status_code == 400
+
+
+def test_only_a_teacher_may_open_a_cycle(buddy_app, pair):
+    buddy_app.as_(MENTOR)
+    response = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4}
+    )
+    assert response.status_code == 403
+
+
+def test_a_cycle_needs_a_pair_that_exists(buddy_app):
+    buddy_app.as_(TEACHER)
+    response = buddy_app.post(
+        "/buddy/admin/cycles", json={"pair_id": "no-such-pair", "weeks": 4}
+    )
+    assert response.status_code == 404
+
+
+# --- Cycle-scoped activity ------------------------------------------------
+
+
+def test_both_members_can_read_the_cycle_activity(buddy_app, pair):
+    buddy_app.as_(TEACHER)
+    buddy_app.post("/buddy/admin/cycles", json={"pair_id": pair.pair_id, "weeks": 4})
+
+    for user in (MENTOR, MENTEE):
+        buddy_app.as_(user)
+        response = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/activity")
+        assert response.status_code == 200
+        assert response.json()["cycle"]["pair_id"] == pair.pair_id
+
+
+def test_a_stranger_cannot_read_the_cycle_activity(buddy_app, pair):
+    """The mentee's record is for their own mentor, not any signed-in student."""
+    buddy_app.as_(STRANGER)
+    response = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/activity")
+    assert response.status_code == 403
+
+
+def test_activity_without_an_open_cycle_is_empty_not_an_error(buddy_app, pair):
+    buddy_app.as_(MENTOR)
+    body = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/activity").json()
+
+    assert body["cycle"] is None
+    assert body["activity"] == []
+    assert body["enough_for_trend"] is False

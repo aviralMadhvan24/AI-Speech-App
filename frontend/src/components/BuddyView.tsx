@@ -16,15 +16,18 @@ import { Avatar } from "./Avatar";
 import { EmptyState } from "./EmptyState";
 import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { GrowthPanel } from "./buddy/GrowthPanel";
 import {
   fetchMessages,
   fetchMyBuddies,
+  fetchPairActivity,
   fetchVoiceNoteUrl,
   markConversationRead,
   sendMessage,
   sendVoiceNote,
   type BuddyMessage,
   type ConversationSummary,
+  type CycleReport,
 } from "../buddyApi";
 
 interface BuddyViewProps {
@@ -239,6 +242,51 @@ function ConversationRow({
 // Thread
 // ---------------------------------------------------------------------------
 
+/** The cycle's goal and how far through it the pair is. */
+function CycleStrip({ report }: { report: CycleReport }) {
+  const cycle = report.cycle;
+  if (!cycle) return null;
+
+  const start = new Date(cycle.starts_at).getTime();
+  const end = new Date(cycle.ends_at).getTime();
+  const now = Date.now();
+  const span = Math.max(end - start, 1);
+  const elapsed = Math.min(Math.max(now - start, 0), span);
+  const pct = Math.round((elapsed / span) * 100);
+
+  const day = 24 * 60 * 60 * 1000;
+  const totalWeeks = Math.max(Math.round(span / (7 * day)), 1);
+  const currentWeek = Math.min(Math.floor(elapsed / (7 * day)) + 1, totalWeeks);
+  const daysLeft = Math.max(Math.ceil((end - now) / day), 0);
+
+  return (
+    <div className="card-glass px-4 py-3">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <span className="text-xs uppercase tracking-widest text-teal-300">
+          Week {currentWeek} of {totalWeeks}
+        </span>
+        <span className="text-xs text-zinc-500">
+          {daysLeft === 0 ? "Final day" : `${daysLeft} days left`}
+        </span>
+      </div>
+      {cycle.goal && (
+        <p className="text-sm text-zinc-200 mt-1.5">{cycle.goal}</p>
+      )}
+      <div className="mt-2 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-teal-500 to-emerald-500"
+          style={{ width: `${pct}%` }}
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Cycle progress"
+        />
+      </div>
+    </div>
+  );
+}
+
 function ThreadView({
   conversation,
   userEmail,
@@ -256,6 +304,8 @@ function ThreadView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"chat" | "progress">("chat");
+  const [report, setReport] = useState<CycleReport | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const recorder = useAudioRecorder();
@@ -303,6 +353,24 @@ function ThreadView({
   useEffect(() => {
     void load(true);
   }, [load]);
+
+  // The cycle changes on the scale of weeks, so it is fetched once per open
+  // thread rather than polled alongside the messages.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchPairActivity(pairId);
+        if (!cancelled) setReport(data);
+      } catch {
+        // The conversation is the point of this screen; a failed cycle fetch
+        // hides the progress tab rather than blocking the thread.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pairId]);
 
   // Poll for the partner's replies while the thread is open.
   useEffect(() => {
@@ -390,6 +458,39 @@ function ThreadView({
         </div>
       </div>
 
+      {report?.cycle && <CycleStrip report={report} />}
+
+      {report?.cycle && (
+        <div className="flex gap-2" role="tablist" aria-label="Conversation or progress">
+          {(
+            [
+              ["chat", "Conversation"],
+              [
+                "progress",
+                conversation.my_role === "mentor" ? "Their progress" : "Your progress",
+              ],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
+              className={[
+                "px-3.5 py-1.5 rounded-lg text-sm transition",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60",
+                tab === id
+                  ? "bg-zinc-800 text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-300",
+              ].join(" ")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {readOnly && (
         <div className="card-glass px-4 py-3 text-sm text-zinc-400">
           This pairing has ended. You can still read the history.
@@ -406,6 +507,10 @@ function ThreadView({
         </div>
       )}
 
+      {tab === "progress" && report ? (
+        <GrowthPanel report={report} />
+      ) : (
+      <>
       <div className="card-glass p-4 max-h-[55vh] overflow-y-auto space-y-3">
         {loading ? (
           <SkeletonList count={3} />
@@ -503,6 +608,8 @@ function ThreadView({
             )}
           </button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

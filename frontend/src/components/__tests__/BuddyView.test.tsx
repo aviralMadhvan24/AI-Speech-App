@@ -18,6 +18,7 @@ const sendMessage = vi.fn();
 const markConversationRead = vi.fn();
 const sendVoiceNote = vi.fn();
 const fetchVoiceNoteUrl = vi.fn();
+const fetchPairActivity = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
   fetchMyBuddies: (...args: unknown[]) => fetchMyBuddies(...args),
@@ -26,6 +27,7 @@ vi.mock("../../buddyApi", () => ({
   markConversationRead: (...args: unknown[]) => markConversationRead(...args),
   sendVoiceNote: (...args: unknown[]) => sendVoiceNote(...args),
   fetchVoiceNoteUrl: (...args: unknown[]) => fetchVoiceNoteUrl(...args),
+  fetchPairActivity: (...args: unknown[]) => fetchPairActivity(...args),
 }));
 
 const recorder = {
@@ -101,7 +103,40 @@ beforeEach(() => {
     total: 0,
   });
   markConversationRead.mockResolvedValue({ marked: 0 });
+  fetchPairActivity.mockResolvedValue(emptyReport());
 });
+
+/** A pair between cycles: nothing to track, so nothing to show. */
+function emptyReport() {
+  return {
+    cycle: null,
+    axes: [],
+    trend: [],
+    activity: [],
+    counts: {},
+    enough_for_trend: false,
+  };
+}
+
+function cycle(overrides: Record<string, unknown> = {}) {
+  const now = Date.now();
+  return {
+    cycle_id: "c-1",
+    pair_id: "pair-1",
+    mentee_email: ME,
+    goal: "Speak for two minutes without filler words",
+    focus_area: null,
+    // Halfway through a four-week cycle.
+    starts_at: new Date(now - 14 * 24 * 3600 * 1000).toISOString(),
+    ends_at: new Date(now + 14 * 24 * 3600 * 1000).toISOString(),
+    baseline: { content: 60, pronunciation: 74, live_speaking: 55 },
+    status: "active",
+    created_by: "teacher@kiet.edu",
+    created_at: new Date(now - 14 * 24 * 3600 * 1000).toISOString(),
+    closed_at: null,
+    ...overrides,
+  };
+}
 
 describe("BuddyView — conversation list", () => {
   it("tells a student with no pairing what earns them one", async () => {
@@ -379,6 +414,120 @@ describe("BuddyView — staying up to date", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("BuddyView — the cycle", () => {
+  beforeEach(() => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: "mentor" })],
+      total: 1,
+    });
+  });
+
+  async function openThread() {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+    return user;
+  }
+
+  it("shows the goal and how far through the cycle the pair is", async () => {
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+
+    await openThread();
+
+    expect(await screen.findByText("Week 3 of 4")).toBeInTheDocument();
+    expect(
+      screen.getByText("Speak for two minutes without filler words"),
+    ).toBeInTheDocument();
+  });
+
+  it("offers no progress tab when the pair is between cycles", async () => {
+    await openThread();
+
+    await waitFor(() => expect(fetchPairActivity).toHaveBeenCalledWith("pair-1"));
+    expect(screen.queryByRole("tab", { name: /progress/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the mentee's counts and deltas, decline included", async () => {
+    fetchPairActivity.mockResolvedValue({
+      cycle: cycle(),
+      axes: [
+        { key: "content", label: "Content", baseline: 60, latest: 70.4, delta: 10.4, sample_size: 3 },
+        {
+          key: "pronunciation",
+          label: "Pronunciation",
+          baseline: 74,
+          latest: 70.8,
+          delta: -3.2,
+          sample_size: 2,
+        },
+      ],
+      trend: [],
+      activity: [
+        { kind: "debate", at: "2026-08-10T12:00:00Z", title: "AI in classrooms", score: 64 },
+        { kind: "gd", at: "2026-08-12T12:00:00Z", title: "Remote work", score: 58 },
+      ],
+      counts: { interview: 0, debate: 1, gd: 1 },
+      enough_for_trend: false,
+    });
+
+    const user = await openThread();
+    await user.click(await screen.findByRole("tab", { name: "Their progress" }));
+
+    expect(await screen.findByText("+10.4")).toBeInTheDocument();
+    // A decline is stated as plainly as a gain.
+    expect(screen.getByText("−3.2")).toBeInTheDocument();
+    expect(screen.getByText("AI in classrooms")).toBeInTheDocument();
+    expect(screen.getByText("Remote work")).toBeInTheDocument();
+  });
+
+  it("refuses to draw a trend from too few points", async () => {
+    fetchPairActivity.mockResolvedValue({
+      cycle: cycle(),
+      axes: [],
+      trend: [
+        { at: "2026-08-05", content: 64, pronunciation: null, live_speaking: null },
+        { at: "2026-08-20", content: 70, pronunciation: null, live_speaking: null },
+      ],
+      activity: [
+        { kind: "interview", at: "2026-08-05T12:00:00Z", title: "Interview", score: 64 },
+      ],
+      counts: { interview: 1, debate: 0, gd: 0 },
+      enough_for_trend: false,
+    });
+
+    const user = await openThread();
+    await user.click(await screen.findByRole("tab", { name: "Their progress" }));
+
+    expect(await screen.findByText(/not enough to show a trend/i)).toBeInTheDocument();
+  });
+
+  it("says so plainly when the cycle has no scored work yet", async () => {
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+
+    const user = await openThread();
+    await user.click(await screen.findByRole("tab", { name: "Their progress" }));
+
+    expect(await screen.findByText(/Nothing scored yet in this cycle/i)).toBeInTheDocument();
+  });
+
+  it("keeps the conversation reachable from the progress tab", async () => {
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+    fetchMessages.mockResolvedValue({
+      pair_id: "pair-1",
+      partner_email: "mentor@kiet.edu",
+      partner_name: "Ada Mentor",
+      messages: [message({ body: "how did it go?" })],
+      total: 1,
+    });
+
+    const user = await openThread();
+    await user.click(await screen.findByRole("tab", { name: "Their progress" }));
+    await user.click(screen.getByRole("tab", { name: "Conversation" }));
+
+    expect(await screen.findByText("how did it go?")).toBeInTheDocument();
   });
 });
 

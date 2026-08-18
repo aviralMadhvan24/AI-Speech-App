@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from app.buddy.service import SpeakerRanking
+from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
 from app.storage.buddy import MentorRecord
@@ -74,8 +75,30 @@ class MentorsResponse(BaseModel):
 class CreatePairRequest(BaseModel):
     mentor_email: str
     mentee_email: str
+    # Pairing and opening the first cycle are one action for a teacher, so the
+    # cycle fields ride along here. `cycle_weeks=0` pairs without starting one.
+    cycle_weeks: int = 4
+    goal: str = ""
+    focus_area: Optional[str] = None
 
 
 class PairsResponse(BaseModel):
     pairs: list[BuddyPair] = Field(default_factory=list)
+    total: int = 0
+
+
+# --- Cycles ---
+
+
+class CreateCycleRequest(BaseModel):
+    """Open a fresh cycle on an existing pair — a renewal, or a first period."""
+
+    pair_id: str
+    weeks: int = 4
+    goal: str = ""
+    focus_area: Optional[str] = None
+
+
+class CyclesResponse(BaseModel):
+    cycles: list[BuddyCycle] = Field(default_factory=list)
     total: int = 0

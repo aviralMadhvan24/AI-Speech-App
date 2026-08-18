@@ -108,6 +108,70 @@ export interface PairsResponse {
   total: number;
 }
 
+export type CycleStatus = "active" | "closed";
+export type ActivityKind = "interview" | "debate" | "gd";
+
+/** The mentee's standing when the cycle opened. Null means nothing to measure. */
+export interface CycleBaseline {
+  content: number | null;
+  pronunciation: number | null;
+  live_speaking: number | null;
+}
+
+export interface BuddyCycle {
+  cycle_id: string;
+  pair_id: string;
+  mentee_email: string;
+  goal: string;
+  focus_area: string | null;
+  starts_at: string;
+  ends_at: string;
+  baseline: CycleBaseline;
+  status: CycleStatus;
+  created_by: string;
+  created_at: string;
+  closed_at: string | null;
+}
+
+export interface CyclesResponse {
+  cycles: BuddyCycle[];
+  total: number;
+}
+
+export interface GrowthAxis {
+  key: string;
+  label: string;
+  baseline: number | null;
+  latest: number | null;
+  /** Null when there is no baseline to measure against — never treat as zero. */
+  delta: number | null;
+  sample_size: number;
+}
+
+export interface TrendPoint {
+  at: string;
+  content: number | null;
+  pronunciation: number | null;
+  live_speaking: number | null;
+}
+
+export interface ActivityItem {
+  kind: ActivityKind;
+  at: string;
+  title: string;
+  score: number | null;
+}
+
+export interface CycleReport {
+  cycle: BuddyCycle | null;
+  axes: GrowthAxis[];
+  trend: TrendPoint[];
+  activity: ActivityItem[];
+  counts: Record<string, number>;
+  /** False when there are too few points to honestly draw a line. */
+  enough_for_trend: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Fetch helpers — kept private to this module. Same shape as adminApi.ts.
 // ---------------------------------------------------------------------------
@@ -256,11 +320,51 @@ export function fetchPairs(): Promise<PairsResponse> {
 export function createPair(
   mentorEmail: string,
   menteeEmail: string,
+  cycle?: { weeks: number; goal: string; focusArea?: string | null },
 ): Promise<BuddyPair> {
   return postJson<BuddyPair>("/buddy/admin/pairs", {
     mentor_email: mentorEmail,
     mentee_email: menteeEmail,
+    // Omitted means the backend default of a 4-week cycle; 0 pairs without one.
+    ...(cycle
+      ? {
+          cycle_weeks: cycle.weeks,
+          goal: cycle.goal,
+          focus_area: cycle.focusArea ?? null,
+        }
+      : {}),
   });
+}
+
+/** The mentee's work for the pair's open cycle — scoped to that window only. */
+export function fetchPairActivity(pairId: string): Promise<CycleReport> {
+  return fetchJson<CycleReport>(
+    `/buddy/pairs/${encodeURIComponent(pairId)}/activity`,
+  );
+}
+
+export function fetchCycles(): Promise<CyclesResponse> {
+  return fetchJson<CyclesResponse>("/buddy/admin/cycles");
+}
+
+export function createCycle(
+  pairId: string,
+  weeks: number,
+  goal: string,
+  focusArea?: string | null,
+): Promise<BuddyCycle> {
+  return postJson<BuddyCycle>("/buddy/admin/cycles", {
+    pair_id: pairId,
+    weeks,
+    goal,
+    focus_area: focusArea ?? null,
+  });
+}
+
+export function closeCycle(cycleId: string): Promise<BuddyCycle> {
+  return postJson<BuddyCycle>(
+    `/buddy/admin/cycles/${encodeURIComponent(cycleId)}/close`,
+  );
 }
 
 export function endPair(pairId: string): Promise<BuddyPair> {

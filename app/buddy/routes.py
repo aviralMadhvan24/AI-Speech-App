@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -25,9 +28,13 @@ from fastapi.responses import FileResponse
 from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
+from app.buddy import growth
 from app.buddy import service
+from app.buddy.growth import CycleReport
 from app.buddy.schemas import ConversationSummary
+from app.buddy.schemas import CreateCycleRequest
 from app.buddy.schemas import CreatePairRequest
+from app.buddy.schemas import CyclesResponse
 from app.buddy.schemas import MarkReadResponse
 from app.buddy.schemas import MentorCandidatesResponse
 from app.buddy.schemas import MentorDecisionRequest
@@ -37,8 +44,10 @@ from app.buddy.schemas import MyBuddiesResponse
 from app.buddy.schemas import PairsResponse
 from app.buddy.schemas import SendMessageRequest
 from app.storage import users_store
+from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
+from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
 from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import mentors_store
@@ -268,6 +277,23 @@ async def get_voice_note(
     return FileResponse(str(audio_path))
 
 
+@router.get("/pairs/{pair_id}/activity", response_model=CycleReport)
+async def pair_activity(
+    pair_id: str,
+    current_user: User = Depends(require_user),
+) -> CycleReport:
+    """The mentee's scored work and growth for the pair's current cycle.
+
+    Deliberately narrower than the teacher's view of a student: a mentor is a
+    classmate, not staff, so this is bounded by the open cycle's window. The
+    bound is applied here, before anything is serialised — filtering in the
+    client would still put the rest of the student's record on the wire.
+    """
+    pair = _require_membership(pair_id, current_user)
+    cycle = buddy_cycles_store.active_for_pair(pair_id)
+    return growth.build_report(cycle, pair.mentee_email)
+
+
 @router.post("/pairs/{pair_id}/read", response_model=MarkReadResponse)
 async def mark_read(
     pair_id: str,
@@ -392,7 +418,115 @@ async def create_pair(
         mentee_email,
         current_user.email,
     )
+
+    # Pairing without a period is what the cycle work exists to fix, so the
+    # first one opens here unless the teacher explicitly asked for none.
+    if body.cycle_weeks > 0:
+        _open_cycle(
+            pair=pair,
+            weeks=body.cycle_weeks,
+            goal=body.goal,
+            focus_area=body.focus_area,
+            created_by=current_user.email,
+        )
+
     return pair
+
+
+# ---------------------------------------------------------------------------
+# Teacher — cycles
+# ---------------------------------------------------------------------------
+
+
+def _open_cycle(
+    pair: BuddyPair,
+    weeks: int,
+    goal: str,
+    focus_area: str | None,
+    created_by: str,
+) -> BuddyCycle:
+    """Open a cycle on a pair, capturing the mentee's standing as it starts."""
+    if weeks < 1 or weeks > 52:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="weeks must be between 1 and 52",
+        )
+
+    now = datetime.now(timezone.utc)
+    try:
+        return buddy_cycles_store.create(
+            pair_id=pair.pair_id,
+            mentee_email=pair.mentee_email,
+            starts_at=now.isoformat(),
+            ends_at=(now + timedelta(weeks=weeks)).isoformat(),
+            created_by=created_by,
+            goal=goal.strip(),
+            focus_area=focus_area,
+            baseline=growth.baseline_for(pair.mentee_email, now.isoformat()),
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cycle_already_active",
+        )
+
+
+@router.get("/admin/cycles", response_model=CyclesResponse)
+async def list_cycles(_: User = Depends(require_teacher)) -> CyclesResponse:
+    """Every cycle across every pair, newest first."""
+    cycles = buddy_cycles_store.list_all()
+    cycles.sort(key=lambda c: c.starts_at, reverse=True)
+    return CyclesResponse(cycles=cycles, total=len(cycles))
+
+
+@router.post("/admin/cycles", response_model=BuddyCycle)
+async def create_cycle(
+    body: CreateCycleRequest,
+    current_user: User = Depends(require_teacher),
+) -> BuddyCycle:
+    """Open a cycle on an existing pair — a renewal, or a first period."""
+    pair = buddy_pairs_store.get(body.pair_id)
+    if pair is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="pair_not_found",
+        )
+    if pair.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="pair_ended",
+        )
+
+    cycle = _open_cycle(
+        pair=pair,
+        weeks=body.weeks,
+        goal=body.goal,
+        focus_area=body.focus_area,
+        created_by=current_user.email,
+    )
+    logger.info(
+        "buddy_cycle_opened pair=%s weeks=%s by=%s",
+        pair.pair_id,
+        body.weeks,
+        current_user.email,
+    )
+    return cycle
+
+
+@router.post("/admin/cycles/{cycle_id}/close", response_model=BuddyCycle)
+async def close_cycle(
+    cycle_id: str,
+    current_user: User = Depends(require_teacher),
+) -> BuddyCycle:
+    """Close a cycle. The pair stays active and can be given a new one."""
+    cycle = buddy_cycles_store.close(cycle_id)
+    if cycle is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="cycle_not_found",
+        )
+    logger.info("buddy_cycle_closed cycle=%s by=%s", cycle_id, current_user.email)
+    return cycle
 
 
 @router.post("/admin/pairs/{pair_id}/end", response_model=BuddyPair)

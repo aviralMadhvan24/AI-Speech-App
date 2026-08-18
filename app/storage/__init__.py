@@ -6,12 +6,16 @@ the file format. To migrate to Postgres / SQLite, swap the store
 implementations behind the same interface — call sites don't change.
 """
 
+from .buddy import BuddyCycle
+from .buddy import BuddyCyclesStore
 from .buddy import BuddyMessage
 from .buddy import BuddyMessagesStore
 from .buddy import BuddyPair
 from .buddy import BuddyPairsStore
+from .buddy import CycleBaseline
 from .buddy import MentorRecord
 from .buddy import MentorsStore
+from .buddy import buddy_cycles_store
 from .buddy import buddy_messages_store
 from .buddy import buddy_pairs_store
 from .buddy import mentors_store
@@ -27,10 +31,13 @@ from .users import users_store
 
 
 __all__ = [
+    "BuddyCycle",
+    "BuddyCyclesStore",
     "BuddyMessage",
     "BuddyMessagesStore",
     "BuddyPair",
     "BuddyPairsStore",
+    "CycleBaseline",
     "InterviewReview",
     "InterviewSubmission",
     "MentorRecord",
@@ -39,6 +46,7 @@ __all__ = [
     "SubmissionsStore",
     "UserRecord",
     "UsersStore",
+    "buddy_cycles_store",
     "buddy_messages_store",
     "buddy_pairs_store",
     "mentors_store",

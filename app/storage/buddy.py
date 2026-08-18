@@ -31,6 +31,7 @@ from ._jsonl import read_jsonl
 MentorStatus = Literal["suggested", "approved", "rejected"]
 PairStatus = Literal["active", "ended"]
 MessageKind = Literal["text", "voice"]
+CycleStatus = Literal["active", "closed"]
 
 
 class MentorRecord(BaseModel):
@@ -94,9 +95,53 @@ class BuddyMessage(BaseModel):
     read_at: Optional[str] = None
 
 
+class CycleBaseline(BaseModel):
+    """The mentee's standing when a cycle opened, in points out of 100.
+
+    Captured once at creation rather than recomputed, so the delta a student is
+    shown never silently shifts under them as older work is rescored. A ``None``
+    axis means there was nothing to measure yet — not a zero.
+    """
+
+    content: Optional[float] = None
+    pronunciation: Optional[float] = None
+    live_speaking: Optional[float] = None
+
+
+class BuddyCycle(BaseModel):
+    """One time-boxed mentorship period inside a pair.
+
+    A pair can run several cycles in sequence, which is what lets a teacher
+    renew a pairing without flattening the history of the previous period.
+    Only one may be active at a time — ``BuddyCyclesStore.create`` enforces it.
+    """
+
+    cycle_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    pair_id: str
+    mentee_email: str
+    goal: str = ""
+    focus_area: Optional[str] = None
+    starts_at: str
+    ends_at: str
+    baseline: CycleBaseline = Field(default_factory=CycleBaseline)
+    status: CycleStatus = "active"
+    created_by: str
+    created_at: str
+    closed_at: Optional[str] = None
+
+    def covers(self, when: str) -> bool:
+        """Whether an ISO timestamp falls inside this cycle's window.
+
+        The window is what scopes a mentor's view of their mentee: work from
+        before the cycle opened, or after it closed, is not theirs to see.
+        """
+        return self.starts_at <= when <= self.ends_at
+
+
 _MENTORS_PATH = Path("outputs/buddy_mentors.jsonl")
 _PAIRS_PATH = Path("outputs/buddy_pairs.jsonl")
 _MESSAGES_PATH = Path("outputs/buddy_messages.jsonl")
+_CYCLES_PATH = Path("outputs/buddy_cycles.jsonl")
 
 
 def _now() -> str:
@@ -330,7 +375,83 @@ class BuddyMessagesStore:
         return changed
 
 
+class BuddyCyclesStore:
+    path: Path
+
+    def __init__(self, path: Path = _CYCLES_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[BuddyCycle]:
+        return _load(self.path, BuddyCycle)
+
+    def list_for_pair(self, pair_id: str) -> list[BuddyCycle]:
+        cycles = [c for c in self.list_all() if c.pair_id == pair_id]
+        cycles.sort(key=lambda c: c.starts_at, reverse=True)
+        return cycles
+
+    def get(self, cycle_id: str) -> Optional[BuddyCycle]:
+        for cycle in self.list_all():
+            if cycle.cycle_id == cycle_id:
+                return cycle
+        return None
+
+    def active_for_pair(self, pair_id: str) -> Optional[BuddyCycle]:
+        """The pair's open cycle, or None if it is between cycles."""
+        for cycle in self.list_for_pair(pair_id):
+            if cycle.status == "active":
+                return cycle
+        return None
+
+    # --- Write ---
+
+    def create(
+        self,
+        pair_id: str,
+        mentee_email: str,
+        starts_at: str,
+        ends_at: str,
+        created_by: str,
+        goal: str = "",
+        focus_area: Optional[str] = None,
+        baseline: Optional[CycleBaseline] = None,
+    ) -> BuddyCycle:
+        """Open a cycle. Raises ValueError if one is already open on this pair."""
+        if self.active_for_pair(pair_id) is not None:
+            raise ValueError("cycle_already_active")
+
+        record = BuddyCycle(
+            pair_id=pair_id,
+            mentee_email=mentee_email.lower(),
+            goal=goal,
+            focus_area=focus_area,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            baseline=baseline or CycleBaseline(),
+            created_by=created_by,
+            created_at=_now(),
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def close(self, cycle_id: str) -> Optional[BuddyCycle]:
+        cycles = self.list_all()
+        closed: Optional[BuddyCycle] = None
+        for index, cycle in enumerate(cycles):
+            if cycle.cycle_id == cycle_id:
+                closed = cycle.model_copy(
+                    update={"status": "closed", "closed_at": _now()}
+                )
+                cycles[index] = closed
+                break
+        if closed is not None:
+            overwrite_jsonl(self.path, [c.model_dump() for c in cycles])
+        return closed
+
+
 # Module-level singletons — most callers just need the default file locations.
 mentors_store = MentorsStore()
 buddy_pairs_store = BuddyPairsStore()
 buddy_messages_store = BuddyMessagesStore()
+buddy_cycles_store = BuddyCyclesStore()

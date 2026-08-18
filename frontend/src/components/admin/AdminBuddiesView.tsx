@@ -10,7 +10,11 @@ import {
   X,
 } from "lucide-react";
 import {
+  closeCycle,
+  createCycle,
   createPair,
+  fetchCycles,
+  type BuddyCycle,
   decideMentor,
   endPair,
   fetchMentorCandidates,
@@ -137,17 +141,23 @@ export function AdminBuddiesView() {
 
   const [mentorEmail, setMentorEmail] = useState("");
   const [menteeEmail, setMenteeEmail] = useState("");
+  const [cycleWeeks, setCycleWeeks] = useState(4);
+  const [cycleGoal, setCycleGoal] = useState("");
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
+  const [cycles, setCycles] = useState<BuddyCycle[]>([]);
+  const [busyPairId, setBusyPairId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [candidateData, pairData] = await Promise.all([
+      const [candidateData, pairData, cycleData] = await Promise.all([
         fetchMentorCandidates(),
         fetchPairs(),
+        fetchCycles(),
       ]);
       setCandidates(candidateData);
       setPairs(pairData.pairs);
+      setCycles(cycleData.cycles);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the buddy data.");
@@ -184,9 +194,13 @@ export function AdminBuddiesView() {
     setPairing(true);
     setPairError(null);
     try {
-      await createPair(mentor, mentee);
+      await createPair(mentor, mentee, {
+        weeks: cycleWeeks,
+        goal: cycleGoal.trim(),
+      });
       setMentorEmail("");
       setMenteeEmail("");
+      setCycleGoal("");
       await load();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
@@ -201,7 +215,50 @@ export function AdminBuddiesView() {
     } finally {
       setPairing(false);
     }
-  }, [load, mentorEmail, menteeEmail]);
+  }, [load, mentorEmail, menteeEmail, cycleWeeks, cycleGoal]);
+
+  const activeCycleFor = useCallback(
+    (pairId: string) =>
+      cycles.find((c) => c.pair_id === pairId && c.status === "active") ?? null,
+    [cycles],
+  );
+
+  const handleStartCycle = useCallback(
+    async (pairId: string) => {
+      setBusyPairId(pairId);
+      setError(null);
+      try {
+        await createCycle(pairId, cycleWeeks, "");
+        await load();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        setError(
+          message.includes("cycle_already_active")
+            ? "That pair already has a cycle running — close it before starting another."
+            : message || "Could not start that cycle.",
+        );
+      } finally {
+        setBusyPairId(null);
+      }
+    },
+    [cycleWeeks, load],
+  );
+
+  const handleCloseCycle = useCallback(
+    async (cycleId: string, pairId: string) => {
+      setBusyPairId(pairId);
+      setError(null);
+      try {
+        await closeCycle(cycleId);
+        await load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not close that cycle.");
+      } finally {
+        setBusyPairId(null);
+      }
+    },
+    [load],
+  );
 
   const handleEndPair = useCallback(
     async (pairId: string) => {
@@ -341,6 +398,41 @@ export function AdminBuddiesView() {
             </label>
           </div>
 
+          {/* Pairing and opening the first cycle are one action for a teacher —
+              a pairing with no end date is the gap cycles exist to close. */}
+          <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-3 pt-1 border-t border-zinc-800/60">
+            <label className="space-y-1.5">
+              <span className="text-xs uppercase tracking-widest text-zinc-500">
+                Cycle length
+              </span>
+              <select
+                value={cycleWeeks}
+                onChange={(event) => setCycleWeeks(Number(event.target.value))}
+                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+              >
+                {[2, 4, 6, 8, 12].map((weeks) => (
+                  <option key={weeks} value={weeks}>
+                    {weeks} weeks
+                  </option>
+                ))}
+                <option value={0}>No cycle</option>
+              </select>
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="text-xs uppercase tracking-widest text-zinc-500">
+                Goal for this cycle
+              </span>
+              <input
+                value={cycleGoal}
+                onChange={(event) => setCycleGoal(event.target.value)}
+                placeholder="Speak for two minutes without filler words"
+                disabled={cycleWeeks === 0}
+                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-brand-500/60 disabled:opacity-40"
+              />
+            </label>
+          </div>
+
           {pairError && <p className="text-sm text-rose-300">{pairError}</p>}
           {approvedMentors.length === 0 && (
             <p className="text-xs text-zinc-500">
@@ -402,7 +494,52 @@ export function AdminBuddiesView() {
                     <p className="text-xs text-zinc-600 mt-1">
                       {pair.mentor_email} · {pair.mentee_email}
                     </p>
+                    {(() => {
+                      const cycle = activeCycleFor(pair.pair_id);
+                      if (ended) return null;
+                      return cycle ? (
+                        <p className="text-xs text-teal-300/90 mt-1.5">
+                          Cycle ends{" "}
+                          {new Date(cycle.ends_at).toLocaleDateString([], {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                          {cycle.goal ? ` · ${cycle.goal}` : ""}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-300/90 mt-1.5">
+                          No cycle running — nothing is being tracked.
+                        </p>
+                      );
+                    })()}
                   </div>
+
+                  {!ended &&
+                    (() => {
+                      const cycle = activeCycleFor(pair.pair_id);
+                      const busy = busyPairId === pair.pair_id;
+                      return cycle ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleCloseCycle(cycle.cycle_id, pair.pair_id)}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition shrink-0 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+                        >
+                          {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                          Close cycle
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleStartCycle(pair.pair_id)}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium border border-teal-500/40 text-teal-300 hover:bg-teal-500/10 transition shrink-0 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60"
+                        >
+                          {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                          Start cycle
+                        </button>
+                      );
+                    })()}
 
                   {!ended && (
                     <button
