@@ -117,8 +117,9 @@ if ! git remote get-url "$GIT_REMOTE" >/dev/null 2>&1; then
 fi
 
 # Vite rewrites these on every build, so they are always dirty and would
-# block the merge. They are generated output — safe to discard.
-git checkout -- frontend/tsconfig.tsbuildinfo ss3/frontend/tsconfig.tsbuildinfo 2>/dev/null || true
+# block the merge. They are generated output — safe to discard. The glob
+# covers the tsconfig.node.* variants too, which a build also touches.
+git checkout -- '*.tsbuildinfo' 2>/dev/null || true
 
 if ! git diff-index --quiet HEAD -- 2>/dev/null; then
     log_err "Uncommitted changes on the box would be overwritten:"
