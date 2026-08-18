@@ -5,11 +5,15 @@ Mentor selection is score-suggested and teacher-approved. This module owns the
 approval itself is a teacher action recorded in ``MentorsStore``.
 
 Scoring source: interview submissions are the only per-student store that
-reliably carries an email alongside a speaking score. Pronunciation attempts
-(``outputs/attempts.jsonl``) are anonymous, and GD/debate rows identify
-participants by room-scoped ids rather than email, so neither can be attributed
-to a student without a join that does not exist yet. Extending
-``_speaking_signals`` is the intended place to add them later.
+carries an email directly alongside a speaking score, so they are what this
+module reads today.
+
+Two other sources *can* be attributed, they simply are not wired up yet:
+completed debates and GD sessions persist ``participants[].user_id`` (the
+Firebase uid), which joins to ``firebase_uid`` in ``users_store``. Only
+pronunciation attempts (``outputs/attempts.jsonl``) are genuinely anonymous —
+those rows carry no user field at all and would need capture at write time.
+Extending ``_speaking_signals`` is the intended place to add the joinable ones.
 """
 
 from __future__ import annotations
