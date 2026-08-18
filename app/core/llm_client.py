@@ -36,13 +36,14 @@ class LLMClient:
         # Prefer Settings (which reads both real env vars and `.env`) and fall
         # back to os.getenv so anything exported at runtime still wins.
         self.groq_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY")
+        self.groq_model = os.getenv("GROQ_MODEL") or settings.GROQ_MODEL
         self.ollama_url = (
             os.getenv("OLLAMA_URL") or settings.OLLAMA_URL or "http://localhost:11434"
         )
         self.timeout = 45.0  # seconds
         logger.info(
             "LLM client initialised: provider=%s",
-            "groq" if self.groq_key else f"ollama({self.ollama_url})",
+            f"groq({self.groq_model})" if self.groq_key else f"ollama({self.ollama_url})",
         )
 
     @property
@@ -72,7 +73,7 @@ class LLMClient:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "llama-3.1-8b-instant",
+                        "model": self.groq_model,
                         "messages": [{"role": "user", "content": prompt}],
                         # Groq's OpenAI-compatible JSON mode prevents the
                         # debate judge from wrapping its rubric in prose or a

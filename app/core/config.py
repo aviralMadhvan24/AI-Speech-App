@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # these up from real environment variables, which is how systemd supplies
     # them in production.
     GROQ_API_KEY: str | None = None
+    # Groq retires hosted models on its own schedule, and a decommissioned id
+    # fails as a 404 `model_not_found` on every scoring call — which surfaces to
+    # students as "AI scoring temporarily unavailable" rather than as an outage.
+    # Keep it overridable so the next retirement is an env change, not a deploy.
+    # Verify a candidate against `GET /openai/v1/models` and confirm it honours
+    # `response_format=json_object` before switching.
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
     OLLAMA_URL: str = "http://localhost:11434"
 
     # --- Auth ---
