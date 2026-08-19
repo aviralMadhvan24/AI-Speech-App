@@ -92,6 +92,13 @@ class DebateRoom(BaseModel):
     reconnect_deadline: Optional[float] = None
     # Auto-start grace deadline (20s countdown after all ready, before prep).
     auto_start_deadline: Optional[float] = None
+    # Set once a speaker's audio has arrived and is being transcribed and
+    # scored. The speaking clock stops for that whole window: the turn deadline
+    # bounds how long someone may TALK, not how long the server takes to grade
+    # them. Without it the pipeline raced its own timer, and a speaker who used
+    # their full two minutes was forfeited at 0 while their real score was
+    # still being computed. Internal only — never projected to clients.
+    scoring_participant_id: Optional[str] = None
     created_at: float
     completed_at: Optional[float] = None
     winner_participant_id: Optional[str] = None

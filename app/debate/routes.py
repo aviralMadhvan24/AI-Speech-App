@@ -241,6 +241,16 @@ async def upload_turn(
     if participant.turn_index != room.active_turn_index:
         raise HTTPException(status_code=409, detail="not_your_turn")
 
+    # Stop the speaking clock now that the audio is here. The deadline bounds
+    # how long someone may talk, not how long we take to grade them — and the
+    # analysis below routinely outruns the 15s grace left after a full-length
+    # turn. Without this claim the timer forfeited the speaker at 0 mid-
+    # pipeline and their real score came back to a `not_your_turn` 409.
+    try:
+        await debate_room_manager.claim_turn(normalized, current_user)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
     # Run the /analyze pipeline. This is the slow step (Whisper); no
     # room lock is held here so concurrent uploads to other rooms proceed
     # in parallel. Out-of-turn uploads were already rejected above.
@@ -255,6 +265,8 @@ async def upload_turn(
             current_user.email,
             type(exc).__name__,
         )
+        # Hand the turn back so a transient failure costs a retry, not the turn.
+        await debate_room_manager.release_turn_claim(normalized, current_user)
         raise HTTPException(status_code=502, detail="analysis_failed")
 
     try:
@@ -268,8 +280,10 @@ async def upload_turn(
             analysis_id=analysis_id,
         )
     except ValueError as exc:
-        # e.g. state changed between the pre-check and now
-        # (paused / not_your_turn race).
+        # The claim waives the paused / not_your_turn races, so reaching here
+        # means the debate itself moved on (abandoned or completed). Release
+        # the claim so the room is not left waiting on a turn nobody can fill.
+        await debate_room_manager.release_turn_claim(normalized, current_user)
         raise HTTPException(status_code=409, detail=str(exc))
 
     return TurnUploadResponse(

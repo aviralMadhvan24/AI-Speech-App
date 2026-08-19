@@ -77,6 +77,17 @@ TURN_SECONDS = 120
 TURN_GRACE_SECONDS = 15
 RECONNECT_GRACE_SECONDS = 30
 
+# Once a speaker's audio arrives the speaking clock stops and this one starts.
+# It is a watchdog, not a budget: it exists only so a wedged upload cannot
+# freeze a debate forever. Generous on purpose — the pipeline it covers is
+# ffmpeg + Whisper + an LLM content call, and forfeiting a speaker who actually
+# spoke is far worse than making the room wait.
+SCORING_SECONDS = 300
+
+# How long a speaker gets to retry after their upload failed to analyse. A
+# transient Whisper or network blip should not silently cost them their turn.
+RETRY_SECONDS = 45
+
 # Debate is head-to-head: exactly two speakers, one turn each.
 # Dev mode allows single-player testing (set DEBATE_DEV_MODE=true in .env)
 _DEV_MODE = settings.DEBATE_DEV_MODE
@@ -569,6 +580,116 @@ class DebateRoomManager:
     # Turn submission
     # ------------------------------------------------------------------
 
+    async def claim_turn(self, code: str, user: User) -> ParticipantInternal:
+        """Stop the speaking clock because this speaker's audio has arrived.
+
+        Called before the analysis pipeline runs. The turn deadline exists to
+        bound how long someone may TALK; letting it keep running through
+        transcription and content scoring meant a speaker who used their full
+        two minutes was forfeited at 0 — and their real score, when it finally
+        arrived, was rejected as ``not_your_turn`` and thrown away.
+
+        Validates exactly what ``submit_turn`` validates, so a caller that is
+        refused here is refused for the same reason it would have been later.
+        Raises ``ValueError`` with the same codes, plus ``already_scoring``
+        when an upload for this turn is already in flight.
+        """
+        async with self._lock_for(code):
+            room = self._rooms.get(code)
+            if room is None:
+                raise ValueError("room_not_found")
+            if room.state != "speaking":
+                raise ValueError("not_in_speaking_state")
+            if room.paused:
+                raise ValueError("debate_paused")
+            participant = self._find_participant(room, user.uid)
+            if participant is None:
+                raise ValueError("not_a_participant")
+            if participant.turn_index != room.active_turn_index:
+                raise ValueError("not_your_turn")
+            if room.scoring_participant_id is not None:
+                # A second upload for the same turn would score the audio
+                # twice and append two rows for one speaker.
+                raise ValueError("already_scoring")
+
+            room.scoring_participant_id = participant.participant_id
+            # Clearing the deadline is what stops the countdown on every
+            # client, and what stops `handle_reconnect` re-arming the timer
+            # from a stale deadline while scoring is still in flight.
+            room.turn_deadline = None
+            self._cancel_timer(code, "turn")
+            self._spawn_timer(
+                code,
+                "scoring",
+                self._run_scoring_timer(code, participant.participant_id),
+            )
+            logger.info(
+                "turn_claimed room=%s participant=%s",
+                code,
+                participant.participant_id,
+            )
+
+        await self.broadcast(code)
+        return participant
+
+    async def release_turn_claim(self, code: str, user: User) -> None:
+        """Give the turn back after an upload failed to analyse.
+
+        The speaker keeps their turn and gets a short window to retry, rather
+        than losing it to an error that was not theirs. Best-effort: a room
+        that has moved on in the meantime is left alone.
+        """
+        async with self._lock_for(code):
+            room = self._rooms.get(code)
+            if room is None:
+                return
+            participant = self._find_participant(room, user.uid)
+            if participant is None:
+                return
+            if room.scoring_participant_id != participant.participant_id:
+                return
+
+            room.scoring_participant_id = None
+            self._cancel_timer(code, "scoring")
+
+            if room.state == "speaking" and not room.paused:
+                room.turn_deadline = time.time() + RETRY_SECONDS
+                self._spawn_timer(
+                    code,
+                    "turn",
+                    self._run_turn_timer_with_delay(code, RETRY_SECONDS),
+                )
+            logger.info(
+                "turn_claim_released room=%s participant=%s",
+                code,
+                participant.participant_id,
+            )
+
+        await self.broadcast(code)
+
+    async def _run_scoring_timer(self, code: str, participant_id: str) -> None:
+        """Forfeit only if scoring never comes back at all.
+
+        This should effectively never fire. If it does, something in the
+        pipeline is wedged, and freezing the debate for everyone else is worse
+        than ending this turn.
+        """
+        try:
+            await asyncio.sleep(SCORING_SECONDS)
+        except asyncio.CancelledError:
+            return
+        room = self._rooms.get(code)
+        if room is None or room.scoring_participant_id != participant_id:
+            return
+        logger.warning(
+            "scoring_watchdog_fired room=%s participant=%s", code, participant_id
+        )
+        async with self._lock_for(code):
+            room = self._rooms.get(code)
+            if room is not None and room.scoring_participant_id == participant_id:
+                room.scoring_participant_id = None
+        await self.advance_or_forfeit(code, reason="timeout")
+
     async def submit_turn(
         self,
         code: str,
@@ -621,15 +742,26 @@ class DebateRoomManager:
             room = self._rooms.get(code)
             if room is None:
                 raise ValueError("room_not_found")
-            if room.state != "speaking":
-                raise ValueError("not_in_speaking_state")
-            if room.paused:
-                raise ValueError("debate_paused")
             participant = self._find_participant(room, user.uid)
             if participant is None:
                 raise ValueError("not_a_participant")
-            if participant.turn_index != room.active_turn_index:
-                raise ValueError("not_your_turn")
+
+            # A caller holding the scoring claim already passed every one of
+            # these checks in `claim_turn`, and the room has been holding this
+            # turn open for them ever since. Re-applying the checks to the
+            # state *after* a slow pipeline is what threw finished scores away:
+            # a partner disconnecting mid-analysis flipped `paused` on and the
+            # result came back to a 409. The speech happened; take the score.
+            holds_claim = room.scoring_participant_id == participant.participant_id
+            # Not waived for anyone: an abandoned or finished debate has no
+            # turn left to accept, claim or not.
+            if room.state != "speaking":
+                raise ValueError("not_in_speaking_state")
+            if not holds_claim:
+                if room.paused:
+                    raise ValueError("debate_paused")
+                if participant.turn_index != room.active_turn_index:
+                    raise ValueError("not_your_turn")
 
             # Persist the turn's recording through the AudioBlobStore under a
             # stable, debate-scoped key. On any storage failure, keep the turn
@@ -662,7 +794,10 @@ class DebateRoomManager:
                 turn_id=turn_id,
                 debate_id=room.debate_id,
                 participant_id=participant.participant_id,
-                turn_index=room.active_turn_index,
+                # The speaker's own index, not the room's cursor: they are the
+                # same here, and this one cannot be moved by anything that
+                # happened while their audio was being scored.
+                turn_index=participant.turn_index,
                 analysis_id=analysis_id,
                 audio_url=audio_url,
                 audio_key=audio_key,
@@ -689,8 +824,11 @@ class DebateRoomManager:
                 is_forfeit=False,
             ))
 
-            # Turn accepted; cancel the pending 135s timer.
+            # Turn accepted; drop both the speaking timer and the scoring
+            # watchdog that replaced it when the audio arrived.
             self._cancel_timer(code, "turn")
+            self._cancel_timer(code, "scoring")
+            room.scoring_participant_id = None
 
             self._advance_active_index_locked(room)
 
@@ -912,11 +1050,15 @@ class DebateRoomManager:
                 self._reconnect_targets.pop(code, None)
                 participant.is_forfeit = True
 
-                # If they were the active speaker, persist a forfeit turn.
+                # If they were the active speaker, persist a forfeit turn —
+                # unless their audio is already being scored. Dropping off
+                # after uploading is not a forfeit: the speech happened, and
+                # a 0 written here would be overwritten onto real work.
                 if (
                     room.state == "speaking"
                     and room.active_turn_index is not None
                     and participant.turn_index == room.active_turn_index
+                    and room.scoring_participant_id != participant.participant_id
                 ):
                     forfeit_turn = DebateTurn(
                         turn_id=uuid.uuid4().hex,
@@ -947,6 +1089,10 @@ class DebateRoomManager:
 
             else:  # reason == "timeout"
                 if room.state != "speaking" or room.active_turn_index is None:
+                    return
+                if room.scoring_participant_id is not None:
+                    # Their audio is in flight. The speaking clock no longer
+                    # applies; the scoring watchdog owns this turn now.
                     return
                 participant = None
                 for p in room.participants:

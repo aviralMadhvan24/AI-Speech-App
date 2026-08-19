@@ -45,6 +45,14 @@ interface DebateArenaViewProps {
   onBack: () => void;
 }
 
+/**
+ * Mirrors `TURN_GRACE_SECONDS` in `app/debate/room_manager.py`.
+ *
+ * The server's `turn_deadline` is speaking time PLUS this grace. The grace is
+ * upload headroom, not speaking time — see `speakingDeadline` below.
+ */
+const TURN_GRACE_SECONDS = 15;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -444,8 +452,17 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
   const prepRemaining = state?.prep_deadline
     ? Math.max(0, state.prep_deadline - now)
     : null;
-  const turnRemaining = state?.turn_deadline
-    ? Math.max(0, state.turn_deadline - now)
+  // The server's `turn_deadline` is the HARD limit (120s speaking + 15s
+  // grace). The grace exists to cover the upload, so the countdown shown — and
+  // the auto-stop driven off it — has to end at the speaking limit. Counting
+  // it as extra speaking time meant a speaker who used their whole turn only
+  // began uploading at the exact moment the server forfeited them, which is
+  // how a debate where both sides spoke fully ended up 0 to 0.
+  const speakingDeadline = state?.turn_deadline
+    ? state.turn_deadline - TURN_GRACE_SECONDS
+    : null;
+  const turnRemaining = speakingDeadline
+    ? Math.max(0, speakingDeadline - now)
     : null;
   const reconnectRemaining = state?.reconnect_deadline
     ? Math.max(0, state.reconnect_deadline - now)
@@ -540,10 +557,12 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
     if (state.state !== "speaking") return;
     if (state.paused) return;
     if (!isMyTurn) return;
-    if (!state.turn_deadline) return;
+    if (!speakingDeadline) return;
     if (!recorder.isRecording) return;
     if (autoUploadRef.current) return;
-    if (now >= state.turn_deadline) {
+    // Stop at the speaking limit, not the hard deadline, so the 15s grace is
+    // spent on the upload it was meant for.
+    if (now >= speakingDeadline) {
       autoUploadRef.current = true;
       void (async () => {
         const blob = await recorder.stop();
@@ -552,7 +571,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         }
       })();
     }
-  }, [now, state, isMyTurn, recorder, handleUploadTurn]);
+  }, [now, state, isMyTurn, recorder, handleUploadTurn, speakingDeadline]);
 
   // Clear per-turn state when the active turn changes.
   // IMPORTANT: Only reset for participants who are NOT the new active speaker,
@@ -1162,7 +1181,8 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
           </div>
         </div>
         <p className="text-center text-xs text-zinc-500">
-          Get ready. Each turn is 120 seconds (+15s grace period).
+          Get ready. Each turn is 120 seconds of speaking; your recording
+          uploads on its own when the clock runs out.
         </p>
       </section>
     );
