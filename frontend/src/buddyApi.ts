@@ -103,9 +103,35 @@ export interface BuddyPair {
   ended_at: string | null;
 }
 
+/**
+ * Whether a pairing is running — activity only, never ability. A strong mentee
+ * cannot make a pairing that has not met in a month look fine.
+ */
+export type PairState =
+  | "ended"
+  | "no_cycle"
+  | "not_started"
+  | "on_track"
+  | "quiet"
+  | "stalled";
+
+export interface PairHealth {
+  pair_id: string;
+  state: PairState;
+  has_cycle: boolean;
+  cycle_ends_at: string | null;
+  sessions: SessionConsistency;
+  message_count: number;
+  last_activity_at: string | null;
+  /** Null only when there is no cycle to measure inside. */
+  days_quiet: number | null;
+}
+
 export interface PairsResponse {
   pairs: BuddyPair[];
   total: number;
+  /** Keyed by pair_id. Derived per request, so it is never stale. */
+  health: Record<string, PairHealth>;
 }
 
 export type CycleStatus = "active" | "closed";

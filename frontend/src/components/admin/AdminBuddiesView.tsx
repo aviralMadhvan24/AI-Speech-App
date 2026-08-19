@@ -21,6 +21,8 @@ import {
   fetchPairs,
   type BuddyPair,
   type MentorCandidatesResponse,
+  type PairHealth,
+  type PairState,
   type SpeakerRanking,
 } from "../../buddyApi";
 
@@ -31,6 +33,91 @@ import {
  * mentor is paired with. The system only ever suggests — nothing takes effect
  * until a teacher acts.
  */
+
+/**
+ * How a pairing is going, and what a teacher would do about it.
+ *
+ * `order` is what the pairings list sorts by: the whole reason to open this
+ * page is to find the pairing that has stopped, so it should not be the one
+ * you have to scroll to.
+ */
+const HEALTH: Record<
+  PairState,
+  { label: string; tone: string; order: number; hint: string }
+> = {
+  stalled: {
+    label: "Stalled",
+    tone: "text-rose-300 bg-rose-500/10 border-rose-500/30",
+    order: 0,
+    hint: "Nothing is happening here — worth a word with both of them.",
+  },
+  quiet: {
+    label: "Quiet",
+    tone: "text-amber-300 bg-amber-500/10 border-amber-500/30",
+    order: 1,
+    hint: "A week without contact.",
+  },
+  no_cycle: {
+    label: "No cycle",
+    tone: "text-amber-300 bg-amber-500/10 border-amber-500/30",
+    order: 2,
+    hint: "Nothing is being tracked until you start one.",
+  },
+  not_started: {
+    label: "Not started",
+    tone: "text-zinc-300 bg-zinc-500/10 border-zinc-600/40",
+    order: 3,
+    hint: "Cycle is open but they have not spoken yet.",
+  },
+  on_track: {
+    label: "On track",
+    tone: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30",
+    order: 4,
+    hint: "",
+  },
+  ended: {
+    label: "Ended",
+    tone: "text-zinc-500 bg-zinc-800/60 border-zinc-700",
+    order: 5,
+    hint: "",
+  },
+};
+
+/** The activity line under a pairing: what happened, not how it scored. */
+function HealthLine({ health }: { health: PairHealth }) {
+  const { sessions, days_quiet: daysQuiet } = health;
+  const parts: string[] = [];
+
+  if (sessions.completed > 0) {
+    parts.push(`${sessions.completed} session${sessions.completed === 1 ? "" : "s"} kept`);
+  }
+  if (sessions.missed > 0) parts.push(`${sessions.missed} missed`);
+  if (sessions.planned > 0) parts.push(`${sessions.planned} planned`);
+  if (health.message_count > 0) {
+    parts.push(
+      `${health.message_count} message${health.message_count === 1 ? "" : "s"}`,
+    );
+  }
+  // Only worth saying once it means something — "quiet for 0 days" is noise.
+  if (daysQuiet !== null && daysQuiet >= 2 && health.state !== "ended") {
+    parts.push(
+      health.last_activity_at
+        ? `quiet ${daysQuiet} days`
+        : `${daysQuiet} days with nothing`,
+    );
+  }
+
+  const hint = HEALTH[health.state].hint;
+  if (parts.length === 0 && !hint) return null;
+
+  return (
+    <p className="text-xs text-zinc-500 mt-1.5">
+      {parts.join(" · ")}
+      {parts.length > 0 && hint ? " — " : ""}
+      {hint}
+    </p>
+  );
+}
 
 function scoreTone(score: number): string {
   if (score >= 80) return "text-emerald-300";
@@ -134,6 +221,7 @@ function SpeakerRow({
 export function AdminBuddiesView() {
   const [candidates, setCandidates] = useState<MentorCandidatesResponse | null>(null);
   const [pairs, setPairs] = useState<BuddyPair[]>([]);
+  const [health, setHealth] = useState<Record<string, PairHealth>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyEmail, setBusyEmail] = useState<string | null>(null);
@@ -157,6 +245,7 @@ export function AdminBuddiesView() {
       ]);
       setCandidates(candidateData);
       setPairs(pairData.pairs);
+      setHealth(pairData.health ?? {});
       setCycles(cycleData.cycles);
       setError(null);
     } catch (err) {
@@ -288,8 +377,18 @@ export function AdminBuddiesView() {
 
   const suggested = candidates?.suggested ?? [];
   const ranking = candidates?.ranking ?? [];
-  const activePairs = pairs.filter((p) => p.status === "active");
+  // The pairing that has stopped is the one worth finding, so it sorts first.
+  const activePairs = pairs
+    .filter((p) => p.status === "active")
+    .sort(
+      (a, b) =>
+        (HEALTH[health[a.pair_id]?.state ?? "on_track"].order) -
+        (HEALTH[health[b.pair_id]?.state ?? "on_track"].order),
+    );
   const endedPairs = pairs.filter((p) => p.status !== "active");
+  const needAttention = activePairs.filter((p) =>
+    ["stalled", "quiet"].includes(health[p.pair_id]?.state ?? ""),
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -458,10 +557,17 @@ export function AdminBuddiesView() {
 
       {/* --- Existing pairings --- */}
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-          <UserCheck className="w-4 h-4 text-emerald-300" />
-          Pairings
-        </h2>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+            <UserCheck className="w-4 h-4 text-emerald-300" />
+            Pairings
+          </h2>
+          {needAttention > 0 && (
+            <p className="text-xs text-amber-300/90">
+              {needAttention} of {activePairs.length} need a look
+            </p>
+          )}
+        </div>
 
         {pairs.length === 0 ? (
           <div className="card-glass p-6 text-sm text-zinc-500 text-center">
@@ -471,6 +577,7 @@ export function AdminBuddiesView() {
           <div className="space-y-2">
             {[...activePairs, ...endedPairs].map((pair) => {
               const ended = pair.status !== "active";
+              const pairHealth = health[pair.pair_id];
               return (
                 <div
                   key={pair.pair_id}
@@ -485,33 +592,33 @@ export function AdminBuddiesView() {
                       <span className="font-semibold text-violet-300">
                         {pair.mentee_name || pair.mentee_email}
                       </span>
-                      {ended && (
-                        <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-500">
-                          Ended
+                      {pairHealth && (
+                        <span
+                          className={`text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border shrink-0 ${HEALTH[pairHealth.state].tone}`}
+                        >
+                          {HEALTH[pairHealth.state].label}
                         </span>
                       )}
                     </div>
                     <p className="text-xs text-zinc-600 mt-1">
                       {pair.mentor_email} · {pair.mentee_email}
                     </p>
-                    {(() => {
-                      const cycle = activeCycleFor(pair.pair_id);
-                      if (ended) return null;
-                      return cycle ? (
-                        <p className="text-xs text-teal-300/90 mt-1.5">
-                          Cycle ends{" "}
-                          {new Date(cycle.ends_at).toLocaleDateString([], {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                          {cycle.goal ? ` · ${cycle.goal}` : ""}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-amber-300/90 mt-1.5">
-                          No cycle running — nothing is being tracked.
-                        </p>
-                      );
-                    })()}
+                    {!ended &&
+                      (() => {
+                        const cycle = activeCycleFor(pair.pair_id);
+                        if (!cycle) return null;
+                        return (
+                          <p className="text-xs text-teal-300/90 mt-1.5">
+                            Cycle ends{" "}
+                            {new Date(cycle.ends_at).toLocaleDateString([], {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                            {cycle.goal ? ` · ${cycle.goal}` : ""}
+                          </p>
+                        );
+                      })()}
+                    {pairHealth && !ended && <HealthLine health={pairHealth} />}
                   </div>
 
                   {!ended &&

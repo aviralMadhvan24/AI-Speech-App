@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import Field
 
+from app.buddy.health import PairHealth
 from app.buddy.service import SpeakerRanking
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
@@ -86,6 +87,9 @@ class CreatePairRequest(BaseModel):
 class PairsResponse(BaseModel):
     pairs: list[BuddyPair] = Field(default_factory=list)
     total: int = 0
+    # Keyed by pair_id. Carried alongside the pairs rather than folded into
+    # them: `BuddyPair` is what is stored, and health is derived per request.
+    health: dict[str, PairHealth] = Field(default_factory=dict)
 
 
 # --- Cycles ---

@@ -29,6 +29,7 @@ from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
 from app.buddy import growth
+from app.buddy import health
 from app.buddy import service
 from app.buddy.growth import CycleReport
 from app.buddy.schemas import CompleteSessionRequest
@@ -530,10 +531,19 @@ async def decide_mentor(
 
 @router.get("/admin/pairs", response_model=PairsResponse)
 async def list_pairs(_: User = Depends(require_teacher)) -> PairsResponse:
-    """Every buddy pairing, active or ended."""
+    """Every buddy pairing, active or ended, with how each one is actually going.
+
+    Health rides along with the list rather than sitting behind its own call:
+    the reason to look at this list at all is to find the pairing that has
+    stopped, and a second request would let the two drift apart on screen.
+    """
     pairs = buddy_pairs_store.list_all()
     pairs.sort(key=lambda p: p.created_at, reverse=True)
-    return PairsResponse(pairs=pairs, total=len(pairs))
+    return PairsResponse(
+        pairs=pairs,
+        total=len(pairs),
+        health=health.build_index(pairs),
+    )
 
 
 @router.post("/admin/pairs", response_model=BuddyPair)
