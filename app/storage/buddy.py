@@ -36,6 +36,8 @@ SessionStatus = Literal["planned", "completed", "missed"]
 # Async is the default on purpose: an exchange of voice notes across two days
 # is a real session here, not a failed live call.
 SessionMode = Literal["async_voice", "live_call", "in_person"]
+# Which of the platform's own catalogs a session's practice material came from.
+PromptKind = Literal["pronunciation", "debate", "gd"]
 
 
 class MentorRecord(BaseModel):
@@ -112,6 +114,40 @@ class CycleBaseline(BaseModel):
     live_speaking: Optional[float] = None
 
 
+class CycleAxisResult(BaseModel):
+    """One axis, from where the cycle opened to where it ended."""
+
+    key: str
+    label: str
+    baseline: Optional[float] = None
+    final: Optional[float] = None
+    delta: Optional[float] = None
+    sample_size: int = 0
+
+
+class CycleSummary(BaseModel):
+    """What a cycle actually achieved, frozen at the moment it closed.
+
+    Computed once and stored rather than derived on read, for the same reason
+    the baseline is: the answer a student is given about a finished period must
+    not drift later as unrelated work is scored. This is the payoff the whole
+    cycle model exists for — without it, closing a cycle only flips a status
+    and nobody ever learns whether it worked.
+    """
+
+    axes: list[CycleAxisResult] = Field(default_factory=list)
+    sessions_completed: int = 0
+    sessions_missed: int = 0
+    sessions_planned: int = 0
+    activity_count: int = 0
+    goal: str = ""
+    # improved | held | declined | not_enough_evidence — deliberately blunt,
+    # and never dressed up: with nothing measured, say so rather than imply
+    # a flat line was a result.
+    verdict: str = "not_enough_evidence"
+    generated_at: str
+
+
 class BuddyCycle(BaseModel):
     """One time-boxed mentorship period inside a pair.
 
@@ -132,6 +168,8 @@ class BuddyCycle(BaseModel):
     created_by: str
     created_at: str
     closed_at: Optional[str] = None
+    # Written once, when the cycle closes. See `CycleSummary`.
+    summary: Optional[CycleSummary] = None
 
     def covers(self, when: str) -> bool:
         """Whether an ISO timestamp falls inside this cycle's window.
@@ -162,6 +200,16 @@ class BuddySession(BaseModel):
     duration_minutes: Optional[int] = None
     mentor_notes: str = ""
     mentee_reflection: str = ""
+    # What the pair will actually work on, drawn from the platform's own
+    # catalogs. Without it `topic` is a free-text string and "practice" means
+    # whatever the pair decides on the day — which is nothing to measure.
+    prompt_kind: Optional[PromptKind] = None
+    prompt_id: Optional[str] = None
+    prompt_title: Optional[str] = None
+    # The mentee's rating of this session, 1-5. The only signal the platform
+    # has about whether a mentor is any good AT MENTORING, as opposed to being
+    # a strong speaker — which is what got them selected.
+    mentee_rating: Optional[int] = None
     created_by: str
     created_at: str
 
@@ -464,13 +512,20 @@ class BuddyCyclesStore:
         append_jsonl(self.path, record.model_dump())
         return record
 
-    def close(self, cycle_id: str) -> Optional[BuddyCycle]:
+    def close(
+        self, cycle_id: str, summary: Optional[CycleSummary] = None
+    ) -> Optional[BuddyCycle]:
+        """Close a cycle, freezing its outcome alongside its baseline."""
         cycles = self.list_all()
         closed: Optional[BuddyCycle] = None
         for index, cycle in enumerate(cycles):
             if cycle.cycle_id == cycle_id:
                 closed = cycle.model_copy(
-                    update={"status": "closed", "closed_at": _now()}
+                    update={
+                        "status": "closed",
+                        "closed_at": _now(),
+                        "summary": summary or cycle.summary,
+                    }
                 )
                 cycles[index] = closed
                 break
@@ -503,6 +558,12 @@ class BuddySessionsStore:
 
     # --- Write ---
 
+    def list_for_pair(self, pair_id: str) -> list[BuddySession]:
+        """Every session across every cycle of a pair — the mentor's record."""
+        sessions = [s for s in self.list_all() if s.pair_id == pair_id]
+        sessions.sort(key=lambda s: s.scheduled_at)
+        return sessions
+
     def create(
         self,
         pair_id: str,
@@ -511,6 +572,9 @@ class BuddySessionsStore:
         created_by: str,
         topic: str = "",
         mode: SessionMode = "async_voice",
+        prompt_kind: Optional[PromptKind] = None,
+        prompt_id: Optional[str] = None,
+        prompt_title: Optional[str] = None,
     ) -> BuddySession:
         record = BuddySession(
             pair_id=pair_id,
@@ -518,11 +582,18 @@ class BuddySessionsStore:
             scheduled_at=scheduled_at,
             topic=topic,
             mode=mode,
+            prompt_kind=prompt_kind,
+            prompt_id=prompt_id,
+            prompt_title=prompt_title,
             created_by=created_by.lower(),
             created_at=_now(),
         )
         append_jsonl(self.path, record.model_dump())
         return record
+
+    def rate(self, session_id: str, rating: int) -> Optional[BuddySession]:
+        """Record the mentee's 1-5 rating of a session."""
+        return self._update(session_id, {"mentee_rating": max(1, min(5, int(rating)))})
 
     def _update(self, session_id: str, changes: dict) -> Optional[BuddySession]:
         sessions = self.list_all()

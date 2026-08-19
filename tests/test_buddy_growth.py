@@ -88,8 +88,8 @@ def _cycle(**overrides) -> BuddyCycle:
 
 @pytest.fixture()
 def sources(monkeypatch):
-    """Point growth at controllable stand-ins for all three score sources."""
-    state = SimpleNamespace(submissions=[], debates=[], gds=[], uid=UID)
+    """Point growth at controllable stand-ins for all four score sources."""
+    state = SimpleNamespace(submissions=[], debates=[], gds=[], attempts=[], uid=UID)
 
     monkeypatch.setattr(
         growth.submissions_store,
@@ -114,6 +114,12 @@ def sources(monkeypatch):
     )
     monkeypatch.setattr(
         gd_sessions_store, "list_sessions_for_user", lambda uid: state.gds
+    )
+
+    from app.attempts import storage as attempts_storage
+
+    monkeypatch.setattr(
+        attempts_storage, "list_for_student", lambda email: state.attempts
     )
     return state
 
@@ -201,7 +207,53 @@ def test_work_outside_the_cycle_is_absent_not_hidden(sources):
 
     assert [item.score for item in report.activity if item.kind == "interview"] == [70.0]
     assert [item.score for item in report.activity if item.kind == "debate"] == [64.0]
-    assert report.counts == {"interview": 1, "debate": 1, "gd": 0}
+    assert report.counts == {"interview": 1, "debate": 1, "gd": 0, "practice": 0}
+
+
+def _attempt(at: str, score: float | None, text: str = "The quick brown fox"):
+    return SimpleNamespace(
+        created_at=at,
+        expected_text=text,
+        transcript=text,
+        pronunciation_available=score is not None,
+        pronunciation_score=score,
+    )
+
+
+def test_pronunciation_drills_count_towards_the_cycle(sources):
+    """Drilling is the one thing a mentee can do alone, and what mentors set."""
+    sources.attempts = [_attempt(_iso(9), 72.0), _attempt(_iso(14), 81.0)]
+
+    report = growth.build_report(_cycle(), MENTEE)
+
+    axis = next(a for a in report.axes if a.key == "pronunciation")
+    assert axis.sample_size == 2
+    assert axis.latest == 81.0
+    assert report.counts["practice"] == 2
+
+
+def test_a_pending_drill_is_skipped_rather_than_scored_zero(sources):
+    """An outage must not read as the mentee getting worse."""
+    sources.attempts = [_attempt(_iso(9), None)]
+
+    report = growth.build_report(_cycle(), MENTEE)
+
+    assert next(a for a in report.axes if a.key == "pronunciation").sample_size == 0
+    assert report.counts["practice"] == 0
+
+
+def test_a_broken_attempts_store_does_not_blank_the_panel(sources, monkeypatch):
+    from app.attempts import storage as attempts_storage
+
+    def _boom(email):
+        raise RuntimeError("store is a mess")
+
+    monkeypatch.setattr(attempts_storage, "list_for_student", _boom)
+    sources.submissions = [_submission(_iso(15), content=70.0)]
+
+    report = growth.build_report(_cycle(), MENTEE)
+
+    assert next(a for a in report.axes if a.key == "content").latest == 70.0
 
 
 def test_debates_and_gds_are_attributed_through_the_uid_join(sources):

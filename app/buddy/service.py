@@ -4,27 +4,33 @@ Mentor selection is score-suggested and teacher-approved. This module owns the
 "suggested" half — ranking students by demonstrated speaking ability — while the
 approval itself is a teacher action recorded in ``MentorsStore``.
 
-Scoring source: interview submissions are the only per-student store that
-carries an email directly alongside a speaking score, so they are what this
-module reads today.
+Scoring sources — all four the platform can attribute to a student:
 
-Two other sources *can* be attributed, they simply are not wired up yet:
-completed debates and GD sessions persist ``participants[].user_id`` (the
-Firebase uid), which joins to ``firebase_uid`` in ``users_store``. Only
-pronunciation attempts (``outputs/attempts.jsonl``) are genuinely anonymous —
-those rows carry no user field at all and would need capture at write time.
-Extending ``_speaking_signals`` is the intended place to add the joinable ones.
+- interview submissions carry ``student_email`` directly;
+- completed debates and GD sessions carry ``participants[].user_id`` (the
+  Firebase uid), joined to ``firebase_uid`` via ``users_store``;
+- pronunciation attempts carry ``student_email`` on rows written after that
+  field was added. Older rows have no owner and never can — they are skipped
+  rather than guessed at.
+
+Reading only interviews, as this module once did, meant the strongest debater
+in a cohort was invisible to mentor selection: the two features where students
+actually speak competitively counted for nothing. ``_speaking_signals`` is the
+one place that decides what evidence counts, so it is the place to extend.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import NamedTuple
 from typing import Optional
 
 from pydantic import BaseModel
 
+from app.attempts import storage as attempts_storage
 from app.storage import submissions_store
 from app.storage.buddy import buddy_pairs_store
+from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 logger = logging.getLogger("buddy.service")
@@ -39,6 +45,22 @@ MIN_SAMPLE_SIZE = 2
 SUGGESTION_THRESHOLD = 65.0
 
 
+class SpeakerSignals(NamedTuple):
+    """Every scored signal the platform can attribute to one student.
+
+    ``work_count`` counts pieces of WORK, not scores. One interview that
+    produced both a content and a pronunciation score is a single piece of
+    evidence about a speaker, so counting the axes would let one submission
+    look like two — and `MIN_SAMPLE_SIZE` exists precisely to demand that a
+    mentor has shown consistency rather than had one good day.
+    """
+
+    content: list[float]
+    pronunciation: list[float]
+    live_speaking: list[float]
+    work_count: int
+
+
 class SpeakerRanking(BaseModel):
     """One student's demonstrated speaking ability, aggregated across attempts."""
 
@@ -48,65 +70,151 @@ class SpeakerRanking(BaseModel):
     sample_size: int
     content_avg: Optional[float] = None
     pronunciation_avg: Optional[float] = None
+    # Debates and GD sessions — "speaking with an audience", which is the
+    # closest thing the platform has to what a buddy mentor actually does.
+    live_speaking_avg: Optional[float] = None
     status: str = "none"  # none | suggested | approved | rejected
     active_mentees: int = 0
+    # Mentoring track record, for a teacher deciding whether to keep using
+    # someone. None until their mentees have rated a session.
+    mentor_rating: Optional[float] = None
+    sessions_mentored: int = 0
 
 
 def _mean(values: list[float]) -> Optional[float]:
     return round(sum(values) / len(values), 2) if values else None
 
 
-def _speaking_signals(email: str) -> tuple[list[float], list[float]]:
-    """Return (content scores, pronunciation scores) for one student, 0-100 each.
+def _speaking_signals(email: str) -> SpeakerSignals:
+    """Collect every attributable 0-100 score for one student.
 
-    Only submissions that actually produced a score count. An unavailable
-    content result or a pending pronunciation pass is skipped rather than
-    counted as zero, which would punish a student for an outage.
+    Only work that actually produced a score counts. An unavailable content
+    result or a pending pronunciation pass is skipped rather than counted as
+    zero, which would punish a student for an outage.
     """
     content: list[float] = []
     pronunciation: list[float] = []
+    live_speaking: list[float] = []
+    works = 0
 
     for submission in submissions_store.list_for_student(email):
         result = submission.content_result
         if result is None:
             continue
+        scored = False
         if result.available and result.total:
             content.append(float(result.total))
+            scored = True
         snapshot = result.pronunciation
         if snapshot is not None and snapshot.available and snapshot.score is not None:
             pronunciation.append(float(snapshot.score))
+            scored = True
+        # One submission is one piece of work however many axes it scored on.
+        if scored:
+            works += 1
 
-    return content, pronunciation
+    # Standalone pronunciation practice. Attributable only on rows written
+    # since `student_email` was added to AttemptSummary.
+    try:
+        for attempt in attempts_storage.list_for_student(email):
+            if attempt.pronunciation_available and attempt.pronunciation_score is not None:
+                pronunciation.append(float(attempt.pronunciation_score))
+                works += 1
+    except Exception as exc:  # a malformed store must not blank the ranking
+        logger.warning("buddy_rank_attempts_failed err=%s", type(exc).__name__)
+
+    # Debates and GD. `growth._live_events` already owns the uid join and
+    # swallows a broken store per-source, so reuse it rather than repeat it.
+    try:
+        from app.buddy.growth import _live_events
+
+        live_speaking.extend(score for _at, _title, score, _kind in _live_events(email))
+        works += len(live_speaking)
+    except Exception as exc:
+        logger.warning("buddy_rank_live_failed err=%s", type(exc).__name__)
+
+    return SpeakerSignals(
+        content=content,
+        pronunciation=pronunciation,
+        live_speaking=live_speaking,
+        work_count=works,
+    )
+
+
+class MentoringRecord(NamedTuple):
+    """How someone has performed AS A MENTOR, across every pair they hold."""
+
+    sessions_mentored: int
+    rating: Optional[float]
+
+
+def _mentoring_records() -> dict[str, MentoringRecord]:
+    """Sessions kept and mean mentee rating, per mentor email.
+
+    Built in one pass for the whole cohort — the ranking asks about every
+    student at once, and doing this per mentor would re-read both stores once
+    per row.
+    """
+    sessions_by_pair: dict[str, list] = {}
+    for session in buddy_sessions_store.list_all():
+        sessions_by_pair.setdefault(session.pair_id, []).append(session)
+
+    kept: dict[str, int] = {}
+    ratings: dict[str, list[float]] = {}
+    for pair in buddy_pairs_store.list_all():
+        mentor = pair.mentor_email.lower()
+        for session in sessions_by_pair.get(pair.pair_id, []):
+            if session.status != "completed":
+                continue
+            kept[mentor] = kept.get(mentor, 0) + 1
+            if session.mentee_rating is not None:
+                ratings.setdefault(mentor, []).append(float(session.mentee_rating))
+
+    return {
+        email: MentoringRecord(
+            sessions_mentored=count,
+            rating=_mean(ratings.get(email, [])),
+        )
+        for email, count in kept.items()
+    }
 
 
 def rank_speakers() -> list[SpeakerRanking]:
     """Rank every student who has scored speaking work, best first.
 
-    The combined score weights content and pronunciation equally when both are
-    present, and falls back to whichever exists otherwise — a student with no
-    pronunciation pass yet is still rankable on content alone.
+    The combined score is the mean of whichever axis averages exist — content,
+    pronunciation, live speaking. Averaging the axes rather than every raw
+    score keeps one prolific source from drowning out the others: a student
+    with thirty pronunciation drills and one debate should not be ranked as
+    though pronunciation were the whole picture.
+
+    A student is rankable on any single axis. Someone who only ever debates is
+    still a demonstrated speaker.
     """
     from app.storage import users_store
 
     rankings: list[SpeakerRanking] = []
     active_pairs = buddy_pairs_store.list_active()
+    mentoring = _mentoring_records()
 
     for user in users_store.list_all():
         if user.role != "student":
             continue
 
-        content, pronunciation = _speaking_signals(user.email)
-        sample_size = max(len(content), len(pronunciation))
+        signals = _speaking_signals(user.email)
+        sample_size = signals.work_count
         if sample_size == 0:
             continue
 
-        content_avg = _mean(content)
-        pronunciation_avg = _mean(pronunciation)
-        parts = [v for v in (content_avg, pronunciation_avg) if v is not None]
+        content_avg = _mean(signals.content)
+        pronunciation_avg = _mean(signals.pronunciation)
+        live_avg = _mean(signals.live_speaking)
+        parts = [v for v in (content_avg, pronunciation_avg, live_avg) if v is not None]
         if not parts:
             continue
 
         mentor = mentors_store.get(user.email)
+        record = mentoring.get(user.email.lower())
         rankings.append(
             SpeakerRanking(
                 email=user.email,
@@ -115,12 +223,15 @@ def rank_speakers() -> list[SpeakerRanking]:
                 sample_size=sample_size,
                 content_avg=content_avg,
                 pronunciation_avg=pronunciation_avg,
+                live_speaking_avg=live_avg,
                 status=mentor.status if mentor else "none",
                 active_mentees=sum(
                     1
                     for p in active_pairs
                     if p.mentor_email.lower() == user.email.lower()
                 ),
+                mentor_rating=record.rating if record else None,
+                sessions_mentored=record.sessions_mentored if record else 0,
             )
         )
 

@@ -172,6 +172,7 @@ async def analyze_turn_audio(
             build_attempt_summary(
                 analysis_id=analysis_id,
                 response_data=response.model_dump(),
+                student_email=user.email if user else None,
             )
         )
     except Exception as exc:

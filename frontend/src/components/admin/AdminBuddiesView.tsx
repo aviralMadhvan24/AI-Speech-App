@@ -5,6 +5,7 @@ import {
   Link2,
   Loader2,
   Sparkles,
+  Star,
   Unlink,
   UserCheck,
   X,
@@ -20,6 +21,7 @@ import {
   fetchMentorCandidates,
   fetchPairs,
   type BuddyPair,
+  type CycleVerdict,
   type MentorCandidatesResponse,
   type PairHealth,
   type PairState,
@@ -82,6 +84,48 @@ const HEALTH: Record<
     hint: "",
   },
 };
+
+/**
+ * The verdict a cycle closed with. Frozen at close, never recomputed.
+ *
+ * `not_enough_evidence` is shown as plainly as the rest: a cycle nobody
+ * measured is a different outcome from one that held steady, and dressing it
+ * up as a flat result is the one thing this must not do.
+ */
+const VERDICT: Record<CycleVerdict, { label: string; tone: string }> = {
+  improved: { label: "Improved", tone: "text-emerald-300" },
+  held: { label: "Held steady", tone: "text-sky-300" },
+  declined: { label: "Declined", tone: "text-amber-300" },
+  not_enough_evidence: { label: "Nothing measured", tone: "text-zinc-500" },
+};
+
+function ClosedCycleLine({ cycle }: { cycle: BuddyCycle }) {
+  const closed = cycle.closed_at
+    ? new Date(cycle.closed_at).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+      })
+    : null;
+
+  if (!cycle.summary) {
+    // A close whose reporting failed — never blocked, and never invented.
+    return (
+      <p className="text-xs text-zinc-600 mt-1.5">
+        Last cycle closed{closed ? ` ${closed}` : ""} without a summary.
+      </p>
+    );
+  }
+
+  const verdict = VERDICT[cycle.summary.verdict] ?? VERDICT.not_enough_evidence;
+  return (
+    <p className="text-xs text-zinc-600 mt-1.5">
+      Last cycle: <span className={verdict.tone}>{verdict.label}</span> ·{" "}
+      {cycle.summary.sessions_completed} session
+      {cycle.summary.sessions_completed === 1 ? "" : "s"} kept
+      {closed ? ` · closed ${closed}` : ""}
+    </p>
+  );
+}
 
 /** The activity line under a pairing: what happened, not how it scored. */
 function HealthLine({ health }: { health: PairHealth }) {
@@ -151,10 +195,15 @@ function SpeakerRow({
   busy: boolean;
   onDecide: (status: "approved" | "rejected") => void;
 }) {
+  // Every axis the ranking could attribute. A strong debater with no
+  // interviews used to show nothing here at all.
   const signals = [
     speaker.content_avg !== null ? `content ${speaker.content_avg}` : null,
     speaker.pronunciation_avg !== null
       ? `pronunciation ${speaker.pronunciation_avg}`
+      : null,
+    speaker.live_speaking_avg !== null
+      ? `debates & GD ${speaker.live_speaking_avg}`
       : null,
   ].filter(Boolean);
 
@@ -175,10 +224,24 @@ function SpeakerRow({
         </div>
         <p className="text-xs text-zinc-500 mt-0.5 truncate">{speaker.email}</p>
         <p className="text-xs text-zinc-600 mt-1">
-          {speaker.sample_size} scored attempt
-          {speaker.sample_size === 1 ? "" : "s"}
+          {speaker.sample_size} piece{speaker.sample_size === 1 ? "" : "s"} of
+          scored work
           {signals.length > 0 && ` · ${signals.join(" · ")}`}
         </p>
+        {/* Being a strong speaker and being a good mentor are different
+            things, and only this line is evidence of the second. */}
+        {speaker.sessions_mentored > 0 && (
+          <p className="text-xs text-amber-300/90 mt-1 inline-flex items-center gap-1.5">
+            <Star className="w-3 h-3 shrink-0" />
+            {speaker.mentor_rating !== null
+              ? `Rated ${speaker.mentor_rating.toFixed(1)} by their mentees`
+              : "Not yet rated by their mentees"}
+            <span className="text-zinc-600">
+              · {speaker.sessions_mentored} session
+              {speaker.sessions_mentored === 1 ? "" : "s"} run
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="text-right shrink-0">
@@ -309,6 +372,14 @@ export function AdminBuddiesView() {
   const activeCycleFor = useCallback(
     (pairId: string) =>
       cycles.find((c) => c.pair_id === pairId && c.status === "active") ?? null,
+    [cycles],
+  );
+
+  // `fetchCycles` returns newest first, so the first match is the last one to
+  // have closed — which is the only one whose verdict is still worth showing.
+  const lastClosedFor = useCallback(
+    (pairId: string) =>
+      cycles.find((c) => c.pair_id === pairId && c.status === "closed") ?? null,
     [cycles],
   );
 
@@ -618,6 +689,12 @@ export function AdminBuddiesView() {
                           </p>
                         );
                       })()}
+                    {/* The point of closing a cycle is finding out whether it
+                        worked, so the answer lives on the row. */}
+                    {(() => {
+                      const closed = lastClosedFor(pair.pair_id);
+                      return closed ? <ClosedCycleLine cycle={closed} /> : null;
+                    })()}
                     {pairHealth && !ended && <HealthLine health={pairHealth} />}
                   </div>
 

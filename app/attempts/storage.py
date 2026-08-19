@@ -57,6 +57,36 @@ def load_recent_attempts(limit: int = MAX_ATTEMPTS_RETURNED) -> List[AttemptSumm
     return list(reversed(attempts))[:safe_limit]
 
 
+def list_for_student(email: str) -> List[AttemptSummary]:
+    """Every attempt attributable to one student, oldest first.
+
+    Rows written before `student_email` existed carry no owner and are skipped
+    — they belong to nobody rather than to everybody.
+    """
+    if not ATTEMPTS_PATH.exists():
+        return []
+
+    normalized = (email or "").lower()
+    if not normalized:
+        return []
+
+    attempts: List[AttemptSummary] = []
+    with open(ATTEMPTS_PATH, "r", encoding="utf-8") as attempts_file:
+        for raw_line in attempts_file:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                attempt = AttemptSummary(**json.loads(stripped))
+            except (json.JSONDecodeError, TypeError, ValueError) as error:
+                logger.warning(f"Skipping malformed attempt row: {error}")
+                continue
+            if (attempt.student_email or "").lower() == normalized:
+                attempts.append(attempt)
+
+    return attempts
+
+
 def count_attempts() -> int:
     if not ATTEMPTS_PATH.exists():
         return 0

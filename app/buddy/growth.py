@@ -7,14 +7,15 @@ opened, or after it closed, is never returned.
 
 Attribution
 -----------
-Three sources feed a report, and they identify a student differently:
+Four sources feed a report, and they identify a student differently:
 
 - interview submissions carry ``student_email`` directly;
 - completed debates and GD sessions carry ``participants[].user_id``, the
   Firebase uid, which joins to ``firebase_uid`` in ``users_store``;
-- pronunciation attempts (``outputs/attempts.jsonl``) carry no user field at
-  all and so cannot be attributed to anyone. They are absent by necessity, not
-  by choice.
+- pronunciation attempts (``outputs/attempts.jsonl``) carry ``student_email``
+  on every row written since that field was added. Rows from before it have no
+  owner and never can — they are unattributable by construction, and are
+  skipped rather than handed to whoever asks.
 
 Debates and GD sessions timestamp with a unix float while interviews use an ISO
 string, so everything is normalised to ISO here before any window comparison.
@@ -34,7 +35,9 @@ from pydantic import Field
 from app.storage import submissions_store
 from app.storage import users_store
 from app.storage.buddy import BuddyCycle
+from app.storage.buddy import CycleAxisResult
 from app.storage.buddy import CycleBaseline
+from app.storage.buddy import CycleSummary
 from app.storage.buddy import buddy_sessions_store
 
 logger = logging.getLogger("buddy.growth")
@@ -44,7 +47,12 @@ logger = logging.getLogger("buddy.growth")
 # the client is told when to show numbers instead of a chart.
 MIN_TREND_POINTS = 3
 
-ActivityKind = Literal["interview", "debate", "gd"]
+# Points out of 100. Below this a cycle "held" rather than improved or
+# declined — scores wobble by a point or two for reasons that have nothing to
+# do with a mentor, and calling that progress would cheapen the times it is.
+MEANINGFUL_DELTA = 2.0
+
+ActivityKind = Literal["interview", "debate", "gd", "practice"]
 
 
 class ActivityItem(BaseModel):
@@ -103,6 +111,9 @@ class CycleReport(BaseModel):
     sessions: SessionConsistency = Field(default_factory=SessionConsistency)
     # False when there is too little scored work to draw a line through.
     enough_for_trend: bool = False
+    # The verdict on the pair's most recently closed cycle, so the people who
+    # did the work find out how it went. Frozen at close; never recomputed.
+    last_summary: Optional[CycleSummary] = None
 
 
 def _iso(unix_ts: Optional[float]) -> Optional[str]:
@@ -206,6 +217,36 @@ def _gd_events(uid: str) -> list[tuple[str, str, float]]:
     return out
 
 
+def _attempt_events(email: str) -> list[tuple[str, str, float]]:
+    """(iso, title, pronunciation) for every attributed pronunciation drill.
+
+    Drills are the one thing a mentee can do alone, on demand, as many times as
+    they like — leaving them out meant the work a mentor most often sets showed
+    up nowhere in the cycle it was set for.
+    """
+    from app.attempts import storage as attempts_storage
+
+    out: list[tuple[str, str, float]] = []
+    try:
+        attempts = attempts_storage.list_for_student(email)
+    except Exception as exc:  # a malformed store must not blank the whole panel
+        logger.warning("buddy_growth_attempts_failed err=%s", type(exc).__name__)
+        return out
+
+    for attempt in attempts:
+        if not attempt.pronunciation_available or attempt.pronunciation_score is None:
+            continue
+        title = (attempt.expected_text or attempt.transcript or "").strip()
+        out.append(
+            (
+                attempt.created_at,
+                title[:80] or "Pronunciation drill",
+                float(attempt.pronunciation_score),
+            )
+        )
+    return out
+
+
 def _live_events(email: str) -> list[tuple[str, str, float, ActivityKind]]:
     """Debates and GDs together — both are 'speaking with an audience'."""
     uid = _uid_for(email)
@@ -232,15 +273,66 @@ def baseline_for(email: str, before: str) -> CycleBaseline:
     most-recent attempt, which would make the baseline hostage to one bad day.
     """
     content = [c for at, _, c, _ in _interview_events(email) if at < before and c is not None]
+    # Interviews and standalone drills both score pronunciation, so both set
+    # the line the cycle is read against — otherwise a mentee who practises
+    # only by drilling starts every cycle with no baseline at all.
     pronunciation = [
         p for at, _, _, p in _interview_events(email) if at < before and p is not None
-    ]
+    ] + [score for at, _, score in _attempt_events(email) if at < before]
     live = [score for at, _, score, _ in _live_events(email) if at < before]
 
     return CycleBaseline(
         content=_mean(content),
         pronunciation=_mean(pronunciation),
         live_speaking=_mean(live),
+    )
+
+
+def build_summary(cycle: BuddyCycle, mentee_email: str) -> CycleSummary:
+    """Freeze what a cycle achieved, for storing at the moment it closes.
+
+    Derived from the same report the pair saw all along, so the closing verdict
+    can never contradict what was on screen the day before. Stored rather than
+    recomputed for the same reason the baseline is: a finished period's result
+    must not drift as unrelated later work is scored.
+    """
+    report = build_report(cycle, mentee_email)
+
+    axes = [
+        CycleAxisResult(
+            key=axis.key,
+            label=axis.label,
+            baseline=axis.baseline,
+            final=axis.latest,
+            delta=axis.delta,
+            sample_size=axis.sample_size,
+        )
+        for axis in report.axes
+    ]
+
+    # Only axes that actually moved between two known points can vote. An axis
+    # with no baseline, or no work inside the window, says nothing either way.
+    deltas = [a.delta for a in axes if a.delta is not None]
+    if not deltas:
+        verdict = "not_enough_evidence"
+    else:
+        average = sum(deltas) / len(deltas)
+        if average >= MEANINGFUL_DELTA:
+            verdict = "improved"
+        elif average <= -MEANINGFUL_DELTA:
+            verdict = "declined"
+        else:
+            verdict = "held"
+
+    return CycleSummary(
+        axes=axes,
+        sessions_completed=report.sessions.completed,
+        sessions_missed=report.sessions.missed,
+        sessions_planned=report.sessions.planned,
+        activity_count=len(report.activity),
+        goal=cycle.goal,
+        verdict=verdict,
+        generated_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -279,6 +371,13 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
         if pronunciation is not None:
             pronunciation_scores.append((at, pronunciation))
             point.pronunciation = pronunciation
+
+    for at, title, score in _attempt_events(mentee_email):
+        if not cycle.covers(at):
+            continue
+        activity.append(ActivityItem(kind="practice", at=at, title=title, score=score))
+        pronunciation_scores.append((at, score))
+        _slot(at).pronunciation = score
 
     for at, title, score, kind in _live_events(mentee_email):
         if not cycle.covers(at):
@@ -330,6 +429,7 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
             "interview": sum(1 for a in activity if a.kind == "interview"),
             "debate": sum(1 for a in activity if a.kind == "debate"),
             "gd": sum(1 for a in activity if a.kind == "gd"),
+            "practice": sum(1 for a in activity if a.kind == "practice"),
         },
         sessions=SessionConsistency(
             planned=sum(1 for s in sessions if s.status == "planned"),

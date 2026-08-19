@@ -32,6 +32,13 @@ class AttemptSummary(BaseModel):
 
     mistakes_count: int = 0
 
+    # Who this attempt belongs to. Optional because every row written before
+    # this field existed has no owner and never can — those attempts are
+    # unattributable by construction, not by choice. New rows always carry it,
+    # which is what lets pronunciation practice count towards a student's
+    # record in `app.buddy.growth` and `app.buddy.service`.
+    student_email: Optional[str] = None
+
 
 class AttemptListResponse(BaseModel):
 
@@ -42,7 +49,8 @@ class AttemptListResponse(BaseModel):
 
 def build_attempt_summary(
     analysis_id: str,
-    response_data: dict
+    response_data: dict,
+    student_email: Optional[str] = None,
 ) -> AttemptSummary:
     pronunciation = response_data.get("pronunciation") or {}
     audio = response_data.get("audio") or {}
@@ -70,4 +78,5 @@ def build_attempt_summary(
         clarity_score=fluency.get("clarity_score"),
         pace_wpm=fluency.get("words_per_minute"),
         mistakes_count=len(transcript_mistakes),
+        student_email=(student_email or "").lower() or None,
     )

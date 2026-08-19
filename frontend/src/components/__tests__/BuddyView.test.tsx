@@ -24,8 +24,14 @@ const planSession = vi.fn();
 const completeSession = vi.fn();
 const missSession = vi.fn();
 const cancelSession = vi.fn();
+const rateSession = vi.fn();
+const fetchPracticePrompts = vi.fn();
+const fetchMyMentoring = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
+  rateSession: (...args: unknown[]) => rateSession(...args),
+  fetchPracticePrompts: (...args: unknown[]) => fetchPracticePrompts(...args),
+  fetchMyMentoring: (...args: unknown[]) => fetchMyMentoring(...args),
   fetchSessions: (...args: unknown[]) => fetchSessions(...args),
   planSession: (...args: unknown[]) => planSession(...args),
   completeSession: (...args: unknown[]) => completeSession(...args),
@@ -76,6 +82,10 @@ function conversation(
     unread_count: 0,
     last_message_at: "2026-08-18T10:00:00Z",
     last_message_preview: "how did it go?",
+    nudge: null,
+    days_quiet: null,
+    next_session_at: null,
+    sessions_kept: 0,
     ...overrides,
   };
 }
@@ -115,6 +125,16 @@ beforeEach(() => {
   markConversationRead.mockResolvedValue({ marked: 0 });
   fetchPairActivity.mockResolvedValue(emptyReport());
   fetchSessions.mockResolvedValue({ sessions: [], total: 0 });
+  fetchPracticePrompts.mockResolvedValue({ prompts: [], total: 0 });
+  fetchMyMentoring.mockResolvedValue({
+    is_mentor: false,
+    active_mentees: 0,
+    total_mentees: 0,
+    sessions_mentored: 0,
+    average_rating: null,
+    cycles_completed: 0,
+    mentees_improved: 0,
+  });
 });
 
 /** A pair between cycles: nothing to track, so nothing to show. */
@@ -127,6 +147,7 @@ function emptyReport() {
     counts: {},
     sessions: { planned: 0, completed: 0, missed: 0 },
     enough_for_trend: false,
+    last_summary: null,
   };
 }
 
@@ -143,6 +164,10 @@ function session(overrides: Record<string, unknown> = {}) {
     duration_minutes: null,
     mentor_notes: "",
     mentee_reflection: "",
+    prompt_kind: null,
+    prompt_id: null,
+    prompt_title: null,
+    mentee_rating: null,
     created_by: "mentor@kiet.edu",
     created_at: "2026-08-18T10:00:00Z",
     ...overrides,
@@ -165,6 +190,7 @@ function cycle(overrides: Record<string, unknown> = {}) {
     created_by: "teacher@kiet.edu",
     created_at: new Date(now - 14 * 24 * 3600 * 1000).toISOString(),
     closed_at: null,
+    summary: null,
     ...overrides,
   };
 }
@@ -673,6 +699,314 @@ describe("BuddyView — sessions", () => {
 
     expect(await screen.findByText(/3 of 6 sessions done/)).toBeInTheDocument();
     expect(screen.getByText(/1 missed/)).toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — nudges", () => {
+  async function openInbox(overrides: Partial<ConversationSummary>) {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation(overrides)],
+      total: 1,
+    });
+    renderView();
+    return screen.findByRole("button", { name: /Ada Mentor/ });
+  }
+
+  it("tells a student their pairing has gone quiet", async () => {
+    await openInbox({ nudge: "It's been quiet for a week. Pick this back up." });
+
+    expect(
+      await screen.findByText("It's been quiet for a week. Pick this back up."),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing on a pairing that is running fine", async () => {
+    // A nudge on every row would train people to ignore all of them.
+    await openInbox({ nudge: null });
+
+    expect(await screen.findByText("how did it go?")).toBeInTheDocument();
+    expect(screen.queryByText(/quiet/i)).not.toBeInTheDocument();
+  });
+
+  it("answers 'what now?' with the session already in the diary", async () => {
+    await openInbox({ next_session_at: "2026-09-02T15:00:00Z" });
+
+    expect(await screen.findByText(/Next session/)).toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — practice material", () => {
+  beforeEach(() => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: "mentor" })],
+      total: 1,
+    });
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+    fetchPracticePrompts.mockResolvedValue({
+      prompts: [
+        {
+          kind: "debate",
+          id: "d-1",
+          title: "This house would ban homework",
+          detail: "Consider the evidence on primary schools.",
+        },
+        { kind: "gd", id: "g-1", title: "Remote work", detail: "" },
+      ],
+      total: 2,
+    });
+  });
+
+  async function openSessions() {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+    await user.click(await screen.findByRole("tab", { name: "Sessions" }));
+    return user;
+  }
+
+  it("plans a session against a real catalog item", async () => {
+    planSession.mockResolvedValue(session());
+
+    const user = await openSessions();
+    await user.selectOptions(
+      await screen.findByLabelText("Practice material"),
+      "debate",
+    );
+    await user.selectOptions(await screen.findByLabelText("Practice item"), "d-1");
+    await user.click(screen.getByRole("button", { name: /Plan it/ }));
+
+    await waitFor(() =>
+      expect(planSession).toHaveBeenCalledWith(
+        "pair-1",
+        expect.any(String),
+        "",
+        "async_voice",
+        { kind: "debate", id: "d-1" },
+      ),
+    );
+  });
+
+  it("plans a plain session when no material is chosen", async () => {
+    // Picking from a catalog must stay optional — a pair who know what they
+    // want to work on should not have to.
+    planSession.mockResolvedValue(session());
+
+    const user = await openSessions();
+    await user.click(await screen.findByRole("button", { name: /Plan it/ }));
+
+    await waitFor(() =>
+      expect(planSession).toHaveBeenCalledWith(
+        "pair-1",
+        expect.any(String),
+        "",
+        "async_voice",
+        null,
+      ),
+    );
+  });
+
+  it("shows the material a planned session is built around", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [
+        session({
+          prompt_kind: "debate",
+          prompt_id: "d-1",
+          prompt_title: "This house would ban homework",
+        }),
+      ],
+      total: 1,
+    });
+
+    await openSessions();
+
+    // Scoped to the row: "Debate motion" is also one of the picker's options.
+    const row = within(await screen.findByRole("listitem"));
+    expect(row.getByText("This house would ban homework")).toBeInTheDocument();
+    expect(row.getByText("Debate motion")).toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — rating a session", () => {
+  beforeEach(() => {
+    fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
+  });
+
+  async function openSessionsAs(role: "mentor" | "mentee") {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: role })],
+      total: 1,
+    });
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+    await user.click(await screen.findByRole("tab", { name: "Sessions" }));
+    return user;
+  }
+
+  it("lets the mentee rate a session they received", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed", mentee_reflection: "useful" })],
+      total: 1,
+    });
+    rateSession.mockResolvedValue(session({ status: "completed", mentee_rating: 4 }));
+
+    const user = await openSessionsAs("mentee");
+    await user.click(await screen.findByRole("button", { name: "Rate 4 out of 5" }));
+
+    await waitFor(() => expect(rateSession).toHaveBeenCalledWith("s-1", 4));
+  });
+
+  it("never offers the mentor a way to rate their own session", async () => {
+    // A self-rating would make the only mentoring-quality signal worthless.
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed", mentor_notes: "went well" })],
+      total: 1,
+    });
+
+    await openSessionsAs("mentor");
+
+    await screen.findByText("went well");
+    expect(
+      screen.queryByRole("button", { name: /Rate \d out of 5/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a mentor the rating their mentee already gave", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed", mentee_rating: 5 })],
+      total: 1,
+    });
+
+    await openSessionsAs("mentor");
+
+    expect(await screen.findByText("Your mentee rated this")).toBeInTheDocument();
+  });
+
+  it("offers nothing to rate on a session that has not happened", async () => {
+    fetchSessions.mockResolvedValue({ sessions: [session()], total: 1 });
+
+    await openSessionsAs("mentee");
+
+    await screen.findByText("Two-minute intro");
+    expect(screen.queryByText("How useful was it?")).not.toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — the closing verdict", () => {
+  beforeEach(() => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation()],
+      total: 1,
+    });
+  });
+
+  function summary(overrides: Record<string, unknown> = {}) {
+    return {
+      axes: [
+        {
+          key: "content",
+          label: "Content",
+          baseline: 60,
+          final: 75,
+          delta: 15,
+          sample_size: 3,
+        },
+      ],
+      sessions_completed: 4,
+      sessions_missed: 1,
+      sessions_planned: 0,
+      activity_count: 6,
+      goal: "Speak for two minutes without filler words",
+      verdict: "improved",
+      generated_at: "2026-09-01T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("tells the pair how the cycle they just finished went", async () => {
+    fetchPairActivity.mockResolvedValue({
+      ...emptyReport(),
+      last_summary: summary(),
+    });
+
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+
+    expect(await screen.findByText("You improved")).toBeInTheDocument();
+    expect(screen.getByText("+15.0")).toBeInTheDocument();
+    expect(screen.getByText(/4 of 5 sessions kept/)).toBeInTheDocument();
+  });
+
+  it("admits an unmeasured cycle rather than calling it a flat result", async () => {
+    fetchPairActivity.mockResolvedValue({
+      ...emptyReport(),
+      last_summary: summary({ verdict: "not_enough_evidence", axes: [] }),
+    });
+
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
+
+    expect(await screen.findByText("Not enough was measured")).toBeInTheDocument();
+  });
+});
+
+describe("BuddyView — the mentor's own record", () => {
+  it("shows a mentor what their mentoring has added up to", async () => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: "mentor" })],
+      total: 1,
+    });
+    fetchMyMentoring.mockResolvedValue({
+      is_mentor: true,
+      active_mentees: 2,
+      total_mentees: 3,
+      sessions_mentored: 9,
+      average_rating: 4.5,
+      cycles_completed: 2,
+      mentees_improved: 1,
+    });
+
+    renderView();
+
+    expect(await screen.findByText("Your mentoring record")).toBeInTheDocument();
+    expect(screen.getByText("9")).toBeInTheDocument();
+    expect(screen.getByText("4.5")).toBeInTheDocument();
+  });
+
+  it("tells a brand-new mentor how to start instead of showing four zeros", async () => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation({ my_role: "mentor" })],
+      total: 1,
+    });
+    fetchMyMentoring.mockResolvedValue({
+      is_mentor: true,
+      active_mentees: 1,
+      total_mentees: 1,
+      sessions_mentored: 0,
+      average_rating: null,
+      cycles_completed: 0,
+      mentees_improved: 0,
+    });
+
+    renderView();
+
+    expect(await screen.findByText("You're a mentor now")).toBeInTheDocument();
+    expect(screen.getByText("Send the first voice note")).toBeInTheDocument();
+    expect(screen.queryByText("Your mentoring record")).not.toBeInTheDocument();
+  });
+
+  it("shows a mentee no ledger for a job they do not have", async () => {
+    fetchMyBuddies.mockResolvedValue({
+      conversations: [conversation()],
+      total: 1,
+    });
+
+    renderView();
+
+    await screen.findByText("Your mentors");
+    expect(screen.queryByText("Your mentoring record")).not.toBeInTheDocument();
   });
 });
 

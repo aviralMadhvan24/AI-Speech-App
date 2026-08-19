@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  CalendarClock,
   GraduationCap,
   Loader2,
   Mic,
@@ -9,6 +10,7 @@ import {
   Send,
   Sparkles,
   Square,
+  Star,
   UserRound,
   Users2,
 } from "lucide-react";
@@ -16,11 +18,13 @@ import { Avatar } from "./Avatar";
 import { EmptyState } from "./EmptyState";
 import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
-import { GrowthPanel } from "./buddy/GrowthPanel";
+import { GrowthPanel, LastCycleSummary } from "./buddy/GrowthPanel";
+import { MentorGuide } from "./buddy/MentorGuide";
 import { SessionsPanel } from "./buddy/SessionsPanel";
 import {
   fetchMessages,
   fetchMyBuddies,
+  fetchMyMentoring,
   fetchPairActivity,
   fetchVoiceNoteUrl,
   markConversationRead,
@@ -29,6 +33,7 @@ import {
   type BuddyMessage,
   type ConversationSummary,
   type CycleReport,
+  type MentorDashboard,
 } from "../buddyApi";
 
 interface BuddyViewProps {
@@ -222,6 +227,20 @@ function ConversationRow({
         <p className="text-sm text-zinc-500 truncate mt-0.5">
           {conversation.last_message_preview || "No messages yet"}
         </p>
+        {/* A pairing going quiet is what kills an async programme. The nudge is
+            null on a healthy pairing on purpose — one on every row would train
+            people to ignore all of them. */}
+        {conversation.nudge && (
+          <p className="text-xs text-amber-300/90 mt-1 truncate">
+            {conversation.nudge}
+          </p>
+        )}
+        {conversation.next_session_at && (
+          <p className="text-xs text-teal-300/90 mt-1 inline-flex items-center gap-1.5">
+            <CalendarClock className="w-3 h-3 shrink-0" />
+            Next session {formatTime(conversation.next_session_at)}
+          </p>
+        )}
       </div>
       <div className="flex flex-col items-end gap-1.5 shrink-0">
         {conversation.last_message_at && (
@@ -467,6 +486,13 @@ function ThreadView({
 
       {report?.cycle && <CycleStrip report={report} />}
 
+      {/* Between cycles there is nothing else on this screen, and the verdict
+          on the period that just ended is exactly what the pair came to see.
+          While one is running it lives in the progress tab instead. */}
+      {report && !report.cycle && report.last_summary && (
+        <LastCycleSummary summary={report.last_summary} />
+      )}
+
       {report?.cycle && (
         <div className="flex gap-2" role="tablist" aria-label="Conversation or progress">
           {(
@@ -516,7 +542,12 @@ function ThreadView({
       )}
 
       {tab === "progress" && report ? (
-        <GrowthPanel report={report} />
+        <div className="space-y-4">
+          {report.last_summary && (
+            <LastCycleSummary summary={report.last_summary} />
+          )}
+          <GrowthPanel report={report} />
+        </div>
       ) : tab === "sessions" ? (
         <SessionsPanel
           pairId={pairId}
@@ -631,6 +662,70 @@ function ThreadView({
 }
 
 // ---------------------------------------------------------------------------
+// The mentor's own record
+// ---------------------------------------------------------------------------
+
+/**
+ * What mentoring has amounted to, shown to the mentor themselves.
+ *
+ * Mentoring here is unpaid work that until now accrued nothing to the person
+ * doing it — every screen was about the mentee. Nothing on this card is stored;
+ * it is all derived from sessions and closed cycles.
+ */
+function MentoringCard({ record }: { record: MentorDashboard }) {
+  const stats: Array<[string, string]> = [
+    ["Students", String(record.total_mentees)],
+    ["Sessions run", String(record.sessions_mentored)],
+    [
+      "Their rating",
+      record.average_rating === null ? "—" : record.average_rating.toFixed(1),
+    ],
+    ["Cycles finished", String(record.cycles_completed)],
+  ];
+
+  return (
+    <section className="card-glass p-5 space-y-3">
+      <div className="flex items-center gap-2">
+        <GraduationCap className="w-4 h-4 text-emerald-300" />
+        <h2 className="text-sm font-semibold text-zinc-200">
+          Your mentoring record
+        </h2>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {stats.map(([label, value]) => (
+          <div key={label}>
+            <span className="block text-2xl font-bold tabular-nums text-zinc-100">
+              {value}
+            </span>
+            <span className="text-[10px] uppercase tracking-widest text-zinc-500">
+              {label}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {record.average_rating === null && record.sessions_mentored > 0 && (
+        <p className="text-xs text-zinc-500">
+          Your students haven't rated a session yet — the rating appears once
+          they do.
+        </p>
+      )}
+
+      {/* Only cycles that closed with a measured verdict count. Claiming an
+          unmeasured one would be the easiest lie on this card. */}
+      {record.mentees_improved > 0 && (
+        <p className="text-sm text-emerald-300 inline-flex items-center gap-1.5">
+          <Star className="w-3.5 h-3.5 fill-emerald-300" />
+          {record.mentees_improved} of your {record.cycles_completed} finished
+          cycles ended with the student measurably better.
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
 
@@ -639,6 +734,7 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openPairId, setOpenPairId] = useState<string | null>(null);
+  const [myRecord, setMyRecord] = useState<MentorDashboard | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -655,6 +751,14 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The mentor's own record. Fetched once and never polled — it moves on the
+  // scale of sessions, and a failure here must not touch the inbox.
+  useEffect(() => {
+    fetchMyMentoring()
+      .then(setMyRecord)
+      .catch(() => setMyRecord(null));
+  }, []);
 
   // Keep the inbox live. Without this a reply only appeared after a full page
   // reload: the list fetched once on mount and nothing refreshed it, so both
@@ -746,6 +850,18 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
         />
       ) : (
         <div className="space-y-6">
+          {/* Only for someone who actually mentors — an empty ledger shown to a
+              mentee would just be four zeros about a job they don't have.
+              Before the first session there is no record to show, and what a
+              new mentor needs is instructions, so the guide stands in. */}
+          {myRecord?.is_mentor &&
+            (myRecord.sessions_mentored > 0 ? (
+              <MentoringCard record={myRecord} />
+            ) : (
+              mentoring.length > 0 && (
+                <MentorGuide menteeCount={mentoring.length} />
+              )
+            ))}
           {mentored.length > 0 && (
             <section className="space-y-2">
               <h2 className="text-xs uppercase tracking-widest text-zinc-500 flex items-center gap-2">

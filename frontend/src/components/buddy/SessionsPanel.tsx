@@ -5,15 +5,19 @@
  * mentor's observation and the mentee's reflection are separate notes, so
  * whoever writes second does not overwrite the first.
  */
-import { useCallback, useEffect, useState } from "react";
-import { CalendarPlus, Check, Loader2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CalendarPlus, Check, Loader2, Star, X } from "lucide-react";
 import {
   cancelSession,
   completeSession,
+  fetchPracticePrompts,
   fetchSessions,
   missSession,
   planSession,
+  rateSession,
   type BuddySession,
+  type PracticePrompt,
+  type PromptKind,
   type SessionMode,
 } from "../../buddyApi";
 
@@ -21,6 +25,12 @@ const MODE_LABEL: Record<SessionMode, string> = {
   async_voice: "Voice notes",
   live_call: "Live call",
   in_person: "In person",
+};
+
+const PROMPT_LABEL: Record<PromptKind, string> = {
+  pronunciation: "Pronunciation drill",
+  debate: "Debate motion",
+  gd: "Group discussion topic",
 };
 
 const STATUS_STYLE: Record<BuddySession["status"], string> = {
@@ -46,6 +56,86 @@ function defaultWhen(): string {
   soon.setMinutes(0, 0, 0);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}T${pad(soon.getHours())}:${pad(soon.getMinutes())}`;
+}
+
+/**
+ * The mentee's 1-5 verdict on a session.
+ *
+ * Read-only for the mentor: a mentor rating their own session would make the
+ * only mentoring-quality signal the platform has worthless, so the backend
+ * refuses it and this never offers it.
+ */
+function RatingStars({
+  session,
+  canRate,
+  onChanged,
+}: {
+  session: BuddySession;
+  canRate: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const rating = session.mentee_rating;
+
+  const rate = useCallback(
+    async (value: number) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await rateSession(session.session_id, value);
+        onChanged();
+      } catch {
+        setError("Could not save that rating.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChanged, session.session_id],
+  );
+
+  if (rating === null && !canRate) return null;
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-xs text-zinc-500">
+        {rating !== null
+          ? canRate
+            ? "You rated this"
+            : "Your mentee rated this"
+          : "How useful was it?"}
+      </span>
+      <div className="flex gap-0.5">
+        {[1, 2, 3, 4, 5].map((value) => {
+          const filled = rating !== null && value <= rating;
+          const star = (
+            <Star
+              className={`w-4 h-4 ${filled ? "fill-amber-400 text-amber-400" : "text-zinc-600"}`}
+            />
+          );
+          // Once rated it is a record, not a control — and the mentor never
+          // gets one in the first place.
+          return canRate && rating === null ? (
+            <button
+              key={value}
+              type="button"
+              disabled={busy}
+              onClick={() => void rate(value)}
+              aria-label={`Rate ${value} out of 5`}
+              className="p-0.5 rounded transition hover:scale-110 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60"
+            >
+              {star}
+            </button>
+          ) : (
+            <span key={value} aria-hidden className="p-0.5">
+              {star}
+            </span>
+          );
+        })}
+      </div>
+      {error && <span className="text-xs text-rose-300">{error}</span>}
+    </div>
+  );
 }
 
 function SessionRow({
@@ -94,6 +184,15 @@ function SessionRow({
           {MODE_LABEL[session.mode]} · {formatWhen(session.scheduled_at)}
         </span>
       </div>
+
+      {session.prompt_title && (
+        <div className="rounded-xl border border-teal-500/25 bg-teal-500/5 px-3 py-2">
+          <span className="text-[10px] uppercase tracking-widest text-teal-300">
+            {session.prompt_kind ? PROMPT_LABEL[session.prompt_kind] : "Practice"}
+          </span>
+          <p className="text-sm text-zinc-200 mt-0.5">{session.prompt_title}</p>
+        </div>
+      )}
 
       {(myNote || theirNote) && (
         <div className="space-y-1 text-sm">
@@ -171,6 +270,14 @@ function SessionRow({
           </button>
         </div>
       )}
+
+      {session.status === "completed" && (
+        <RatingStars
+          session={session}
+          canRate={!isMentor}
+          onChanged={onChanged}
+        />
+      )}
     </li>
   );
 }
@@ -196,6 +303,11 @@ export function SessionsPanel({
   const [mode, setMode] = useState<SessionMode>("async_voice");
   const [planning, setPlanning] = useState(false);
 
+  // Practice material. Fetched once — these catalogs ship with the app.
+  const [prompts, setPrompts] = useState<PracticePrompt[]>([]);
+  const [promptKind, setPromptKind] = useState<PromptKind | "">("");
+  const [promptId, setPromptId] = useState("");
+
   const load = useCallback(async () => {
     try {
       const data = await fetchSessions(pairId);
@@ -212,6 +324,24 @@ export function SessionsPanel({
     void load();
   }, [load]);
 
+  // A pair can still plan a plain session if the catalogs fail to load, so a
+  // failure here is silent rather than an error banner over the whole panel.
+  useEffect(() => {
+    fetchPracticePrompts()
+      .then((data) => setPrompts(data.prompts))
+      .catch(() => setPrompts([]));
+  }, []);
+
+  const choices = useMemo(
+    () => (promptKind ? prompts.filter((p) => p.kind === promptKind) : []),
+    [promptKind, prompts],
+  );
+
+  const chosen = useMemo(
+    () => choices.find((p) => p.id === promptId) ?? null,
+    [choices, promptId],
+  );
+
   const refresh = useCallback(() => {
     void load();
     onChanged();
@@ -223,20 +353,29 @@ export function SessionsPanel({
     setError(null);
     try {
       // `datetime-local` gives local wall time; the backend stores ISO.
-      await planSession(pairId, new Date(when).toISOString(), topic.trim(), mode);
+      await planSession(
+        pairId,
+        new Date(when).toISOString(),
+        topic.trim(),
+        mode,
+        chosen ? { kind: chosen.kind, id: chosen.id } : null,
+      );
       setTopic("");
+      setPromptId("");
       refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(
         message.includes("no_active_cycle")
           ? "This pairing has no cycle running — a teacher needs to start one first."
-          : message || "Could not plan that session.",
+          : message.includes("prompt_not_found")
+            ? "That practice item is no longer in the catalog. Pick another."
+            : message || "Could not plan that session.",
       );
     } finally {
       setPlanning(false);
     }
-  }, [mode, pairId, refresh, topic, when]);
+  }, [chosen, mode, pairId, refresh, topic, when]);
 
   if (!hasCycle) {
     return (
@@ -279,6 +418,48 @@ export function SessionsPanel({
             ))}
           </select>
         </div>
+
+        {/* Optional, and deliberately second: a pair who know what they want to
+            work on should not have to pick from a catalog to plan a session. */}
+        {prompts.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-2">
+            <select
+              value={promptKind}
+              onChange={(event) => {
+                setPromptKind(event.target.value as PromptKind | "");
+                setPromptId("");
+              }}
+              aria-label="Practice material"
+              className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+            >
+              <option value="">No set material</option>
+              {(Object.keys(PROMPT_LABEL) as PromptKind[]).map((kind) => (
+                <option key={kind} value={kind}>
+                  {PROMPT_LABEL[kind]}
+                </option>
+              ))}
+            </select>
+            {promptKind && (
+              <select
+                value={promptId}
+                onChange={(event) => setPromptId(event.target.value)}
+                aria-label="Practice item"
+                className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+              >
+                <option value="">Pick one…</option>
+                {choices.map((prompt) => (
+                  <option key={prompt.id} value={prompt.id}>
+                    {prompt.title.slice(0, 90)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+        {chosen?.detail && (
+          <p className="text-xs text-zinc-500 leading-relaxed">{chosen.detail}</p>
+        )}
+
         {error && <p className="text-sm text-rose-300">{error}</p>}
         <button
           type="button"

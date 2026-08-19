@@ -30,6 +30,7 @@ from app.auth import require_teacher
 from app.auth import require_user
 from app.buddy import growth
 from app.buddy import health
+from app.buddy import practice
 from app.buddy import service
 from app.buddy.growth import CycleReport
 from app.buddy.schemas import CompleteSessionRequest
@@ -42,8 +43,11 @@ from app.buddy.schemas import SessionsResponse
 from app.buddy.schemas import MarkReadResponse
 from app.buddy.schemas import MentorCandidatesResponse
 from app.buddy.schemas import MentorDecisionRequest
+from app.buddy.schemas import MentorDashboard
 from app.buddy.schemas import MentorsResponse
 from app.buddy.schemas import MessagesResponse
+from app.buddy.schemas import PracticePromptsResponse
+from app.buddy.schemas import RateSessionRequest
 from app.buddy.schemas import MyBuddiesResponse
 from app.buddy.schemas import PairsResponse
 from app.buddy.schemas import SendMessageRequest
@@ -112,18 +116,38 @@ def _display_name(email: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+NUDGE_FOR_STATE = {
+    "no_cycle": "No cycle is running — ask your teacher to start one.",
+    "not_started": "You haven't spoken yet. Send a first voice note.",
+    "quiet": "It's been quiet for a week. Pick this back up.",
+    "stalled": "This pairing has stalled — plan a session to restart it.",
+}
+
+
 @router.get("/me", response_model=MyBuddiesResponse)
 async def my_buddies(current_user: User = Depends(require_user)) -> MyBuddiesResponse:
     """Every buddy conversation the current user belongs to, newest activity first."""
     conversations: list[ConversationSummary] = []
 
-    for pair in buddy_pairs_store.list_for_user(current_user.email):
+    my_pairs = buddy_pairs_store.list_for_user(current_user.email)
+    # One pass for the whole inbox rather than per conversation.
+    health_index = health.build_index(my_pairs)
+
+    for pair in my_pairs:
         partner_email = pair.partner_of(current_user.email)
         if partner_email is None:
             continue
         messages = buddy_messages_store.list_for_pair(pair.pair_id)
         last = messages[-1] if messages else None
         is_mentor = pair.mentor_email.lower() == current_user.email.lower()
+
+        pair_health = health_index.get(pair.pair_id)
+        cycle = buddy_cycles_store.active_for_pair(pair.pair_id)
+        sessions = (
+            buddy_sessions_store.list_for_cycle(cycle.cycle_id) if cycle else []
+        )
+        upcoming = [s for s in sessions if s.status == "planned"]
+
         conversations.append(
             ConversationSummary(
                 pair_id=pair.pair_id,
@@ -141,6 +165,12 @@ async def my_buddies(current_user: User = Depends(require_user)) -> MyBuddiesRes
                     if last
                     else ""
                 ),
+                nudge=(
+                    NUDGE_FOR_STATE.get(pair_health.state) if pair_health else None
+                ),
+                days_quiet=pair_health.days_quiet if pair_health else None,
+                next_session_at=upcoming[0].scheduled_at if upcoming else None,
+                sessions_kept=sum(1 for s in sessions if s.status == "completed"),
             )
         )
 
@@ -297,7 +327,16 @@ async def pair_activity(
     """
     pair = _require_membership(pair_id, current_user)
     cycle = buddy_cycles_store.active_for_pair(pair_id)
-    return growth.build_report(cycle, pair.mentee_email)
+    report = growth.build_report(cycle, pair.mentee_email)
+
+    # The previous cycle's verdict rides along, so the two people who did the
+    # work find out how it went. Teachers could already see it; the pair could
+    # not, which made closing a cycle a purely administrative act to them.
+    closed = [c for c in buddy_cycles_store.list_for_pair(pair_id) if c.status == "closed"]
+    if closed:
+        report.last_summary = closed[0].summary
+
+    return report
 
 
 @router.post("/pairs/{pair_id}/read", response_model=MarkReadResponse)
@@ -376,6 +415,17 @@ async def plan_session(
             detail="scheduled_at is required",
         )
 
+    # Resolve the practice material against the real catalog, so a session can
+    # never point at a prompt that does not exist.
+    prompt = None
+    if body.prompt_kind and body.prompt_id:
+        prompt = practice.find(body.prompt_kind, body.prompt_id)
+        if prompt is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="prompt_not_found",
+            )
+
     session = buddy_sessions_store.create(
         pair_id=pair_id,
         cycle_id=cycle.cycle_id,
@@ -383,6 +433,9 @@ async def plan_session(
         created_by=current_user.email,
         topic=body.topic.strip()[:200],
         mode=body.mode,
+        prompt_kind=prompt.kind if prompt else None,
+        prompt_id=prompt.id if prompt else None,
+        prompt_title=prompt.title if prompt else None,
     )
     logger.info(
         "buddy_session_planned pair=%s mode=%s by=%s",
@@ -446,6 +499,107 @@ async def miss_session(
             detail="session_not_found",
         )
     return updated
+
+
+@router.post("/sessions/{session_id}/rate", response_model=BuddySession)
+async def rate_session(
+    session_id: str,
+    body: RateSessionRequest,
+    current_user: User = Depends(require_user),
+) -> BuddySession:
+    """Rate a completed session, 1-5. Mentees only.
+
+    The one signal the platform has about whether a mentor is good AT
+    MENTORING rather than merely a strong speaker, which is what got them
+    selected. Restricted to the mentee on purpose: a mentor rating their own
+    session would make the number worthless.
+    """
+    session = _session_for_member(session_id, current_user)
+    pair = buddy_pairs_store.get(session.pair_id)
+    if pair is None or pair.mentee_email.lower() != current_user.email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only_the_mentee_may_rate",
+        )
+    if session.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="session_not_completed",
+        )
+    if not 1 <= body.rating <= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="rating must be between 1 and 5",
+        )
+
+    updated = buddy_sessions_store.rate(session_id, body.rating)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="session_not_found",
+        )
+    return updated
+
+
+@router.get("/practice-prompts", response_model=PracticePromptsResponse)
+async def practice_prompts(
+    kind: str | None = None,
+    _: User = Depends(require_user),
+) -> PracticePromptsResponse:
+    """The catalogs a session's practice material can be drawn from."""
+    if kind is not None and kind not in ("pronunciation", "debate", "gd"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="kind must be pronunciation, debate or gd",
+        )
+    prompts = practice.list_prompts(kind)
+    return PracticePromptsResponse(prompts=prompts, total=len(prompts))
+
+
+@router.get("/my-mentoring", response_model=MentorDashboard)
+async def my_mentoring(
+    current_user: User = Depends(require_user),
+) -> MentorDashboard:
+    """What the caller's mentoring has amounted to.
+
+    Mentoring is unpaid work that accrued nothing to the person doing it.
+    Everything here is derived — nothing new is stored to produce it.
+    """
+    email = current_user.email.lower()
+    my_pairs = [p for p in buddy_pairs_store.list_all() if p.mentor_email.lower() == email]
+    if not my_pairs:
+        return MentorDashboard(is_mentor=mentors_store.is_approved(email))
+
+    sessions_mentored = 0
+    ratings: list[float] = []
+    for pair in my_pairs:
+        for session in buddy_sessions_store.list_for_pair(pair.pair_id):
+            if session.status != "completed":
+                continue
+            sessions_mentored += 1
+            if session.mentee_rating is not None:
+                ratings.append(float(session.mentee_rating))
+
+    pair_ids = {p.pair_id for p in my_pairs}
+    closed = [
+        c
+        for c in buddy_cycles_store.list_all()
+        if c.pair_id in pair_ids and c.status == "closed"
+    ]
+
+    return MentorDashboard(
+        is_mentor=True,
+        active_mentees=sum(1 for p in my_pairs if p.status == "active"),
+        total_mentees=len({p.mentee_email.lower() for p in my_pairs}),
+        sessions_mentored=sessions_mentored,
+        average_rating=round(sum(ratings) / len(ratings), 2) if ratings else None,
+        cycles_completed=len(closed),
+        # Only cycles that closed with a verdict count — an unmeasured cycle
+        # is not a win, and claiming it as one would be the easiest lie here.
+        mentees_improved=sum(
+            1 for c in closed if c.summary is not None and c.summary.verdict == "improved"
+        ),
+    )
 
 
 @router.delete("/sessions/{session_id}", status_code=204, response_model=None)
@@ -689,14 +843,40 @@ async def close_cycle(
     cycle_id: str,
     current_user: User = Depends(require_teacher),
 ) -> BuddyCycle:
-    """Close a cycle. The pair stays active and can be given a new one."""
-    cycle = buddy_cycles_store.close(cycle_id)
+    """Close a cycle, recording what it achieved. The pair stays active.
+
+    The summary is computed here, once, and stored — closing used to flip a
+    status and nothing more, so nobody ever found out whether the period
+    worked. Freezing it also means the answer cannot drift later as unrelated
+    work is scored.
+    """
+    existing = buddy_cycles_store.get(cycle_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="cycle_not_found",
+        )
+
+    try:
+        summary = growth.build_summary(existing, existing.mentee_email)
+    except Exception as exc:  # never block a close on a reporting failure
+        logger.warning(
+            "buddy_cycle_summary_failed cycle=%s err=%s", cycle_id, type(exc).__name__
+        )
+        summary = None
+
+    cycle = buddy_cycles_store.close(cycle_id, summary=summary)
     if cycle is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="cycle_not_found",
         )
-    logger.info("buddy_cycle_closed cycle=%s by=%s", cycle_id, current_user.email)
+    logger.info(
+        "buddy_cycle_closed cycle=%s by=%s verdict=%s",
+        cycle_id,
+        current_user.email,
+        summary.verdict if summary else "none",
+    )
     return cycle
 
 

@@ -23,6 +23,11 @@ export interface ConversationSummary {
   unread_count: number;
   last_message_at: string | null;
   last_message_preview: string;
+  /** Derived on read from the pairing's health — null when it is running fine. */
+  nudge: string | null;
+  days_quiet: number | null;
+  next_session_at: string | null;
+  sessions_kept: number;
 }
 
 export interface MyBuddiesResponse {
@@ -63,9 +68,14 @@ export interface SpeakerRanking {
   sample_size: number;
   content_avg: number | null;
   pronunciation_avg: number | null;
+  /** Debates and group discussions — competitive speaking, scored live. */
+  live_speaking_avg: number | null;
   /** "none" until a teacher has decided on them. */
   status: MentorStatus | "none";
   active_mentees: number;
+  /** How their mentees rated them, 1-5. Ability and mentoring are different. */
+  mentor_rating: number | null;
+  sessions_mentored: number;
 }
 
 export interface MentorCandidatesResponse {
@@ -135,13 +145,42 @@ export interface PairsResponse {
 }
 
 export type CycleStatus = "active" | "closed";
-export type ActivityKind = "interview" | "debate" | "gd";
+export type ActivityKind = "interview" | "debate" | "gd" | "practice";
 
 /** The mentee's standing when the cycle opened. Null means nothing to measure. */
 export interface CycleBaseline {
   content: number | null;
   pronunciation: number | null;
   live_speaking: number | null;
+}
+
+/** Deliberately blunt, and never dressed up when nothing was measured. */
+export type CycleVerdict =
+  | "improved"
+  | "held"
+  | "declined"
+  | "not_enough_evidence";
+
+export interface CycleAxisResult {
+  key: string;
+  label: string;
+  baseline: number | null;
+  final: number | null;
+  /** Null when there was no baseline to measure against — never treat as zero. */
+  delta: number | null;
+  sample_size: number;
+}
+
+/** What a cycle achieved, frozen at the moment it closed. Never recomputed. */
+export interface CycleSummary {
+  axes: CycleAxisResult[];
+  sessions_completed: number;
+  sessions_missed: number;
+  sessions_planned: number;
+  activity_count: number;
+  goal: string;
+  verdict: CycleVerdict;
+  generated_at: string;
 }
 
 export interface BuddyCycle {
@@ -157,6 +196,8 @@ export interface BuddyCycle {
   created_by: string;
   created_at: string;
   closed_at: string | null;
+  /** Written once, on close. Null on an open cycle, or if reporting failed. */
+  summary: CycleSummary | null;
 }
 
 export interface CyclesResponse {
@@ -203,6 +244,13 @@ export interface BuddySession {
   duration_minutes: number | null;
   mentor_notes: string;
   mentee_reflection: string;
+  /** What the pair actually works on, drawn from the platform's own catalogs. */
+  prompt_kind: PromptKind | null;
+  prompt_id: string | null;
+  /** Denormalised, so the session still reads if the catalog changes. */
+  prompt_title: string | null;
+  /** The mentee's 1-5 verdict. Mentees only — a self-rating means nothing. */
+  mentee_rating: number | null;
   created_by: string;
   created_at: string;
 }
@@ -210,6 +258,33 @@ export interface BuddySession {
 export interface SessionsResponse {
   sessions: BuddySession[];
   total: number;
+}
+
+export type PromptKind = "pronunciation" | "debate" | "gd";
+
+/** One item a session can be built around, from an existing catalog. */
+export interface PracticePrompt {
+  kind: PromptKind;
+  id: string;
+  title: string;
+  detail: string;
+}
+
+export interface PracticePromptsResponse {
+  prompts: PracticePrompt[];
+  total: number;
+}
+
+/** What mentoring has amounted to, shown to the mentor themselves. */
+export interface MentorDashboard {
+  is_mentor: boolean;
+  active_mentees: number;
+  total_mentees: number;
+  sessions_mentored: number;
+  average_rating: number | null;
+  cycles_completed: number;
+  /** Only cycles that closed with a measured verdict — never an assumed win. */
+  mentees_improved: number;
 }
 
 /** Did the pairing actually happen, separately from how it scored. */
@@ -228,6 +303,8 @@ export interface CycleReport {
   sessions: SessionConsistency;
   /** False when there are too few points to honestly draw a line. */
   enough_for_trend: boolean;
+  /** The pair's most recently closed cycle's verdict. Null while one is open. */
+  last_summary: CycleSummary | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,11 +491,43 @@ export function planSession(
   scheduledAt: string,
   topic: string,
   mode: SessionMode,
+  /** Optional practice material. The backend refuses a prompt that is gone. */
+  prompt?: { kind: PromptKind; id: string } | null,
 ): Promise<BuddySession> {
   return postJson<BuddySession>(
     `/buddy/pairs/${encodeURIComponent(pairId)}/sessions`,
-    { scheduled_at: scheduledAt, topic, mode },
+    {
+      scheduled_at: scheduledAt,
+      topic,
+      mode,
+      prompt_kind: prompt?.kind ?? null,
+      prompt_id: prompt?.id ?? null,
+    },
   );
+}
+
+/** Rate a completed session, 1-5. Mentees only — the backend enforces it. */
+export function rateSession(
+  sessionId: string,
+  rating: number,
+): Promise<BuddySession> {
+  return postJson<BuddySession>(
+    `/buddy/sessions/${encodeURIComponent(sessionId)}/rate`,
+    { rating },
+  );
+}
+
+export function fetchPracticePrompts(
+  kind?: PromptKind,
+): Promise<PracticePromptsResponse> {
+  return fetchJson<PracticePromptsResponse>(
+    `/buddy/practice-prompts${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`,
+  );
+}
+
+/** The caller's own mentoring record. Safe to call for a non-mentor. */
+export function fetchMyMentoring(): Promise<MentorDashboard> {
+  return fetchJson<MentorDashboard>("/buddy/my-mentoring");
 }
 
 /** Completing is per-side: the note lands on whichever side is calling. */

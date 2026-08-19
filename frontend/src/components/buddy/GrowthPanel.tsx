@@ -11,8 +11,15 @@
  * direct-labelled, so identity never rests on colour alone.
  */
 import { useMemo } from "react";
-import { Mic, MessageSquareText, Users2 } from "lucide-react";
-import type { ActivityItem, CycleReport, GrowthAxis, TrendPoint } from "../../buddyApi";
+import { AudioLines, Mic, MessageSquareText, Users2 } from "lucide-react";
+import type {
+  ActivityItem,
+  CycleReport,
+  CycleSummary,
+  CycleVerdict,
+  GrowthAxis,
+  TrendPoint,
+} from "../../buddyApi";
 
 const SERIES = {
   content: { color: "#3987e5", label: "Content" },
@@ -256,6 +263,7 @@ const ACTIVITY_META = {
   interview: { icon: Mic, label: "Interview" },
   debate: { icon: MessageSquareText, label: "Debate" },
   gd: { icon: Users2, label: "Group discussion" },
+  practice: { icon: AudioLines, label: "Pronunciation drill" },
 } as const;
 
 function ActivityRow({ item }: { item: ActivityItem }) {
@@ -278,6 +286,90 @@ function ActivityRow({ item }: { item: ActivityItem }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// The closing verdict — frozen when the cycle ended
+// ---------------------------------------------------------------------------
+
+const VERDICT: Record<
+  CycleVerdict,
+  { headline: string; body: string; tone: string }
+> = {
+  improved: {
+    headline: "You improved",
+    body: "Your scores ended the cycle above where they started.",
+    tone: "text-emerald-300 border-emerald-500/30 bg-emerald-500/5",
+  },
+  held: {
+    headline: "You held steady",
+    body: "Scores moved by less than two points — that is noise, not a slide.",
+    tone: "text-sky-300 border-sky-500/30 bg-sky-500/5",
+  },
+  declined: {
+    headline: "Scores slipped",
+    body: "Worth talking through with your mentor before the next cycle.",
+    tone: "text-amber-300 border-amber-500/30 bg-amber-500/5",
+  },
+  // Never dressed up as a flat result — nothing was measured, and saying so is
+  // the honest answer.
+  not_enough_evidence: {
+    headline: "Not enough was measured",
+    body: "There wasn't enough scored work this cycle to say either way.",
+    tone: "text-zinc-400 border-zinc-700 bg-zinc-800/30",
+  },
+};
+
+export function LastCycleSummary({ summary }: { summary: CycleSummary }) {
+  const verdict = VERDICT[summary.verdict] ?? VERDICT.not_enough_evidence;
+  const measured = summary.axes.filter((axis) => axis.delta !== null);
+
+  return (
+    <div className={`card-glass p-4 border ${verdict.tone}`}>
+      <span className="text-[10px] uppercase tracking-widest opacity-70">
+        Last cycle
+      </span>
+      <h3 className="text-lg font-semibold mt-0.5">{verdict.headline}</h3>
+      <p className="text-sm text-zinc-400 mt-1">{verdict.body}</p>
+
+      {summary.goal && (
+        <p className="text-sm text-zinc-300 mt-2">
+          <span className="text-zinc-600">Goal: </span>
+          {summary.goal}
+        </p>
+      )}
+
+      {measured.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {measured.map((axis) => (
+            <li
+              key={axis.key}
+              className="flex items-baseline gap-2 text-sm text-zinc-300"
+            >
+              <span className="flex-1">{axis.label}</span>
+              <span className="tabular-nums text-zinc-500">
+                {axis.baseline?.toFixed(1)} → {axis.final?.toFixed(1)}
+              </span>
+              <span
+                className="tabular-nums font-semibold w-14 text-right"
+                style={{ color: (axis.delta as number) >= 0 ? GAIN : LOSS }}
+              >
+                {formatDelta(axis.delta as number)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-xs text-zinc-600 mt-3">
+        {summary.sessions_completed} of{" "}
+        {summary.sessions_completed +
+          summary.sessions_missed +
+          summary.sessions_planned}{" "}
+        sessions kept · {summary.activity_count} pieces of scored work
+      </p>
+    </div>
+  );
+}
+
 export function GrowthPanel({ report }: { report: CycleReport }) {
   const { cycle, axes, trend, activity, counts, enough_for_trend } = report;
   if (!cycle) return null;
@@ -287,11 +379,12 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
         {[
+          ["Interviews", counts.interview ?? 0],
           ["Debates", counts.debate ?? 0],
           ["Group discussions", counts.gd ?? 0],
-          ["Interviews", counts.interview ?? 0],
+          ["Drills", counts.practice ?? 0],
           ["Total this cycle", total],
         ].map(([label, value]) => (
           <div key={label as string} className="card-glass p-3">
@@ -307,8 +400,8 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
 
       {total === 0 ? (
         <div className="card-glass p-5 text-sm text-zinc-400">
-          Nothing scored yet in this cycle. Interviews, debates and group
-          discussions will show up here as they happen.
+          Nothing scored yet in this cycle. Interviews, debates, group
+          discussions and pronunciation drills all show up here as they happen.
         </div>
       ) : (
         <>
@@ -350,8 +443,13 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
               What they did
             </h3>
             <ul>
-              {activity.map((item) => (
-                <ActivityRow key={`${item.kind}-${item.at}-${item.title}`} item={item} />
+              {/* Indexed: the same drill repeated in one second is not a
+                  duplicate row, and a colliding key would drop one. */}
+              {activity.map((item, index) => (
+                <ActivityRow
+                  key={`${item.kind}-${item.at}-${index}`}
+                  item={item}
+                />
               ))}
             </ul>
           </div>

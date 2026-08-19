@@ -28,6 +28,15 @@ class ConversationSummary(BaseModel):
     unread_count: int = 0
     last_message_at: Optional[str] = None
     last_message_preview: str = ""
+    # A pairing going quiet is what kills an async programme, and the health
+    # states already detect it. Derived on read rather than pushed: there is
+    # no scheduler here, and a nudge nobody is around to send is worse than
+    # one that appears the moment they next look.
+    nudge: Optional[str] = None
+    days_quiet: Optional[int] = None
+    # The next thing actually in the diary, so the inbox answers "what now?"
+    next_session_at: Optional[str] = None
+    sessions_kept: int = 0
 
 
 class MyBuddiesResponse(BaseModel):
@@ -120,6 +129,11 @@ class PlanSessionRequest(BaseModel):
     # async_voice | live_call | in_person — validated in the route so a bad
     # value reads as a 400 rather than a schema error.
     mode: str = "async_voice"
+    # Optional practice material from the platform's own catalogs. Validated
+    # against the catalog in the route, so a session can never point at a
+    # prompt that does not exist.
+    prompt_kind: Optional[str] = None
+    prompt_id: Optional[str] = None
 
 
 class CompleteSessionRequest(BaseModel):
@@ -129,6 +143,48 @@ class CompleteSessionRequest(BaseModel):
     duration_minutes: Optional[int] = None
 
 
+class RateSessionRequest(BaseModel):
+    """The mentee's 1-5 verdict on a session. Mentees only, by design."""
+
+    rating: int
+
+
 class SessionsResponse(BaseModel):
     sessions: list[BuddySession] = Field(default_factory=list)
     total: int = 0
+
+
+# --- Practice material ---
+
+
+class PracticePrompt(BaseModel):
+    """One item a session can be built around, from an existing catalog."""
+
+    kind: str  # pronunciation | debate | gd
+    id: str
+    title: str
+    detail: str = ""
+
+
+class PracticePromptsResponse(BaseModel):
+    prompts: list[PracticePrompt] = Field(default_factory=list)
+    total: int = 0
+
+
+# --- Mentor's own record ---
+
+
+class MentorDashboard(BaseModel):
+    """What mentoring has amounted to, shown to the mentor themselves.
+
+    Mentoring is unpaid work that until now accrued nothing to the person
+    doing it. This is the ledger.
+    """
+
+    is_mentor: bool = False
+    active_mentees: int = 0
+    total_mentees: int = 0
+    sessions_mentored: int = 0
+    average_rating: Optional[float] = None
+    cycles_completed: int = 0
+    mentees_improved: int = 0
