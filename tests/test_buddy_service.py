@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.buddy import service
+from app.storage.buddy import BuddyCyclesStore
 from app.storage.buddy import BuddyPairsStore
+from app.storage.buddy import CycleAxisResult
+from app.storage.buddy import CycleSummary
+from app.storage.buddy import BuddySessionsStore
 from app.storage.buddy import MentorsStore
 
 
@@ -48,14 +52,24 @@ def buddy_env(tmp_path, monkeypatch):
 
     mentors = MentorsStore(path=tmp_path / "mentors.jsonl")
     pairs = BuddyPairsStore(path=tmp_path / "pairs.jsonl")
+    cycles = BuddyCyclesStore(path=tmp_path / "cycles.jsonl")
+    sessions = BuddySessionsStore(path=tmp_path / "sessions.jsonl")
 
     monkeypatch.setattr(service, "mentors_store", mentors)
     monkeypatch.setattr(service, "buddy_pairs_store", pairs)
+    monkeypatch.setattr(service, "buddy_cycles_store", cycles)
+    monkeypatch.setattr(service, "buddy_sessions_store", sessions)
     monkeypatch.setattr(
         service.submissions_store,
         "list_for_student",
         lambda email: submissions.get(email.lower(), []),
     )
+    # Without these the ranking reads the developer's real outputs/*.jsonl and
+    # every assertion here depends on whatever happens to be on disk.
+    monkeypatch.setattr(
+        service.attempts_storage, "list_for_student", lambda email: []
+    )
+    monkeypatch.setattr("app.buddy.growth._live_events", lambda email: [])
 
     # `rank_speakers` imports users_store inside the function body, so patch
     # the attribute on the package the import resolves against.
@@ -64,7 +78,12 @@ def buddy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.users_store, "list_all", lambda: users)
 
     return SimpleNamespace(
-        users=users, submissions=submissions, mentors=mentors, pairs=pairs
+        users=users,
+        submissions=submissions,
+        mentors=mentors,
+        pairs=pairs,
+        cycles=cycles,
+        sessions=sessions,
     )
 
 
@@ -220,3 +239,227 @@ def test_only_members_and_teachers_can_access_a_pair(buddy_env):
 
 def test_unknown_pair_is_inaccessible_even_to_a_teacher(buddy_env):
     assert service.can_access_pair("no-such-pair", "t@x.com", is_teacher=True) is False
+
+
+# --- The growth path in ---------------------------------------------------
+#
+# `speaking_score` is a lifetime mean, so a student who climbed carries their
+# early work forever and never clears the score bar. These pin the second way
+# in: a closed cycle whose frozen summary says they improved.
+
+
+def _closed_cycle(env, mentee: str, *, verdict: str, axes: list[tuple[float, float]]):
+    """A closed cycle for `mentee`, frozen with `axes` as (baseline, final)."""
+    cycle = env.cycles.create(
+        pair_id=f"pair-{mentee}",
+        mentee_email=mentee,
+        starts_at="2026-01-01T00:00:00+00:00",
+        ends_at="2026-02-01T00:00:00+00:00",
+        created_by="t@x.com",
+    )
+    summary = CycleSummary(
+        axes=[
+            CycleAxisResult(
+                key="content",
+                label="Content",
+                baseline=baseline,
+                final=final,
+                delta=round(final - baseline, 2),
+                sample_size=3,
+            )
+            for baseline, final in axes
+        ],
+        verdict=verdict,
+        generated_at="2026-02-01T00:00:00+00:00",
+    )
+    return env.cycles.close(cycle.cycle_id, summary=summary)
+
+
+def _climber(env, email: str = "ada@x.com"):
+    """A student whose lifetime average is too low to be suggested on score."""
+    env.users.append(_user(email, name="Ada"))
+    env.submissions[email] = [
+        _submission(content=40.0),  # where they started, and it never stops counting
+        _submission(content=72.0),
+    ]
+
+
+def test_a_student_who_climbed_is_suggested_despite_a_low_lifetime_average(buddy_env):
+    """The whole point: their early work must not disqualify them forever."""
+    _climber(buddy_env)
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(45.0, 72.0)])
+
+    ranking = service.rank_speakers()[0]
+    assert ranking.speaking_score == 56.0, "below the score threshold"
+    assert ranking.speaking_score < service.SUGGESTION_THRESHOLD
+
+    suggested = service.suggested_mentors()
+    assert [s.email for s in suggested] == ["ada@x.com"]
+    assert suggested[0].suggestion_basis == "growth"
+    assert suggested[0].best_gain == 27.0
+    assert (suggested[0].grew_from, suggested[0].grew_to) == (45.0, 72.0)
+
+
+def test_growth_alone_is_not_enough_if_they_are_still_weak(buddy_env):
+    """20 to 35 is a huge climb and still cannot model speaking for anyone."""
+    buddy_env.users.append(_user("bob@x.com"))
+    buddy_env.submissions["bob@x.com"] = [
+        _submission(content=20.0),
+        _submission(content=35.0),
+    ]
+    _closed_cycle(buddy_env, "bob@x.com", verdict="improved", axes=[(20.0, 35.0)])
+
+    assert service.rank_speakers()[0].best_gain == 15.0
+    assert service.suggested_mentors() == [], "improvement is not a participation prize"
+
+
+def test_a_small_climb_is_not_treated_as_evidence(buddy_env):
+    """MEANINGFUL_DELTA marks an axis as having moved; it is not a mentor bar."""
+    _climber(buddy_env)
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(66.0, 69.0)])
+
+    assert service.rank_speakers()[0].best_gain == 3.0
+    assert service.suggested_mentors() == []
+
+
+def test_only_a_verdict_of_improved_counts(buddy_env):
+    """A cycle that held, or was never measured, proves nothing about growth."""
+    _climber(buddy_env)
+    for verdict in ("held", "declined", "not_enough_evidence"):
+        buddy_env.cycles.path.write_text("", encoding="utf-8")
+        _closed_cycle(buddy_env, "ada@x.com", verdict=verdict, axes=[(45.0, 72.0)])
+        assert service.suggested_mentors() == [], verdict
+
+
+def test_an_open_cycle_is_not_evidence_yet(buddy_env):
+    """Only a period a teacher actually closed can speak to what happened."""
+    _climber(buddy_env)
+    buddy_env.cycles.create(
+        pair_id="p1",
+        mentee_email="ada@x.com",
+        starts_at="2026-01-01T00:00:00+00:00",
+        ends_at="2026-02-01T00:00:00+00:00",
+        created_by="t@x.com",
+    )
+
+    assert service.rank_speakers()[0].best_gain is None
+    assert service.suggested_mentors() == []
+
+
+def test_the_best_cycle_is_used_not_the_latest(buddy_env):
+    """A quieter cycle afterwards does not un-prove an earlier climb."""
+    _climber(buddy_env)
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(45.0, 72.0)])
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(70.0, 74.0)])
+
+    ranking = service.rank_speakers()[0]
+    assert ranking.best_gain == 27.0
+    assert ranking.improved_cycles == 2
+    assert (ranking.grew_from, ranking.grew_to) == (45.0, 72.0)
+
+
+def test_an_unmeasured_axis_is_not_averaged_in_as_a_zero(buddy_env):
+    """A cycle that only measured one axis is reported on that axis."""
+    _climber(buddy_env)
+    cycle = buddy_env.cycles.create(
+        pair_id="p1",
+        mentee_email="ada@x.com",
+        starts_at="2026-01-01T00:00:00+00:00",
+        ends_at="2026-02-01T00:00:00+00:00",
+        created_by="t@x.com",
+    )
+    buddy_env.cycles.close(
+        cycle.cycle_id,
+        summary=CycleSummary(
+            axes=[
+                CycleAxisResult(
+                    key="content",
+                    label="Content",
+                    baseline=45.0,
+                    final=72.0,
+                    delta=27.0,
+                    sample_size=3,
+                ),
+                # Never sampled — must contribute nothing, not a zero delta.
+                CycleAxisResult(key="live_speaking", label="Live speaking"),
+            ],
+            verdict="improved",
+            generated_at="2026-02-01T00:00:00+00:00",
+        ),
+    )
+
+    assert service.rank_speakers()[0].best_gain == 27.0
+
+
+def test_a_strong_speaker_who_also_climbed_is_labelled_both(buddy_env):
+    buddy_env.users.append(_user("ada@x.com"))
+    buddy_env.submissions["ada@x.com"] = [
+        _submission(content=80.0),
+        _submission(content=90.0),
+    ]
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(60.0, 85.0)])
+
+    assert service.suggested_mentors()[0].suggestion_basis == "both"
+
+
+def test_growth_candidates_sort_ahead_of_score_candidates(buddy_env):
+    """Otherwise they sit below everyone, ordered by the average that hides them."""
+    buddy_env.users.extend([_user("strong@x.com"), _user("climber@x.com")])
+    buddy_env.submissions["strong@x.com"] = [
+        _submission(content=92.0),
+        _submission(content=92.0),
+    ]
+    buddy_env.submissions["climber@x.com"] = [
+        _submission(content=40.0),
+        _submission(content=72.0),
+    ]
+    _closed_cycle(buddy_env, "climber@x.com", verdict="improved", axes=[(45.0, 72.0)])
+
+    assert [s.email for s in service.suggested_mentors()] == [
+        "climber@x.com",
+        "strong@x.com",
+    ]
+
+
+def test_growth_evidence_is_shown_even_when_it_changes_nothing(buddy_env):
+    """A teacher deciding on a strong speaker still benefits from the climb."""
+    buddy_env.users.append(_user("ada@x.com"))
+    buddy_env.submissions["ada@x.com"] = [
+        _submission(content=85.0),
+        _submission(content=85.0),
+    ]
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(70.0, 79.0)])
+
+    ranking = service.rank_speakers()[0]
+    assert ranking.improved_cycles == 1
+    assert ranking.best_gain == 9.0
+
+
+def test_a_rejected_climber_is_not_re_suggested(buddy_env):
+    """The teacher has answered; the growth path must not reopen the question."""
+    _climber(buddy_env)
+    _closed_cycle(buddy_env, "ada@x.com", verdict="improved", axes=[(45.0, 72.0)])
+    buddy_env.mentors.set_status("ada@x.com", "rejected", decided_by="t@x.com")
+
+    assert service.suggested_mentors() == []
+
+
+def test_a_broken_cycles_store_does_not_blank_the_ranking(buddy_env, monkeypatch):
+    _climber(buddy_env)
+
+    def _explode():
+        raise ValueError("corrupt row")
+
+    monkeypatch.setattr(buddy_env.cycles, "list_all", _explode)
+
+    ranking = service.rank_speakers()
+    assert len(ranking) == 1, "the score path still works"
+    assert ranking[0].best_gain is None
+
+
+def test_someone_elses_cycle_does_not_credit_this_student(buddy_env):
+    _climber(buddy_env)
+    _closed_cycle(buddy_env, "someone-else@x.com", verdict="improved", axes=[(45.0, 72.0)])
+
+    assert service.rank_speakers()[0].best_gain is None
+    assert service.suggested_mentors() == []

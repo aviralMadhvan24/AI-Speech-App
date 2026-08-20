@@ -28,12 +28,15 @@ from fastapi.responses import FileResponse
 from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
+from app.buddy import digest
 from app.buddy import growth
 from app.buddy import health
 from app.buddy import practice
+from app.buddy import programme
 from app.buddy import service
 from app.buddy.growth import CycleReport
 from app.buddy.schemas import CompleteSessionRequest
+from app.buddy.schemas import ConcernsResponse
 from app.buddy.schemas import ConversationSummary
 from app.buddy.schemas import CreateCycleRequest
 from app.buddy.schemas import CreatePairRequest
@@ -46,16 +49,21 @@ from app.buddy.schemas import MentorDecisionRequest
 from app.buddy.schemas import MentorDashboard
 from app.buddy.schemas import MentorsResponse
 from app.buddy.schemas import MessagesResponse
+from app.buddy.schemas import MyConcernResponse
 from app.buddy.schemas import PracticePromptsResponse
+from app.buddy.schemas import RaiseConcernRequest
 from app.buddy.schemas import RateSessionRequest
+from app.buddy.schemas import ResolveConcernRequest
 from app.buddy.schemas import MyBuddiesResponse
 from app.buddy.schemas import PairsResponse
 from app.buddy.schemas import SendMessageRequest
 from app.storage import users_store
+from app.storage.buddy import BuddyConcern
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
 from app.storage.buddy import BuddySession
+from app.storage.buddy import buddy_concerns_store
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
 from app.storage.buddy import buddy_pairs_store
@@ -71,6 +79,22 @@ router = APIRouter(prefix="/buddy", tags=["buddy"])
 MAX_VOICE_NOTE_BYTES = 10 * 1024 * 1024
 
 MAX_MESSAGE_CHARS = 2000
+
+# Reasons a mentee can attach to a session rating. Mixed praise and criticism
+# on purpose: a list of only complaints turns the rating into a report card,
+# and mentors stop reading it.
+VALID_RATING_ASPECTS = (
+    "prepared",
+    "specific",
+    "encouraging",
+    "punctual",
+    "unprepared",
+    "vague",
+    "harsh",
+    "no_show",
+)
+
+MAX_RATING_NOTE_CHARS = 500
 
 
 def _require_membership(pair_id: str, user: User) -> BuddyPair:
@@ -532,7 +556,24 @@ async def rate_session(
             detail="rating must be between 1 and 5",
         )
 
-    updated = buddy_sessions_store.rate(session_id, body.rating)
+    aspects = [a.strip().lower() for a in body.aspects if a and a.strip()]
+    if any(a not in VALID_RATING_ASPECTS for a in aspects):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_aspect",
+        )
+    # Duplicates would double-count the same reason in any future tally, and
+    # mean nothing to a mentor reading them.
+    aspects = list(dict.fromkeys(aspects))
+
+    note = (body.note or "").strip()
+    if len(note) > MAX_RATING_NOTE_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="note_too_long",
+        )
+
+    updated = buddy_sessions_store.rate(session_id, body.rating, aspects, note)
     if updated is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -636,6 +677,8 @@ async def mentor_candidates(
         ranking=service.rank_speakers(),
         threshold=service.SUGGESTION_THRESHOLD,
         min_sample_size=service.MIN_SAMPLE_SIZE,
+        growth_min_gain=service.GROWTH_MIN_GAIN,
+        growth_min_final=service.GROWTH_MIN_FINAL,
     )
 
 
@@ -683,6 +726,33 @@ async def decide_mentor(
     return MentorsResponse(mentors=mentors, total=len(mentors))
 
 
+@router.get("/admin/programme", response_model=programme.ProgrammeReport)
+async def programme_report(
+    _: User = Depends(require_teacher),
+) -> programme.ProgrammeReport:
+    """The whole programme in one object — the "is this working" question.
+
+    Every other admin endpoint returns a list, which answers about one pairing
+    at a time. This is the only place that answers about the programme, and it
+    is what a department head asks before funding another semester.
+    """
+    return programme.build_report()
+
+
+@router.get("/admin/digest", response_model=digest.BuddyDigest)
+async def buddy_digest(
+    _: User = Depends(require_teacher),
+) -> digest.BuddyDigest:
+    """Everyone who needs chasing, most urgent first.
+
+    The inbox nudge only reaches whoever opens the buddy tab, and the pairings
+    that need chasing are the ones nobody is opening. This is the same
+    information pointed outward, at the person who can actually go and find
+    the student in a corridor.
+    """
+    return digest.build_digest()
+
+
 @router.get("/admin/pairs", response_model=PairsResponse)
 async def list_pairs(_: User = Depends(require_teacher)) -> PairsResponse:
     """Every buddy pairing, active or ended, with how each one is actually going.
@@ -697,6 +767,7 @@ async def list_pairs(_: User = Depends(require_teacher)) -> PairsResponse:
         pairs=pairs,
         total=len(pairs),
         health=health.build_index(pairs),
+        open_concerns=buddy_concerns_store.open_count_by_pair(),
     )
 
 
@@ -894,3 +965,144 @@ async def end_pair(
         )
     logger.info("buddy_pair_ended pair=%s by=%s", pair_id, current_user.email)
     return pair
+
+
+# ---------------------------------------------------------------------------
+# Concerns — either side saying the pairing is not working
+# ---------------------------------------------------------------------------
+#
+# Until this existed, the only way a bad pairing surfaced was `health` going
+# quiet or stalled at 7 and 14 days. That signal cannot tell a wrong pairing
+# from exam week, and it arrives two weeks late either way. A raised hand is
+# the one thing the platform cannot infer from activity, so it has to be asked
+# for directly.
+#
+# Everything here is teacher-visible only. `get_my_concern` returns the
+# CALLER'S OWN concern and nothing else; there is deliberately no route by
+# which a participant can read their partner's. See `BuddyConcern`.
+
+VALID_CONCERN_REASONS = ("mismatch", "unresponsive", "schedule", "uncomfortable", "other")
+
+MAX_CONCERN_DETAIL_CHARS = 1000
+
+
+@router.post("/pairs/{pair_id}/concern", response_model=BuddyConcern)
+async def raise_concern(
+    pair_id: str,
+    body: RaiseConcernRequest,
+    current_user: User = Depends(require_user),
+) -> BuddyConcern:
+    """Flag that this pairing is not working. Participants only, teacher-visible.
+
+    A teacher is refused rather than silently allowed: they already have the
+    admin queue, and a concern raised by the person who created the pairing
+    would corrupt the mentor/mentee split that makes the queue readable.
+    """
+    pair = _require_membership(pair_id, current_user)
+
+    if not pair.involves(current_user.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="not_a_participant",
+        )
+
+    reason = (body.reason or "other").strip().lower()
+    if reason not in VALID_CONCERN_REASONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_reason",
+        )
+
+    detail = (body.detail or "").strip()
+    if len(detail) > MAX_CONCERN_DETAIL_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="detail_too_long",
+        )
+
+    role = "mentor" if pair.mentor_email.lower() == current_user.email.lower() else "mentee"
+
+    try:
+        return buddy_concerns_store.raise_concern(
+            pair_id=pair_id,
+            raised_by=current_user.email,
+            role=role,
+            reason=reason,
+            detail=detail,
+        )
+    except ValueError:
+        # Already flagged and not yet dealt with. Saying so is more useful than
+        # silently making a second identical row.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="concern_already_open",
+        )
+
+
+@router.get("/pairs/{pair_id}/concern", response_model=MyConcernResponse)
+async def get_my_concern(
+    pair_id: str,
+    current_user: User = Depends(require_user),
+) -> MyConcernResponse:
+    """The caller's own open concern on this pair, so the UI can say it was sent.
+
+    Returns the caller's row only. A participant asking about a pair never
+    learns whether the other side has flagged anything.
+    """
+    _require_membership(pair_id, current_user)
+    return MyConcernResponse(
+        concern=buddy_concerns_store.open_for(pair_id, current_user.email)
+    )
+
+
+@router.get("/admin/concerns", response_model=ConcernsResponse)
+async def list_concerns(
+    include_resolved: bool = False,
+    _: User = Depends(require_teacher),
+) -> ConcernsResponse:
+    """The triage queue — open concerns oldest first, since it is a worklist."""
+    concerns = (
+        buddy_concerns_store.list_all()
+        if include_resolved
+        else buddy_concerns_store.list_open()
+    )
+    if include_resolved:
+        concerns.sort(key=lambda c: c.raised_at, reverse=True)
+    return ConcernsResponse(concerns=concerns, total=len(concerns))
+
+
+@router.post("/admin/concerns/{concern_id}/resolve", response_model=BuddyConcern)
+async def resolve_concern(
+    concern_id: str,
+    body: ResolveConcernRequest,
+    current_user: User = Depends(require_teacher),
+) -> BuddyConcern:
+    """Close a concern with a note on what was actually done about it.
+
+    The note is the point. "Resolved" with no record of the action reduces to
+    a teacher having clicked something, which is what the flag existed to
+    replace.
+    """
+    concern = buddy_concerns_store.get(concern_id)
+    if concern is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="concern_not_found",
+        )
+    if concern.status == "resolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="already_resolved",
+        )
+
+    resolved = buddy_concerns_store.resolve(
+        concern_id,
+        resolved_by=current_user.email,
+        resolution=body.resolution or "",
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="concern_not_found",
+        )
+    return resolved

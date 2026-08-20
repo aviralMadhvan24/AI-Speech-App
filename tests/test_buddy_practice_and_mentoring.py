@@ -311,3 +311,111 @@ def test_the_inbox_answers_what_now_with_the_next_session(buddy_app, paired):
 
     assert conversation["next_session_at"] == "2026-08-20T10:00:00+00:00"
     assert conversation["sessions_kept"] == 1
+
+
+# --- Why, not just how many stars -----------------------------------------
+#
+# A bare 2/5 tells a mentor to feel bad and nothing about what to change. The
+# reasons are deliberately visible to the mentor: this is feedback TO them.
+# The private channel for "this pairing is wrong" is a concern, which they
+# never see — see tests/test_buddy_concerns.py.
+
+
+def _rated(buddy_app, paired, **payload):
+    """Complete a session and rate it with the given payload."""
+    pair, cycle = paired
+    buddy_app.as_(MENTEE)
+    session = buddy_app.post(
+        f"/buddy/pairs/{pair.pair_id}/sessions",
+        json={"scheduled_at": "2026-08-20T10:00:00+00:00"},
+    ).json()
+    buddy_app.post(f"/buddy/sessions/{session['session_id']}/complete", json={})
+    return buddy_app.post(
+        f"/buddy/sessions/{session['session_id']}/rate", json=payload
+    )
+
+
+def test_a_rating_can_carry_its_reasons(buddy_app, paired):
+    response = _rated(
+        buddy_app,
+        paired,
+        rating=5,
+        aspects=["prepared", "specific"],
+        note="Told me exactly which words I was rushing.",
+    )
+
+    body = response.json()
+    assert body["mentee_rating"] == 5
+    assert body["mentee_rating_aspects"] == ["prepared", "specific"]
+    assert body["mentee_rating_note"].startswith("Told me exactly")
+
+
+def test_a_bare_rating_still_works(buddy_app, paired):
+    """Reasons are optional — demanding them would suppress ratings."""
+    body = _rated(buddy_app, paired, rating=4).json()
+
+    assert body["mentee_rating"] == 4
+    assert body["mentee_rating_aspects"] == []
+    assert body["mentee_rating_note"] == ""
+
+
+def test_the_mentor_can_read_the_reasons(buddy_app, paired):
+    """The entire point: a mentor learns what to do differently."""
+    pair, _cycle = paired
+    _rated(buddy_app, paired, rating=2, aspects=["vague"], note="be more specific")
+
+    buddy_app.as_(MENTOR)
+    sessions = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/sessions").json()["sessions"]
+
+    assert sessions[0]["mentee_rating_aspects"] == ["vague"]
+    assert sessions[0]["mentee_rating_note"] == "be more specific"
+
+
+def test_an_unknown_aspect_is_refused(buddy_app, paired):
+    response = _rated(buddy_app, paired, rating=3, aspects=["mid"])
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_aspect"
+
+
+def test_duplicate_aspects_are_collapsed(buddy_app, paired):
+    """Otherwise the same reason double-counts in any tally."""
+    body = _rated(
+        buddy_app, paired, rating=5, aspects=["prepared", "PREPARED", "prepared"]
+    ).json()
+
+    assert body["mentee_rating_aspects"] == ["prepared"]
+
+
+def test_an_overlong_note_is_refused(buddy_app, paired):
+    response = _rated(buddy_app, paired, rating=3, note="x" * 501)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "note_too_long"
+
+
+def test_re_rating_replaces_the_previous_reasons(buddy_app, paired):
+    """Otherwise last week's complaint stays attached to this week's five."""
+    pair, _cycle = paired
+    buddy_app.as_(MENTEE)
+    session = buddy_app.post(
+        f"/buddy/pairs/{pair.pair_id}/sessions",
+        json={"scheduled_at": "2026-08-20T10:00:00+00:00"},
+    ).json()
+    buddy_app.post(f"/buddy/sessions/{session['session_id']}/complete", json={})
+
+    url = f"/buddy/sessions/{session['session_id']}/rate"
+    buddy_app.post(url, json={"rating": 2, "aspects": ["vague"], "note": "unclear"})
+    body = buddy_app.post(url, json={"rating": 5, "aspects": ["specific"]}).json()
+
+    assert body["mentee_rating"] == 5
+    assert body["mentee_rating_aspects"] == ["specific"]
+    assert body["mentee_rating_note"] == ""
+
+
+def test_praise_and_criticism_are_both_available(buddy_app, paired):
+    """A vocabulary of only complaints turns the rating into a report card."""
+    from app.buddy import routes
+
+    assert "encouraging" in routes.VALID_RATING_ASPECTS
+    assert "harsh" in routes.VALID_RATING_ASPECTS

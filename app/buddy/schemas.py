@@ -9,6 +9,7 @@ from pydantic import Field
 
 from app.buddy.health import PairHealth
 from app.buddy.service import SpeakerRanking
+from app.storage.buddy import BuddyConcern
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
@@ -70,6 +71,10 @@ class MentorCandidatesResponse(BaseModel):
     ranking: list[SpeakerRanking] = Field(default_factory=list)
     threshold: float = 0.0
     min_sample_size: int = 0
+    # The second way in. Sent so the UI can state the bar it applied rather
+    # than hardcoding numbers that would drift out of step with the service.
+    growth_min_gain: float = 0.0
+    growth_min_final: float = 0.0
 
 
 class MentorDecisionRequest(BaseModel):
@@ -99,6 +104,10 @@ class PairsResponse(BaseModel):
     # Keyed by pair_id. Carried alongside the pairs rather than folded into
     # them: `BuddyPair` is what is stored, and health is derived per request.
     health: dict[str, PairHealth] = Field(default_factory=dict)
+    # Open concern count per pair_id, absent when zero. Kept out of PairHealth
+    # on purpose: health judges activity, and a raised hand is not activity —
+    # a pairing can be perfectly busy and still be the wrong pairing.
+    open_concerns: dict[str, int] = Field(default_factory=dict)
 
 
 # --- Cycles ---
@@ -144,9 +153,15 @@ class CompleteSessionRequest(BaseModel):
 
 
 class RateSessionRequest(BaseModel):
-    """The mentee's 1-5 verdict on a session. Mentees only, by design."""
+    """The mentee's 1-5 verdict on a session, and why. Mentees only, by design.
+
+    `aspects` is validated in the route against `RatingAspect` so a bad value
+    is a readable 400 rather than a schema error.
+    """
 
     rating: int
+    aspects: list[str] = Field(default_factory=list)
+    note: str = ""
 
 
 class SessionsResponse(BaseModel):
@@ -188,3 +203,38 @@ class MentorDashboard(BaseModel):
     average_rating: Optional[float] = None
     cycles_completed: int = 0
     mentees_improved: int = 0
+
+
+# --- Concerns ---
+
+
+class RaiseConcernRequest(BaseModel):
+    """Either side saying the pairing is not working.
+
+    `reason` is validated in the route against `ConcernReason` so a bad value
+    is a readable 400 rather than a schema error.
+    """
+
+    reason: str = "other"
+    detail: str = ""
+
+
+class MyConcernResponse(BaseModel):
+    """The caller's own open concern on a pair, or none.
+
+    Deliberately scoped to the caller. There is no endpoint that returns the
+    other participant's concerns to a participant — see `BuddyConcern`.
+    """
+
+    concern: Optional[BuddyConcern] = None
+
+
+class ConcernsResponse(BaseModel):
+    """The teacher's triage queue."""
+
+    concerns: list[BuddyConcern] = Field(default_factory=list)
+    total: int = 0
+
+
+class ResolveConcernRequest(BaseModel):
+    resolution: str = ""

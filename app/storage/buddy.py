@@ -6,6 +6,7 @@ package (see the package docstring for the migration note):
 - ``outputs/buddy_mentors.jsonl``  — one row per student considered as a mentor
 - ``outputs/buddy_pairs.jsonl``    — one row per mentor/mentee pairing
 - ``outputs/buddy_messages.jsonl`` — one row per chat message or voice note
+- ``outputs/buddy_concerns.jsonl`` — one row per raised concern (teacher-only)
 
 Messages are append-only on the hot path; only ``mark_read`` rewrites, and it
 touches a single pair's rows. Fine at classroom scale, revisit with a real DB.
@@ -38,6 +39,17 @@ SessionStatus = Literal["planned", "completed", "missed"]
 SessionMode = Literal["async_voice", "live_call", "in_person"]
 # Which of the platform's own catalogs a session's practice material came from.
 PromptKind = Literal["pronunciation", "debate", "gd"]
+# Why a pairing was flagged. A closed list rather than free text so a
+# teacher can triage thirty of them without reading thirty paragraphs.
+ConcernReason = Literal["mismatch", "unresponsive", "schedule", "uncomfortable", "other"]
+ConcernStatus = Literal["open", "resolved"]
+# What a mentee can say about a session beyond a number. Closed vocabulary,
+# both praise and criticism, because a bare 2/5 tells a mentor to feel bad
+# and nothing about what to do differently next week.
+RatingAspect = Literal[
+    "prepared", "specific", "encouraging", "punctual",
+    "unprepared", "vague", "harsh", "no_show",
+]
 
 
 class MentorRecord(BaseModel):
@@ -210,6 +222,11 @@ class BuddySession(BaseModel):
     # has about whether a mentor is any good AT MENTORING, as opposed to being
     # a strong speaker — which is what got them selected.
     mentee_rating: Optional[int] = None
+    # Why. Visible to the mentor along with the number — this is feedback
+    # to them, not a report about them. The private channel for "this
+    # pairing is wrong" is `BuddyConcern`, which the mentor never sees.
+    mentee_rating_aspects: list[str] = Field(default_factory=list)
+    mentee_rating_note: str = ""
     created_by: str
     created_at: str
 
@@ -219,6 +236,7 @@ _PAIRS_PATH = Path("outputs/buddy_pairs.jsonl")
 _MESSAGES_PATH = Path("outputs/buddy_messages.jsonl")
 _CYCLES_PATH = Path("outputs/buddy_cycles.jsonl")
 _SESSIONS_PATH = Path("outputs/buddy_sessions.jsonl")
+_CONCERNS_PATH = Path("outputs/buddy_concerns.jsonl")
 
 
 def _now() -> str:
@@ -591,9 +609,26 @@ class BuddySessionsStore:
         append_jsonl(self.path, record.model_dump())
         return record
 
-    def rate(self, session_id: str, rating: int) -> Optional[BuddySession]:
-        """Record the mentee's 1-5 rating of a session."""
-        return self._update(session_id, {"mentee_rating": max(1, min(5, int(rating)))})
+    def rate(
+        self,
+        session_id: str,
+        rating: int,
+        aspects: Optional[list[str]] = None,
+        note: str = "",
+    ) -> Optional[BuddySession]:
+        """Record the mentee's 1-5 rating of a session, and why.
+
+        `aspects` and `note` are written even when empty, so re-rating cannot
+        leave last time's reasons attached to this time's number.
+        """
+        return self._update(
+            session_id,
+            {
+                "mentee_rating": max(1, min(5, int(rating))),
+                "mentee_rating_aspects": list(aspects or []),
+                "mentee_rating_note": note.strip(),
+            },
+        )
 
     def _update(self, session_id: str, changes: dict) -> Optional[BuddySession]:
         sessions = self.list_all()
@@ -648,8 +683,135 @@ class BuddySessionsStore:
 
 
 # Module-level singletons — most callers just need the default file locations.
+
+class BuddyConcern(BaseModel):
+    """Someone in a pairing saying, privately, that it is not working.
+
+    Read by teachers only — never by the other participant, and the routes
+    enforce it. A mentee who has to weigh "will my mentor see this" before
+    flagging an unresponsive mentor will not flag anything, and the programme
+    goes back to inferring trouble from silence. Silence is exactly what it
+    cannot interpret: `health` cannot tell a wrong pairing from exam week.
+
+    Resolution is a teacher's note, not an outcome the system computes. The
+    fix might be a new pairing, a conversation, or nothing at all.
+    """
+
+    concern_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    pair_id: str
+    raised_by: str
+    # Which side raised it. A mentor reporting a mentee who never replies is a
+    # different problem from a mentee reporting the same, and the count of each
+    # is what tells a teacher whether their pairing rule is wrong.
+    role: Literal["mentor", "mentee"]
+    reason: ConcernReason = "other"
+    detail: str = ""
+    status: ConcernStatus = "open"
+    raised_at: str
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
+    resolution: str = ""
+
+
+class BuddyConcernsStore:
+    path: Path
+
+    def __init__(self, path: Path = _CONCERNS_PATH):
+        self.path = path
+
+    def list_all(self) -> list[BuddyConcern]:
+        return _load(self.path, BuddyConcern)
+
+    def list_open(self) -> list[BuddyConcern]:
+        """Every unresolved concern, oldest first — a queue, not a feed.
+
+        Oldest first because this is a worklist: the pairing that has been
+        waiting three weeks is the one that needs a teacher, and newest-first
+        would bury it under every fresh flag.
+        """
+        concerns = [c for c in self.list_all() if c.status == "open"]
+        concerns.sort(key=lambda c: c.raised_at)
+        return concerns
+
+    def get(self, concern_id: str) -> Optional[BuddyConcern]:
+        for concern in self.list_all():
+            if concern.concern_id == concern_id:
+                return concern
+        return None
+
+    def open_for(self, pair_id: str, email: str) -> Optional[BuddyConcern]:
+        """This person's own unresolved concern on this pair, if any."""
+        normalized = email.lower()
+        for concern in self.list_all():
+            if (
+                concern.pair_id == pair_id
+                and concern.raised_by.lower() == normalized
+                and concern.status == "open"
+            ):
+                return concern
+        return None
+
+    def open_count_by_pair(self) -> dict[str, int]:
+        """Open concerns per pair, in one pass for the admin list."""
+        counts: dict[str, int] = {}
+        for concern in self.list_open():
+            counts[concern.pair_id] = counts.get(concern.pair_id, 0) + 1
+        return counts
+
+    def raise_concern(
+        self,
+        pair_id: str,
+        raised_by: str,
+        role: str,
+        reason: str = "other",
+        detail: str = "",
+    ) -> BuddyConcern:
+        """Record a concern. Raises ValueError if this person already has one open.
+
+        One open concern per person per pair: re-flagging changes nothing a
+        teacher can act on, and a queue with the same pairing five times in it
+        is a worse queue.
+        """
+        if self.open_for(pair_id, raised_by) is not None:
+            raise ValueError("concern_already_open")
+
+        concern = BuddyConcern(
+            pair_id=pair_id,
+            raised_by=raised_by,
+            role=role,
+            reason=reason,
+            detail=detail.strip(),
+            raised_at=_now(),
+        )
+        append_jsonl(self.path, concern.model_dump())
+        return concern
+
+    def resolve(
+        self, concern_id: str, resolved_by: str, resolution: str = ""
+    ) -> Optional[BuddyConcern]:
+        """Close a concern with the teacher's note on what they did about it."""
+        concerns = self.list_all()
+        resolved: Optional[BuddyConcern] = None
+        for index, concern in enumerate(concerns):
+            if concern.concern_id == concern_id:
+                resolved = concern.model_copy(
+                    update={
+                        "status": "resolved",
+                        "resolved_at": _now(),
+                        "resolved_by": resolved_by,
+                        "resolution": resolution.strip(),
+                    }
+                )
+                concerns[index] = resolved
+                break
+        if resolved is not None:
+            overwrite_jsonl(self.path, [c.model_dump() for c in concerns])
+        return resolved
+
+
 mentors_store = MentorsStore()
 buddy_pairs_store = BuddyPairsStore()
 buddy_messages_store = BuddyMessagesStore()
 buddy_cycles_store = BuddyCyclesStore()
 buddy_sessions_store = BuddySessionsStore()
+buddy_concerns_store = BuddyConcernsStore()
