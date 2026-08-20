@@ -18,7 +18,6 @@ export function PotdView({ onBack, onStart }: PotdViewProps) {
       {!challenge && !error && <div className="card-glass p-10 text-center text-zinc-400">Loading today's challenge…</div>}
       {challenge && <>
         <section className="card-glass relative overflow-hidden p-6 md:p-10">
-          <div className="absolute -top-24 -right-20 h-64 w-64 rounded-full bg-orange-500/15 blur-3xl" />
           <div className="relative flex flex-wrap items-start justify-between gap-5">
             <div><div className="text-xs uppercase tracking-widest text-orange-300">{challenge.date} · {challenge.type === "pronunciation" ? "Pronunciation" : "Interview Studio"}</div><h1 className="mt-3 text-3xl md:text-4xl font-bold">Today's soft-skill challenge</h1><p className="mt-3 max-w-2xl text-zinc-400">One focused attempt every day. Complete it to keep your streak alive and earn performance badges.</p></div>
             <div className="rounded-2xl border border-orange-500/25 bg-orange-500/10 px-5 py-4 text-center"><Flame className="mx-auto h-7 w-7 text-orange-300" /><div className="mt-1 text-3xl font-bold">{challenge.current_streak}</div><div className="text-xs text-zinc-400">day streak</div></div>

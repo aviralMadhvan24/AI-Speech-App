@@ -92,24 +92,18 @@ export function ReportView({
 
       {/* Hero */}
       <section className="card-glass p-8 md:p-10 relative overflow-hidden">
-        <div className="absolute -top-40 -right-32 w-[28rem] h-[28rem] rounded-full bg-brand-600/15 blur-3xl pointer-events-none" />
         <div className="relative grid md:grid-cols-[1fr_auto] gap-6 items-center">
           <div className="space-y-4">
             <span className="chip-brand">
               <Trophy className="w-3 h-3" />
               Pronunciation Score
             </span>
-            <div className="relative inline-block">
-              <div
-                aria-hidden="true"
-                className="absolute inset-0 blur-3xl opacity-50 gradient-text-score select-none text-9xl font-black tracking-tighter"
-                style={{ transform: "translateZ(0)" }}
-              >
-                {Math.round(animatedScore)}
-              </div>
-              <div className="relative text-8xl md:text-9xl font-black tracking-tighter leading-none gradient-text-score tabular-nums">
-                {Math.round(animatedScore)}
-              </div>
+            {/* Was the score rendered twice — once blurred at 50% behind the
+                real one, to fake a glow. It doubled the DOM for the headline
+                figure and softened the number exactly where it should be
+                sharpest. One number, set once. */}
+            <div className="text-[64px] md:text-[80px] font-bold tracking-[-0.04em] leading-none gradient-text-score tabular-nums">
+              {Math.round(animatedScore)}
             </div>
             <div className={`text-xl font-semibold ${verdict.tone}`}>
               {verdict.label}

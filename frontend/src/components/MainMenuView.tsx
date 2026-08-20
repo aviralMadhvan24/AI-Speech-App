@@ -38,7 +38,6 @@ interface Feature {
   icon: typeof Mic;
   status: FeatureStatus;
   accent: string;
-  gradient: string;
   ringGlow: string;
   iconGlow: string;
   onClick: () => void;
@@ -70,10 +69,9 @@ export function MainMenuView({
           icon: Sparkles,
           status: "live",
           accent: "text-orange-300",
-          gradient: "from-orange-500/20 via-amber-500/10 to-transparent",
           ringGlow:
             "hover:shadow-[0_0_28px_-4px_rgba(249,115,22,0.45)]",
-          iconGlow: "bg-gradient-to-br from-orange-500 to-amber-600",
+          iconGlow: "bg-[var(--raised)] border border-[var(--hairline-strong)]",
           onClick: onSelectPotd,
           ariaLabel: "Open problem of the day",
         },
@@ -86,10 +84,9 @@ export function MainMenuView({
         icon: User,
         status: "live",
         accent: "text-violet-300",
-        gradient: "from-violet-600/20 via-purple-500/10 to-transparent",
         ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(139,92,246,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-violet-500 to-purple-600 shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
         onClick: onSelectProfile,
         ariaLabel: "Open my profile",
       },
@@ -102,10 +99,9 @@ export function MainMenuView({
         icon: Mic,
         status: "live",
         accent: "text-brand-300",
-        gradient: "from-brand-600/20 via-brand-500/10 to-transparent",
         ringGlow: "hover:shadow-glow",
         iconGlow:
-          "bg-gradient-to-br from-brand-500 to-brand-700 shadow-glow-sm",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm",
         onClick: onSelectPronunciation,
         ariaLabel: "Open pronunciation practice",
       },
@@ -118,10 +114,9 @@ export function MainMenuView({
         icon: Swords,
         status: "live",
         accent: "text-fuchsia-300",
-        gradient: "from-fuchsia-600/20 via-cyan-500/10 to-transparent",
         ringGlow: "hover:shadow-[0_0_32px_-4px_rgba(217,70,239,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-fuchsia-500 to-cyan-500 shadow-[0_0_18px_-4px_rgba(217,70,239,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(217,70,239,0.55)]",
         onClick: onSelectBattle,
         ariaLabel: "Open 1v1 battle",
       },
@@ -134,10 +129,9 @@ export function MainMenuView({
         icon: Briefcase,
         status: "live",
         accent: "text-amber-300",
-        gradient: "from-amber-500/20 via-orange-600/15 to-transparent",
         ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(245,158,11,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-amber-500 to-orange-600 shadow-[0_0_18px_-4px_rgba(245,158,11,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(245,158,11,0.55)]",
         onClick: onSelectInterview,
         ariaLabel: "Open interview studio",
       },
@@ -150,10 +144,9 @@ export function MainMenuView({
         icon: MessageSquareText,
         status: "live",
         accent: "text-violet-300",
-        gradient: "from-violet-600/20 via-fuchsia-500/10 to-transparent",
         ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(139,92,246,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-violet-500 to-fuchsia-600 shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(139,92,246,0.55)]",
         onClick: onSelectDebate,
         ariaLabel: "Open debate",
       },
@@ -166,10 +159,9 @@ export function MainMenuView({
         icon: Users2,
         status: "live",
         accent: "text-emerald-300",
-        gradient: "from-emerald-500/20 via-cyan-500/10 to-transparent",
         ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(16,185,129,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-emerald-500 to-cyan-500 shadow-[0_0_18px_-4px_rgba(16,185,129,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(16,185,129,0.55)]",
         onClick: onSelectGD,
         ariaLabel: "Open group discussion",
       },
@@ -182,10 +174,9 @@ export function MainMenuView({
         icon: Handshake,
         status: "live",
         accent: "text-teal-300",
-        gradient: "from-teal-500/20 via-emerald-500/10 to-transparent",
         ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(45,212,191,0.45)]",
         iconGlow:
-          "bg-gradient-to-br from-teal-500 to-emerald-500 shadow-[0_0_18px_-4px_rgba(45,212,191,0.55)]",
+          "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(45,212,191,0.55)]",
         onClick: onSelectBuddy,
         ariaLabel: "Open speaking buddy",
       },
@@ -201,10 +192,9 @@ export function MainMenuView({
           icon: LayoutDashboard,
           status: "live",
           accent: "text-cyan-300",
-          gradient: "from-cyan-500/20 via-brand-500/15 to-transparent",
           ringGlow: "hover:shadow-[0_0_28px_-4px_rgba(34,211,238,0.45)]",
           iconGlow:
-            "bg-gradient-to-br from-cyan-500 to-brand-500 shadow-[0_0_18px_-4px_rgba(34,211,238,0.55)]",
+            "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(34,211,238,0.55)]",
           onClick: onSelectAdmin,
           ariaLabel: "Open admin panel",
         });
@@ -228,34 +218,20 @@ export function MainMenuView({
 
   return (
     <div key="main-menu" className="animate-fade-in-up">
-      {/* Hero greeting */}
-      <section className="card-glass relative overflow-hidden p-6 md:p-10 mb-8">
-        <div
-          aria-hidden
-          className="absolute -top-32 -right-32 h-72 w-72 rounded-full bg-gradient-to-br from-brand-600/25 via-fuchsia-600/15 to-transparent blur-3xl"
-        />
-        <div
-          aria-hidden
-          className="absolute -bottom-20 -left-20 h-56 w-56 rounded-full bg-gradient-to-tr from-cyan-500/15 to-transparent blur-3xl"
-        />
-
-        <div className="relative">
-          <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-zinc-300 bg-zinc-900/60 border border-zinc-800/70 px-3 py-1 rounded-full">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Soft Skills Studio</span>
-          </div>
-          <h1 className="mt-5 text-3xl md:text-5xl font-bold tracking-tight">
-            Welcome back,{" "}
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-brand-400 via-fuchsia-400 to-cyan-400 animate-gradient-shift bg-[length:200%_200%]">
-              {user.displayName}
-            </span>
-            .
-          </h1>
-          <p className="mt-3 text-zinc-400 max-w-2xl text-sm md:text-base leading-relaxed">
-            Pick a mode to start. Drill pronunciation solo, battle a friend
-            head-to-head, or queue up the coming experiences when they launch.
-          </p>
-        </div>
+      {/* The greeting states who is signed in and what to do. It was a
+          bordered plate holding a 48px headline and two blurred colour blobs,
+          which is a marketing hero on a screen the user reaches several times
+          a day. A rule and two lines of type do the same job without the
+          furniture. */}
+      <section className="mb-7 pb-5 border-b border-[var(--hairline)]">
+        <p className="eyebrow">Soft Skills Studio</p>
+        <h1 className="mt-2 text-[22px] md:text-[26px] font-semibold tracking-tight text-graphite-50">
+          Welcome back, {user.displayName}
+        </h1>
+        <p className="mt-1.5 text-[13px] text-graphite-300 max-w-2xl leading-relaxed">
+          Pick a mode to start. Drill pronunciation solo, battle a friend
+          head-to-head, or queue up the coming experiences when they launch.
+        </p>
       </section>
 
       {/* Feature grid */}
@@ -274,24 +250,18 @@ export function MainMenuView({
               onClick={feature.onClick}
               style={{ animationDelay: `${index * 80}ms` }}
               className={[
-                "group text-left card-glass relative overflow-hidden p-6 md:p-7",
-                "transition duration-300 ease-out",
-                "hover:-translate-y-0.5 active:scale-[0.99]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60",
+                "group text-left card-glass p-5",
+                // Lifting a card 2px on hover and easing it over 300ms is a
+                // marketing-site gesture. A border that answers immediately
+                // reads as a control.
+                "transition-colors duration-100",
+                "hover:border-brand-500/40",
                 "animate-fade-in-up",
-                feature.ringGlow,
               ].join(" ")}
             >
-              <div
-                aria-hidden
-                className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-60 group-hover:opacity-100 transition-opacity`}
-              />
-
-              <div className="relative flex items-start gap-4">
-                <div
-                  className={`shrink-0 w-12 h-12 rounded-2xl ${feature.iconGlow} flex items-center justify-center`}
-                >
-                  <Icon className="w-6 h-6 text-white" />
+              <div className="flex items-start gap-3.5">
+                <div className="shrink-0 w-9 h-9 rounded-md bg-[var(--raised)] border border-[var(--hairline-strong)] flex items-center justify-center group-hover:border-brand-500/40 transition-colors">
+                  <Icon className="w-[18px] h-[18px] text-graphite-200 group-hover:text-brand-400 transition-colors" />
                 </div>
 
                 <div className="flex-1 min-w-0">
@@ -307,24 +277,21 @@ export function MainMenuView({
                       </span>
                     )}
                   </div>
-                  <h2 className="mt-1 text-xl font-semibold text-zinc-50 tracking-tight">
+                  <h2 className="mt-1 text-[15px] font-semibold text-graphite-50 tracking-tight">
                     {feature.title}
                   </h2>
-                  <p className="mt-1.5 text-sm text-zinc-400 leading-relaxed">
+                  <p className="mt-1 text-[12.5px] text-graphite-300 leading-relaxed">
                     {feature.description}
                   </p>
                 </div>
               </div>
 
-              <div className="relative mt-5 flex items-center justify-between">
+              <div className="mt-4 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium">
                   {isLive ? (
                     <>
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
-                      </span>
-                      <span className="text-emerald-300">Ready to play</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden />
+                      <span className="text-[11.5px] text-graphite-300">Ready</span>
                     </>
                   ) : (
                     <>

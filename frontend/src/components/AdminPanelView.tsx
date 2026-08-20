@@ -109,14 +109,10 @@ export function AdminPanelView({
       </div>
 
       <header className="card-glass relative overflow-hidden p-6 md:p-8">
-        <div
-          aria-hidden
-          className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-cyan-500/25 via-brand-500/15 to-transparent blur-3xl"
-        />
         <div className="relative">
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
             Admin{" "}
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-cyan-300 via-brand-400 to-fuchsia-400 animate-gradient-shift bg-[length:200%_200%]">
+            <span className="bg-clip-text text-transparent text-brand-400">
               Panel
             </span>
           </h1>
@@ -130,7 +126,7 @@ export function AdminPanelView({
       <div
         role="tablist"
         aria-label="Admin sections"
-        className="sticky top-[68px] z-20 -mx-2 px-2 py-2 bg-zinc-950/70 backdrop-blur-xl border-b border-zinc-800/60 flex items-center gap-1.5 overflow-x-auto"
+        className="sticky top-[68px] z-20 -mx-2 px-2 py-2 bg-[#0b0c0d] border-b border-[var(--hairline)] flex items-center gap-1.5 overflow-x-auto"
       >
         {TABS.map((tab) => {
           const Icon = tab.icon;

@@ -94,7 +94,7 @@ function ParticipantChip({
       <Avatar
         src={participant.avatar_url}
         name={participantLabel(participant)}
-        className="w-8 h-8 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white"
+        className="w-8 h-8 bg-[var(--raised)] border border-[var(--hairline-strong)] text-xs font-semibold text-white"
       />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-zinc-100 truncate">
@@ -747,13 +747,9 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         </div>
 
         <header className="card-glass relative overflow-hidden p-6 md:p-8">
-          <div
-            aria-hidden
-            className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-violet-500/25 via-fuchsia-500/15 to-transparent blur-3xl"
-          />
           <div className="relative">
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-fuchsia-400 to-pink-400 animate-gradient-shift bg-[length:200%_200%]">
+              <span className="bg-clip-text text-transparent text-brand-400">
                 Debate
               </span>
             </h1>
@@ -773,7 +769,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
           <div className="card-glass p-6 md:p-7 space-y-4">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-500 shadow-glow-sm flex items-center justify-center">
+              <div className="w-10 h-10 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center">
                 <MessageSquareText className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -852,7 +848,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
 
           <div className="card-glass p-6 md:p-7 space-y-4">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-500 to-brand-500 shadow-glow-sm flex items-center justify-center">
+              <div className="w-10 h-10 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center">
                 <Users className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -1521,7 +1517,7 @@ export function DebateArenaView({ onBack }: DebateArenaViewProps) {
                   <Avatar
                     src={p.avatar_url}
                     name={participantLabel(p)}
-                    className="w-9 h-9 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white"
+                    className="w-9 h-9 bg-[var(--raised)] border border-[var(--hairline-strong)] text-xs font-semibold text-white"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-zinc-100 truncate">

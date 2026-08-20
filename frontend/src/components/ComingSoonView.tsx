@@ -28,10 +28,6 @@ export function ComingSoonView({
       </button>
 
       <section className="card-glass relative overflow-hidden p-8 md:p-12">
-        <div
-          aria-hidden
-          className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-amber-500/30 to-orange-600/15 blur-3xl"
-        />
 
         <div className="relative max-w-2xl">
           <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-full">

@@ -207,11 +207,11 @@ export function AdminLeaderboardView({ limit = 10 }: AdminLeaderboardViewProps) 
               >
                 <div
                   aria-hidden
-                  className={`absolute -top-12 -right-12 h-28 w-28 rounded-full bg-gradient-to-br ${theme.badge} opacity-30 blur-2xl`}
+                  className={`absolute -top-12 -right-12 h-28 w-28 rounded-full `}
                 />
                 <div className="relative flex items-center gap-3">
                   <div
-                    className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${theme.badge} shadow-glow-sm flex items-center justify-center text-white`}
+                    className={`w-12 h-12 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] flex items-center justify-center text-white`}
                   >
                     <Icon className="w-5 h-5" />
                   </div>
@@ -270,7 +270,7 @@ export function AdminLeaderboardView({ limit = 10 }: AdminLeaderboardViewProps) 
                   <div className="w-9 text-center text-sm font-semibold tabular-nums text-zinc-400">
                     #{rank}
                   </div>
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-brand-500 to-fuchsia-500 shadow-glow-sm flex items-center justify-center text-xs font-semibold text-white shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center text-xs font-semibold text-white shrink-0">
                     {initialsFor(entry.display_name, entry.email)}
                   </div>
                   <div className="flex-1 min-w-0">

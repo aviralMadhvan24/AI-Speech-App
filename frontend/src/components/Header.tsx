@@ -1,4 +1,18 @@
-import { LogOut, Sparkles } from "lucide-react";
+/**
+ * The application header.
+ *
+ * Was a 40px rounded square filled with an indigo-to-fuchsia gradient, sitting
+ * under a second copy of itself blurred at 60% opacity to fake a glow, with a
+ * Sparkles icon in the middle — the exact logo a project ends up with when
+ * nobody drew one.
+ *
+ * The replacement is a wordmark. Two letters set in the accent inside a plain
+ * bordered square reads as an identity rather than as a placeholder, costs no
+ * blur layers, and stays legible at any size. The bar itself is opaque: a
+ * translucent blurred header means every line of text scrolling underneath it
+ * shows through the product's own name.
+ */
+import { LogOut } from "lucide-react";
 import type { AuthUser } from "../types";
 import { Avatar } from "./Avatar";
 
@@ -19,41 +33,38 @@ export function Header({ user, onSignOut, onLogoClick }: HeaderProps) {
     : "";
 
   return (
-    <header className="sticky top-0 z-30 backdrop-blur-2xl bg-zinc-950/60 border-b border-zinc-800/60">
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-30 bg-[#0b0c0d] border-b border-[var(--hairline)]">
+      <div className="max-w-6xl mx-auto px-5 h-14 flex items-center justify-between gap-4">
         <button
           type="button"
           onClick={onLogoClick}
           aria-label="Go to main menu"
-          className="flex items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-xl"
+          className="flex items-center gap-2.5 rounded"
         >
-          <div className="relative">
-            <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-brand-500 to-fuchsia-500 blur-md opacity-60" />
-            <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-brand-600 to-fuchsia-600 flex items-center justify-center shadow-glow-sm">
-              <Sparkles className="w-5 h-5 text-white" strokeWidth={2.4} />
-            </div>
-          </div>
-          <div className="leading-tight text-left">
-            <div className="font-bold text-zinc-100 tracking-tight">
+          <span className="w-7 h-7 rounded-[5px] border border-brand-500/45 bg-brand-500/10 flex items-center justify-center">
+            <span className="text-[11px] font-bold tracking-tight text-brand-400">
+              SS
+            </span>
+          </span>
+          <span className="leading-none text-left">
+            <span className="block text-[13px] font-semibold text-graphite-100 tracking-tight">
               Soft Skills Studio
-            </div>
-            <div className="text-xs text-zinc-500">
-              KIET communication platform
-            </div>
-          </div>
+            </span>
+            <span className="block eyebrow mt-1">KIET</span>
+          </span>
         </button>
 
         <div className="flex items-center gap-2">
           {user ? (
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:flex items-center gap-2 rounded-full bg-zinc-900/60 border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300">
+            <>
+              <div className="hidden sm:flex items-center gap-2 rounded-md bg-[var(--raised)] border border-[var(--hairline)] pl-1 pr-2.5 py-1">
                 <Avatar
                   src={user.avatarUrl}
                   name={user.displayName || user.email}
-                  className="w-6 h-6 bg-gradient-to-br from-brand-500 to-fuchsia-500 text-[10px] font-semibold text-white"
+                  className="w-5 h-5 rounded bg-brand-500/15 text-[9px] font-bold text-brand-300"
                   fallback={initials}
                 />
-                <span className="tracking-wide text-zinc-300 max-w-[200px] truncate">
+                <span className="text-[11.5px] text-graphite-300 max-w-[190px] truncate">
                   {user.email}
                 </span>
               </div>
@@ -61,20 +72,19 @@ export function Header({ user, onSignOut, onLogoClick }: HeaderProps) {
                 type="button"
                 onClick={onSignOut}
                 aria-label="Sign out"
-                className="btn-ghost inline-flex items-center gap-2 px-3 py-1.5 text-xs"
+                className="btn-ghost px-2.5 py-1.5 text-[11.5px]"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Sign out</span>
               </button>
-            </div>
+            </>
           ) : (
-            <div className="flex items-center gap-2 rounded-full bg-zinc-900/60 border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-              </span>
-              <span className="tracking-wide">Local · Private</span>
-            </div>
+            /* A pinging green dot claims something is happening. Nothing is —
+               it is a static fact about where the app runs, so it is stated. */
+            <span className="flex items-center gap-1.5 rounded-md bg-[var(--raised)] border border-[var(--hairline)] px-2.5 py-1 text-[11px] text-graphite-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden />
+              Local · Private
+            </span>
           )}
         </div>
       </div>

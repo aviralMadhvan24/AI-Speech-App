@@ -20,8 +20,8 @@ export function MicButton({ isRecording, onClick, disabled }: MicButtonProps) {
         "text-white transition-all duration-200 ease-out",
         "active:scale-[0.95] disabled:opacity-50 disabled:cursor-not-allowed",
         isRecording
-          ? "bg-gradient-to-br from-rose-600 to-rose-500 shadow-glow-rose"
-          : "bg-gradient-to-br from-brand-600 to-brand-500 shadow-glow animate-glow-pulse hover:scale-[1.03]",
+          ? "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-rose"
+          : "bg-brand-500 text-[#1a1300] shadow-glow hover:bg-brand-400",
       ].join(" ")}
     >
       {isRecording && (

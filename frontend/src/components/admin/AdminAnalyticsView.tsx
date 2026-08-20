@@ -211,35 +211,30 @@ export function AdminAnalyticsView() {
               icon={Users}
               label="Students"
               value={analytics.student_count}
-              tint="from-brand-600/25 to-transparent"
               accent="text-brand-300"
             />
             <StatCard
               icon={UserCheck}
               label="Teachers"
               value={analytics.teacher_count}
-              tint="from-emerald-500/20 to-transparent"
               accent="text-emerald-300"
             />
             <StatCard
               icon={ClipboardList}
               label="Submissions"
               value={analytics.submissions_total}
-              tint="from-fuchsia-500/20 to-transparent"
               accent="text-fuchsia-300"
             />
             <StatCard
               icon={Hourglass}
               label="Pending"
               value={analytics.submissions_pending}
-              tint="from-rose-500/20 to-transparent"
               accent="text-rose-300"
             />
             <StatCard
               icon={CheckCircle2}
               label="Reviewed"
               value={analytics.submissions_reviewed}
-              tint="from-emerald-500/20 to-transparent"
               accent="text-emerald-300"
             />
             <StatCard
@@ -255,7 +250,6 @@ export function AdminAnalyticsView() {
                   ? "/100"
                   : undefined
               }
-              tint="from-amber-500/20 to-transparent"
               accent="text-amber-300"
             />
           </section>
@@ -308,7 +302,6 @@ interface StatCardProps {
   label: string;
   value: number | string;
   suffix?: string;
-  tint: string;
   accent: string;
 }
 
@@ -317,15 +310,10 @@ function StatCard({
   label,
   value,
   suffix,
-  tint,
   accent,
 }: StatCardProps) {
   return (
-    <div className="card-glass relative overflow-hidden p-4">
-      <div
-        aria-hidden
-        className={`absolute -top-12 -right-12 h-32 w-32 rounded-full bg-gradient-to-br ${tint} blur-2xl`}
-      />
+    <div className="card-glass p-4">
       <div className="relative">
         <div className={`inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-semibold ${accent}`}>
           <Icon className="w-3.5 h-3.5" />

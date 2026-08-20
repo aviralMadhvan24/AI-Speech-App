@@ -52,10 +52,6 @@ export function LoginView({
     >
       <div className="w-full max-w-md">
         <div className="card-glass relative overflow-hidden p-8 md:p-10">
-          <div
-            aria-hidden
-            className="absolute -top-20 -right-20 h-48 w-48 rounded-full bg-gradient-to-br from-brand-500/40 to-fuchsia-600/30 blur-3xl"
-          />
 
           <div className="relative">
             <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-brand-300 bg-brand-500/10 border border-brand-500/30 px-3 py-1 rounded-full">

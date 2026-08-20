@@ -186,7 +186,6 @@ export function PracticeView({
             Read this aloud
           </div>
           <div className="relative w-full max-w-3xl">
-            <div className="absolute inset-0 -m-4 rounded-3xl bg-gradient-to-br from-brand-500/10 via-fuchsia-500/5 to-transparent blur-2xl pointer-events-none" />
             <p className="relative text-3xl md:text-4xl font-bold text-zinc-100 leading-snug tracking-tight">
               {sentence?.text ?? "No sentences available."}
             </p>

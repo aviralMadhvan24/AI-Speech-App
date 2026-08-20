@@ -2,9 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * "Graphite & Signal" — see tailwind.config.js for the direction and why.
+ *
+ * The component classes below keep their old NAMES on purpose. `card-glass` is
+ * used 176 times across 36 files, `btn-ghost` 45 times, `btn-primary` 39. By
+ * redefining them here rather than renaming them, the whole application moves
+ * to the new language at once and the alternative — editing 36 files by hand —
+ * cannot half-land the way a partial migration does.
+ *
+ * `card-glass` is now a misnomer: there is no glass left in it. The name is
+ * kept because a rename buys nothing and risks missing a file.
+ */
+
 @layer base {
   :root {
     color-scheme: dark;
+
+    /* One place that decides what the surfaces are. */
+    --ground: #0b0c0d;
+    --surface: #131416;
+    --raised: #1a1c1f;
+    --inset: #0e0f11;
+    --hairline: rgba(255, 255, 255, 0.08);
+    --hairline-strong: rgba(255, 255, 255, 0.14);
+    --ink: #e6e7ea;
+    --ink-muted: #a2a6ad;
+    --ink-faint: #767a83;
+    --signal: #e0a62f;
   }
 
   html,
@@ -14,169 +39,207 @@
   }
 
   body {
+    background: var(--ground);
+    color: var(--ink);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
-  /* Noise overlay applied via pseudo-element on body. */
-  body::after {
+  /*
+   * A single hairline grid, fixed behind everything. It replaces three
+   * drifting blurred orbs. The orbs moved constantly and meant nothing; this
+   * is static, nearly invisible, and gives the dark ground a sense of
+   * structure rather than of empty space.
+   */
+  body::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
-    z-index: -5;
-    opacity: 0.025;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.7 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    z-index: -10;
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 100% 70% at 50% 0%, black 30%, transparent 78%);
+    -webkit-mask-image: radial-gradient(
+      ellipse 100% 70% at 50% 0%,
+      black 30%,
+      transparent 78%
+    );
+  }
+
+  ::selection {
+    background: rgba(224, 166, 47, 0.28);
+    color: #fff;
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(82, 82, 91, 0.45);
-    border-radius: 999px;
-    border: 2px solid transparent;
+    background: rgba(118, 122, 131, 0.35);
+    border-radius: 2px;
+    border: 3px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(113, 113, 122, 0.7);
+    background: rgba(162, 166, 173, 0.5);
     background-clip: padding-box;
-    border: 2px solid transparent;
+  }
+
+  /* One visible focus treatment everywhere, in the accent. */
+  :focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 2px;
   }
 }
 
 @layer components {
+  /*
+   * The workhorse surface. Was: 45%-opacity zinc behind a 20px backdrop blur,
+   * a 50px black shadow and a fuchsia-to-indigo gradient hairline across the
+   * top edge. Now: an opaque panel with one border.
+   *
+   * Translucency is why the old cards were hard to read — 12px text sat on
+   * whatever happened to be scrolling behind it, and the blur cost a composite
+   * layer per card.
+   */
   .card-glass {
     position: relative;
-    background: rgba(24, 24, 27, 0.45);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(39, 39, 42, 0.7);
-    border-radius: 1rem;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-    overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   }
-  .card-glass::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 auto 0;
-    height: 1px;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(129, 140, 248, 0.5) 20%,
-      rgba(232, 121, 249, 0.4) 50%,
-      rgba(129, 140, 248, 0.5) 80%,
-      transparent 100%
-    );
-    pointer-events: none;
+
+  /* A panel that leads a screen: one accent rule along the top edge. */
+  .card-lead {
+    border-top: 2px solid var(--signal);
+  }
+
+  /* Recessed. Reads as "this contains data" rather than "this is a thing". */
+  .card-inset {
+    background: var(--inset);
+    border: 1px solid var(--hairline);
+    border-radius: 0.375rem;
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold text-sm transition-all duration-200 ease-out active:scale-[0.97] select-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 font-semibold text-[13px] leading-tight transition-colors duration-100 select-none;
   }
 
+  /*
+   * The one loud element on a screen. Flat gold — no gradient, no glow, no
+   * shimmer sweep on hover. If two of these are visible at once, one of them
+   * is not the primary action.
+   */
   .btn-primary {
-    @apply btn relative overflow-hidden text-white;
-    background-image: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
-    box-shadow:
-      0 0 18px -4px rgba(99, 102, 241, 0.5),
-      0 0 6px -1px rgba(99, 102, 241, 0.35);
+    @apply btn text-[#1a1300];
+    background: var(--signal);
+    border: 1px solid var(--signal);
   }
-  .btn-primary::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255, 255, 255, 0.25) 50%,
-      transparent 100%
-    );
-    transform: translateX(-100%);
-    transition: transform 0s;
-    pointer-events: none;
+  .btn-primary:hover:not(:disabled) {
+    background: #f0bb4a;
+    border-color: #f0bb4a;
   }
-  .btn-primary:hover {
-    background-image: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
-    box-shadow:
-      0 0 32px -4px rgba(99, 102, 241, 0.7),
-      0 0 14px -2px rgba(99, 102, 241, 0.5);
-  }
-  .btn-primary:hover::before {
-    animation: shimmer-sweep 2.5s linear infinite;
-  }
-
-  @keyframes shimmer-sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(200%);
-    }
-  }
-
-  .btn-danger {
-    @apply btn relative overflow-hidden text-white;
-    background-image: linear-gradient(135deg, #e11d48 0%, #f43f5e 100%);
-    box-shadow:
-      0 0 18px -4px rgba(244, 63, 94, 0.5),
-      0 0 6px -1px rgba(244, 63, 94, 0.35);
-  }
-  .btn-danger:hover {
-    background-image: linear-gradient(135deg, #f43f5e 0%, #fb7185 100%);
-    box-shadow:
-      0 0 32px -4px rgba(244, 63, 94, 0.7),
-      0 0 14px -2px rgba(244, 63, 94, 0.5);
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .btn-ghost {
-    @apply btn bg-zinc-900/60 border border-zinc-800 text-zinc-200 hover:bg-zinc-800/60 hover:border-zinc-700;
+    @apply btn text-[#e6e7ea];
+    background: var(--raised);
+    border: 1px solid var(--hairline-strong);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: #22252a;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .btn-ghost:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /*
+   * Destructive is outlined, not filled. A solid red button is as visually
+   * loud as the primary action, which is exactly backwards for the thing you
+   * want people to press by accident least often.
+   */
+  .btn-danger {
+    @apply btn text-[#e0705f];
+    background: transparent;
+    border: 1px solid rgba(224, 112, 95, 0.45);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: rgba(224, 112, 95, 0.1);
+    border-color: rgba(224, 112, 95, 0.7);
   }
 
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest;
+    @apply inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em];
   }
 
   .chip-brand {
-    @apply chip bg-brand-500/10 text-brand-400 border border-brand-500/30;
+    @apply chip;
+    background: rgba(224, 166, 47, 0.1);
+    color: #f2c765;
+    border: 1px solid rgba(224, 166, 47, 0.3);
   }
 
   .chip-emerald {
-    @apply chip bg-emerald-500/10 text-emerald-300 border border-emerald-500/30;
+    @apply chip;
+    background: rgba(87, 168, 119, 0.1);
+    color: #6fbb8d;
+    border: 1px solid rgba(87, 168, 119, 0.3);
   }
 
   .chip-zinc {
-    @apply chip bg-zinc-800/60 text-zinc-300 border border-zinc-700/60;
+    @apply chip;
+    background: var(--raised);
+    color: var(--ink-muted);
+    border: 1px solid var(--hairline-strong);
   }
 
+  /*
+   * Was an animated indigo-to-fuchsia gradient sweeping across the text every
+   * six seconds. Gradient-filled type is the single clearest signature of a
+   * generated interface, and moving type is unreadable while it moves.
+   * Now it is simply emphasis.
+   */
   .gradient-text {
-    background: linear-gradient(
-      90deg,
-      #a5b4fc 0%,
-      #818cf8 25%,
-      #c084fc 50%,
-      #818cf8 75%,
-      #a5b4fc 100%
-    );
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    animation: gradient-shift 6s ease-in-out infinite;
+    color: var(--ink);
+    font-weight: 700;
+    letter-spacing: -0.022em;
   }
 
   .gradient-text-score {
-    background: linear-gradient(135deg, #818cf8 0%, #c084fc 50%, #f0abfc 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: var(--signal);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+  }
+
+  /* The small uppercase label that sits above a figure or a section. */
+  .eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.09em];
+    color: var(--ink-faint);
+  }
+
+  /* Section rule: a label with a hairline running to the end of the row. */
+  .rule {
+    @apply flex items-center gap-3;
+  }
+  .rule::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--hairline);
   }
 }
 
@@ -192,5 +255,15 @@
   .mask-fade-right {
     -webkit-mask-image: linear-gradient(to right, black 70%, transparent);
     mask-image: linear-gradient(to right, black 70%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

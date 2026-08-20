@@ -117,12 +117,8 @@ export function AdminStudentDetailView({
       {detail && (
         <>
           <header className="card-glass relative overflow-hidden p-6 md:p-8">
-            <div
-              aria-hidden
-              className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-brand-600/25 via-fuchsia-600/15 to-transparent blur-3xl"
-            />
             <div className="relative flex items-center gap-4 flex-wrap">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-fuchsia-500 shadow-glow-sm flex items-center justify-center text-xl font-semibold text-white">
+              <div className="w-16 h-16 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center text-xl font-semibold text-white">
                 {initialsFor(detail.display_name, detail.email)}
               </div>
               <div className="flex-1 min-w-0">

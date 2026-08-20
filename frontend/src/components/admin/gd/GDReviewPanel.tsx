@@ -333,10 +333,6 @@ export function GDReviewPanel({ sessionId, onBack }: GDReviewPanelProps) {
       {session && (
         <>
           <header className="card-glass relative overflow-hidden p-6 md:p-8 space-y-3">
-            <div
-              aria-hidden
-              className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-emerald-500/25 via-brand-500/15 to-transparent blur-3xl"
-            />
             <div className="relative flex items-center gap-3 flex-wrap">
               <span className="chip bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
                 <Users2 className="w-3 h-3" />
@@ -542,7 +538,7 @@ export function GDReviewPanel({ sessionId, onBack }: GDReviewPanelProps) {
             <ul className="space-y-2" role="list">
               {speeches.map((speech, idx) => (
                 <li key={speech.speech_id} className="card-glass p-3 flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-brand-500 flex items-center justify-center text-xs font-semibold text-white shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-[var(--raised)] border border-[var(--hairline-strong)] flex items-center justify-center text-xs font-semibold text-white shrink-0">
                     {speech.display_name.charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">

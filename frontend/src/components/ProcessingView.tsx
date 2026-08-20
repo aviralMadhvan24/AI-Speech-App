@@ -42,7 +42,7 @@ export function ProcessingView() {
       <section className="card-glass p-10 md:p-14 flex flex-col items-center gap-10">
         <div className="relative w-32 h-32">
           <div
-            className="absolute inset-0 rounded-full animate-spin-slow"
+            className="absolute inset-0 rounded-full animate-spin [animation-duration:8s]"
             style={{
               background:
                 "conic-gradient(from 0deg, transparent 0deg, transparent 200deg, #818cf8 320deg, #6366f1 360deg)",
@@ -54,7 +54,6 @@ export function ProcessingView() {
           <div className="absolute inset-2 rounded-full bg-zinc-950 flex items-center justify-center">
             <Sparkles className="w-8 h-8 text-brand-300" strokeWidth={2.4} />
           </div>
-          <div className="absolute inset-0 rounded-full bg-brand-500/20 blur-2xl -z-10" />
         </div>
 
         <div className="text-center space-y-2">
@@ -89,7 +88,7 @@ export function ProcessingView() {
                     isDone
                       ? "bg-emerald-500/20 text-emerald-300"
                       : isActive
-                        ? "bg-brand-500/20 text-brand-300 animate-glow-pulse"
+                        ? "bg-brand-500/15 text-brand-300 border border-brand-500/40"
                         : "bg-zinc-800/60 text-zinc-500",
                   ].join(" ")}
                 >

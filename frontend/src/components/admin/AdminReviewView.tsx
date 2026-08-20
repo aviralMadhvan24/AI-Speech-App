@@ -612,7 +612,7 @@ function AIBodyLanguageCard({ average, metrics }: AIBodyLanguageCardProps) {
                   </div>
                   <div className="mt-1 h-1.5 rounded-full bg-zinc-900/80 border border-zinc-800/70 overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500"
+                      className="h-full bg-brand-500"
                       style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
                     />
                   </div>

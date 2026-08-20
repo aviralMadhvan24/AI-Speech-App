@@ -144,8 +144,6 @@ export function BattleResultView({
   return (
     <div key="battle-result" className="animate-fade-in-up space-y-6">
       <section className="card-glass p-8 md:p-10 relative overflow-hidden text-center">
-        <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-fuchsia-500/15 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 w-72 h-72 rounded-full bg-brand-500/15 blur-3xl pointer-events-none" />
         <div className="relative flex flex-col items-center gap-4">
           <span className="chip bg-fuchsia-500/10 text-fuchsia-300 border border-fuchsia-500/30">
             <Trophy className="w-3 h-3" />
@@ -153,7 +151,7 @@ export function BattleResultView({
           </span>
           <h1
             className={[
-              "text-5xl md:text-6xl font-black tracking-tight bg-gradient-to-br bg-clip-text text-transparent",
+              "text-5xl md:text-6xl font-black tracking-tight text-brand-400",
               toneClasses,
             ].join(" ")}
           >

@@ -207,7 +207,7 @@ export function AdminStudentsView({ onOpenStudent }: AdminStudentsViewProps) {
                 style={{ animationDelay: `${idx * 50}ms` }}
                 className="card-glass p-4 md:p-5 flex items-center gap-4 animate-fade-in-up hover:-translate-y-0.5 transition"
               >
-                <div className="w-11 h-11 rounded-full bg-gradient-to-br from-brand-500 to-fuchsia-500 shadow-glow-sm flex items-center justify-center text-sm font-semibold text-white shrink-0">
+                <div className="w-11 h-11 rounded-full bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center text-sm font-semibold text-white shrink-0">
                   {initialsFor(s.display_name, s.email)}
                 </div>
 

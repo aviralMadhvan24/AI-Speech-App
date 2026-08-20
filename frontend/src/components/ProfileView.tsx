@@ -326,15 +326,11 @@ export function ProfileView({ user, onBack, onAvatarChange, onOpenDebateResult, 
 
       {/* User info card */}
       <section className="card-glass relative overflow-hidden p-6 md:p-8">
-        <div
-          aria-hidden
-          className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-violet-500/25 via-fuchsia-500/15 to-transparent blur-3xl"
-        />
         <div className="relative flex items-center gap-4">
           <div className="relative group">
             <div
               className={[
-                "w-16 h-16 rounded-full overflow-hidden bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-2xl font-bold text-white ring-2",
+                "w-16 h-16 rounded-full overflow-hidden bg-[var(--raised)] border border-[var(--hairline-strong)] flex items-center justify-center text-2xl font-bold text-white ring-2",
                 previewUrl ? "ring-brand-400/70" : "ring-white/10",
               ].join(" ")}
             >

@@ -7,7 +7,7 @@ interface AvatarProps {
   name?: string | null;
   /**
    * Sizing + color classes for the circle container, e.g.
-   * "w-10 h-10 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white".
+   * "w-10 h-10 bg-[var(--raised)] border border-[var(--hairline-strong)] text-white".
    * Keep width/height here so callers control the size.
    */
   className?: string;

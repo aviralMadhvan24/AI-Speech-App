@@ -80,7 +80,7 @@ function ParticipantCard({
         <Avatar
           src={participant.avatar_url}
           name={participant.display_name}
-          className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-cyan-500 text-xs font-semibold text-white"
+          className="w-9 h-9 bg-[var(--raised)] border border-[var(--hairline-strong)] text-xs font-semibold text-white"
         />
         {participant.is_currently_speaking && (
           <span className="absolute -top-1 -right-1 flex h-3 w-3">
@@ -471,14 +471,10 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
         </div>
 
         <header className="card-glass relative overflow-hidden p-6 md:p-8">
-          <div
-            aria-hidden
-            className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-emerald-500/25 via-cyan-500/15 to-transparent blur-3xl"
-          />
           <div className="relative">
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
               Group{" "}
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-300 via-cyan-400 to-blue-400 animate-gradient-shift bg-[length:200%_200%]">
+              <span className="bg-clip-text text-transparent text-brand-400">
                 Discussion
               </span>
             </h1>
@@ -498,7 +494,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
           <div className="card-glass p-6 md:p-7 space-y-4">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 shadow-glow-sm flex items-center justify-center">
+              <div className="w-10 h-10 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center">
                 <MessageCircle className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -573,7 +569,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
 
           <div className="card-glass p-6 md:p-7 space-y-4">
             <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-500 to-brand-500 shadow-glow-sm flex items-center justify-center">
+              <div className="w-10 h-10 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm flex items-center justify-center">
                 <Users className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -1003,7 +999,7 @@ export function GDArenaView({ onBack }: GDArenaViewProps) {
 
         {/* Recording indicator (Egress handles recording automatically) */}
         <div className="flex flex-col items-center gap-3">
-          <div className="w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border-2 border-emerald-500/40 animate-pulse">
+          <div className="w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center bg-emerald-500/10 border border-emerald-500/40">
             <div className="flex flex-col items-center gap-1 text-emerald-300">
               <Mic className="w-8 h-8" />
               <span className="text-xs font-semibold">RECORDING</span>

@@ -440,10 +440,6 @@ export function DebateReviewPanel({
       {record && (
         <>
           <header className="card-glass relative overflow-hidden p-6 md:p-8 space-y-3">
-            <div
-              aria-hidden
-              className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-violet-500/25 via-fuchsia-500/15 to-transparent blur-3xl"
-            />
             <div className="relative flex items-center gap-3 flex-wrap">
               <span className="chip bg-violet-500/10 text-violet-300 border border-violet-500/30">
                 <MessageSquareText className="w-3 h-3" />
@@ -508,7 +504,7 @@ export function DebateReviewPanel({
                     ].join(" ")}
                   >
                     <div className="flex items-center gap-3 flex-wrap">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-sm font-semibold text-white shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-[var(--raised)] border border-[var(--hairline-strong)] flex items-center justify-center text-sm font-semibold text-white shrink-0">
                         {speaker.charAt(0).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">

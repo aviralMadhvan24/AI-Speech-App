@@ -749,14 +749,10 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
       </div>
 
       <header className="card-glass relative overflow-hidden p-6 md:p-8">
-        <div
-          aria-hidden
-          className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-amber-500/25 via-orange-500/15 to-transparent blur-3xl"
-        />
         <div className="relative">
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
             Interview{" "}
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-amber-300 via-orange-400 to-rose-400 animate-gradient-shift bg-[length:200%_200%]">
+            <span className="bg-clip-text text-transparent text-brand-400">
               Studio
             </span>
           </h1>
@@ -991,7 +987,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
             <div className="max-w-md mx-auto">
               <div className="h-2 rounded-full bg-zinc-900/80 border border-zinc-800/60 overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 transition-[width] duration-150"
+                  className="h-full bg-brand-500 transition-[width] duration-150"
                   style={{ width: `${analyzeProgress}%` }}
                 />
               </div>
@@ -1168,7 +1164,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
 
       {stage === "submitted" && (
         <section className="card-glass p-8 md:p-12 text-center space-y-4">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-500 to-fuchsia-500 shadow-glow-sm mx-auto">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-glow-sm mx-auto">
             <UserCheck className="w-7 h-7 text-white" />
           </div>
           <h2 className="text-2xl font-semibold text-zinc-100">
@@ -1238,14 +1234,6 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
       {stage === "complete" && (
         <section className="space-y-6">
           <header className="card-glass relative overflow-hidden p-6 md:p-10">
-            <div
-              aria-hidden
-              className="absolute -top-24 -right-24 h-72 w-72 rounded-full bg-gradient-to-br from-amber-500/30 via-rose-500/15 to-transparent blur-3xl"
-            />
-            <div
-              aria-hidden
-              className="absolute -bottom-20 -left-20 h-56 w-56 rounded-full bg-gradient-to-tr from-brand-500/20 to-transparent blur-3xl"
-            />
             <div className="relative grid md:grid-cols-[1fr_auto] gap-6 items-center">
               <div>
                 <div
@@ -1319,7 +1307,7 @@ export function InterviewStudioView({ onBack }: InterviewStudioViewProps) {
                         </div>
                         <div className="mt-1 h-1.5 rounded-full bg-zinc-900/80 border border-zinc-800/70 overflow-hidden">
                           <div
-                            className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500"
+                            className="h-full bg-brand-500"
                             style={{ width: `${g.value}%` }}
                           />
                         </div>

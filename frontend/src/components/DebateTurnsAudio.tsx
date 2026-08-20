@@ -150,7 +150,7 @@ export function DebateTurnsAudio({
               <Avatar
                 src={avatarByParticipant[turn.participant_id]}
                 name={turn.display_name}
-                className="w-8 h-8 bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-semibold text-white"
+                className="w-8 h-8 bg-[var(--raised)] border border-[var(--hairline-strong)] text-xs font-semibold text-white"
               />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-zinc-100 truncate">
