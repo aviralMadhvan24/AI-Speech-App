@@ -298,8 +298,12 @@ echo ""
 #           root * /home/ubuntu/softskills2/frontend/dist
 #           file_server
 #       }
+#       # A new API prefix missing from this list does not 404 — it falls
+#       # through to the SPA handler below and returns index.html with a 200,
+#       # so the client sees HTML where it expected JSON. Add the prefix here
+#       # whenever a router gains one.
 #       @backend {
-#           path /admin* /analyze* /attempts* /auth* /battle* /debate* /gd* /health* /interview* /potd* /profile* /livekit* /uploads* /outputs* /ws* /docs* /redoc* /openapi.json
+#           path /admin* /analyze* /attempts* /auth* /battle* /buddy* /debate* /gd* /health* /interview* /potd* /profile* /livekit* /uploads* /outputs* /ws* /docs* /redoc* /openapi.json
 #       }
 #       handle @backend {
 #           reverse_proxy localhost:8000
