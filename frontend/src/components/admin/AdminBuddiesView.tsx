@@ -207,7 +207,7 @@ function SpeakerRow({
   ].filter(Boolean);
 
   return (
-    <div className="card-glass p-4 flex items-center gap-3 flex-wrap">
+    <div className="c-panel p-3.5 flex items-center gap-3 flex-wrap">
       <div className="flex-1 min-w-[200px]">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-zinc-100 truncate">
@@ -450,7 +450,7 @@ export function AdminBuddiesView() {
 
   if (loading) {
     return (
-      <div className="card-glass p-8 flex items-center justify-center">
+      <div className="c-panel p-8 flex items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-brand-300" />
       </div>
     );
@@ -550,7 +550,7 @@ export function AdminBuddiesView() {
           Create a pairing
         </h2>
 
-        <div className="card-glass p-4 space-y-3">
+        <div className="c-panel p-3.5 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="space-y-1.5">
               <span className="text-xs uppercase tracking-widest text-zinc-500">
@@ -561,7 +561,7 @@ export function AdminBuddiesView() {
                 value={mentorEmail}
                 onChange={(event) => setMentorEmail(event.target.value)}
                 placeholder="approved.mentor@example.com"
-                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-brand-500/60"
+                className="c-input"
               />
               <datalist id="buddy-approved-mentors">
                 {approvedMentors.map((mentor) => (
@@ -580,7 +580,7 @@ export function AdminBuddiesView() {
                 value={menteeEmail}
                 onChange={(event) => setMenteeEmail(event.target.value)}
                 placeholder="student@example.com"
-                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-brand-500/60"
+                className="c-input"
               />
             </label>
           </div>
@@ -595,7 +595,7 @@ export function AdminBuddiesView() {
               <select
                 value={cycleWeeks}
                 onChange={(event) => setCycleWeeks(Number(event.target.value))}
-                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+                className="c-select"
               >
                 {[2, 4, 6, 8, 12].map((weeks) => (
                   <option key={weeks} value={weeks}>
@@ -615,7 +615,7 @@ export function AdminBuddiesView() {
                 onChange={(event) => setCycleGoal(event.target.value)}
                 placeholder="Speak for two minutes without filler words"
                 disabled={cycleWeeks === 0}
-                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-brand-500/60 disabled:opacity-40"
+                className="c-input"
               />
             </label>
           </div>
@@ -631,7 +631,7 @@ export function AdminBuddiesView() {
             type="button"
             onClick={() => void handleCreatePair()}
             disabled={pairing || !mentorEmail.trim() || !menteeEmail.trim()}
-            className="btn-primary inline-flex items-center gap-2 px-4 py-2 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+            className="c-btn c-btn-primary"
           >
             {pairing ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -658,7 +658,7 @@ export function AdminBuddiesView() {
         </div>
 
         {pairs.length === 0 ? (
-          <div className="card-glass p-6 text-sm text-zinc-500 text-center">
+          <div className="c-panel c-empty">
             No pairings yet.
           </div>
         ) : (
@@ -669,7 +669,7 @@ export function AdminBuddiesView() {
               return (
                 <div
                   key={pair.pair_id}
-                  className={`card-glass p-4 flex items-center gap-3 flex-wrap ${ended ? "opacity-60" : ""}`}
+                  className={`c-panel p-3.5 flex items-center gap-3 flex-wrap ${ended ? "opacity-55" : ""}`}
                 >
                   <div className="flex-1 min-w-[220px]">
                     <div className="flex items-center gap-2 flex-wrap text-sm">

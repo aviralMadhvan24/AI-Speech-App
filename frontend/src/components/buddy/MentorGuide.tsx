@@ -34,44 +34,40 @@ const STEPS = [
 
 export function MentorGuide({ menteeCount }: { menteeCount: number }) {
   return (
-    <section className="card-glass relative overflow-hidden p-5 md:p-6 space-y-4">
-      <div
-        aria-hidden
-        className="absolute -top-20 -right-20 h-44 w-44 rounded-full bg-gradient-to-br from-emerald-500/20 via-teal-500/10 to-transparent blur-3xl"
-      />
-      <div className="relative">
-        <span className="text-[10px] uppercase tracking-widest text-emerald-300">
+    <section className="c-panel p-4 md:p-5 space-y-4">
+      <div>
+        <span className="c-label text-[var(--c-accent-text)]">
           You're a mentor now
         </span>
-        <h2 className="text-xl font-semibold text-zinc-100 mt-1">
+        <h2 className="text-[15px] font-semibold text-[var(--c-text)] mt-1.5">
           {menteeCount === 1
             ? "One student is counting on you"
             : `${menteeCount} students are counting on you`}
         </h2>
-        <p className="text-sm text-zinc-400 mt-1 max-w-2xl leading-relaxed">
+        <p className="text-[12.5px] text-[var(--c-muted)] mt-1.5 max-w-2xl leading-relaxed">
           You were picked because your own scores hold up. Here's the part the
           scores don't teach — it takes about a week to get a pairing moving.
         </p>
       </div>
 
-      <ol className="relative grid gap-3 sm:grid-cols-2">
+      <ol className="grid gap-3 sm:grid-cols-2">
         {STEPS.map(({ icon: Icon, title, body }, index) => (
           <li key={title} className="flex gap-3">
-            <div className="w-8 h-8 rounded-xl bg-zinc-800/80 flex items-center justify-center shrink-0">
-              <Icon className="w-4 h-4 text-teal-300" />
+            <div className="w-7 h-7 rounded-[4px] bg-[var(--c-raised)] border border-[var(--c-line-strong)] flex items-center justify-center shrink-0">
+              <Icon className="w-3.5 h-3.5 text-[var(--c-accent-text)]" />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-zinc-200">
-                <span className="text-zinc-600 tabular-nums">{index + 1}. </span>
+              <p className="text-[12.5px] font-semibold text-[var(--c-text)]">
+                <span className="text-[var(--c-faint)] tabular-nums">{index + 1}. </span>
                 {title}
               </p>
-              <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">{body}</p>
+              <p className="text-[11.5px] text-[var(--c-faint)] mt-0.5 leading-relaxed">{body}</p>
             </div>
           </li>
         ))}
       </ol>
 
-      <p className="relative text-xs text-zinc-600">
+      <p className="text-[11px] text-[var(--c-faint)]">
         This disappears once you've run your first session.
       </p>
     </section>

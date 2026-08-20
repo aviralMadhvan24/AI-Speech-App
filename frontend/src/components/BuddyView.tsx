@@ -8,7 +8,6 @@ import {
   Pause,
   Play,
   Send,
-  Sparkles,
   Square,
   Star,
   UserRound,
@@ -20,6 +19,7 @@ import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { GrowthPanel, LastCycleSummary } from "./buddy/GrowthPanel";
 import { MentorGuide } from "./buddy/MentorGuide";
+import { Button } from "./console/Console";
 import { RaiseConcern } from "./buddy/RaiseConcern";
 import { SessionsPanel } from "./buddy/SessionsPanel";
 import {
@@ -197,14 +197,14 @@ function ConversationRow({
     <button
       type="button"
       onClick={onOpen}
-      className="w-full card-glass p-4 flex items-center gap-3 text-left transition hover:border-brand-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+      className="w-full c-panel p-3 flex items-center gap-3 text-left transition-colors hover:bg-[var(--c-raised)] focus-visible:outline-none focus-visible:outline-2 focus-visible:outline-[var(--c-accent)]"
     >
       <Avatar
         name={name}
         className={`w-11 h-11 text-sm font-semibold text-white ${
           isMentor
-            ? "bg-gradient-to-br from-emerald-500 to-cyan-500"
-            : "bg-gradient-to-br from-violet-500 to-fuchsia-500"
+            ? "bg-[var(--c-accent-wash)] text-[var(--c-accent-text)] border border-[var(--c-accent-line)]"
+            : "bg-[var(--c-raised)] text-[var(--c-muted)] border border-[var(--c-line-strong)]"
         }`}
       />
       <div className="flex-1 min-w-0">
@@ -281,7 +281,7 @@ function CycleStrip({ report }: { report: CycleReport }) {
   const daysLeft = Math.max(Math.ceil((end - now) / day), 0);
 
   return (
-    <div className="card-glass px-4 py-3">
+    <div className="c-panel px-3.5 py-2.5">
       <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <span className="text-xs uppercase tracking-widest text-teal-300">
           Week {currentWeek} of {totalWeeks}
@@ -303,7 +303,7 @@ function CycleStrip({ report }: { report: CycleReport }) {
       )}
       <div className="mt-2 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-teal-500 to-emerald-500"
+          className="h-full rounded-full bg-[var(--c-accent)]"
           style={{ width: `${pct}%` }}
           role="progressbar"
           aria-valuenow={pct}
@@ -456,12 +456,12 @@ function ThreadView({
   const name = displayNameOf(conversation);
 
   return (
-    <div className="space-y-4 animate-fade-in-up">
+    <div className="console space-y-3">
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={onBack}
-          className="btn-ghost inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+          className="c-btn c-btn-quiet"
           aria-label="Back to your buddies"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -471,8 +471,8 @@ function ThreadView({
           name={name}
           className={`w-9 h-9 text-sm font-semibold text-white ${
             conversation.my_role === "mentor"
-              ? "bg-gradient-to-br from-emerald-500 to-cyan-500"
-              : "bg-gradient-to-br from-violet-500 to-fuchsia-500"
+              ? "bg-[var(--c-accent-wash)] text-[var(--c-accent-text)] border border-[var(--c-accent-line)]"
+              : "bg-[var(--c-raised)] text-[var(--c-muted)] border border-[var(--c-line-strong)]"
           }`}
         />
         <div className="min-w-0">
@@ -527,17 +527,17 @@ function ThreadView({
       )}
 
       {readOnly && (
-        <div className="card-glass px-4 py-3 text-sm text-zinc-400">
+        <div className="c-panel px-3.5 py-2.5 text-[12.5px] text-[var(--c-muted)]">
           This pairing has ended. You can still read the history.
         </div>
       )}
       {error && (
-        <div className="card-glass px-4 py-3 text-sm text-rose-300 border-rose-500/40">
+        <div className="c-panel px-3.5 py-2.5 text-[12.5px] text-[var(--c-neg)] border-[rgba(201,106,92,0.35)]">
           {error}
         </div>
       )}
       {recorder.error && (
-        <div className="card-glass px-4 py-3 text-sm text-rose-300 border-rose-500/40">
+        <div className="c-panel px-3.5 py-2.5 text-[12.5px] text-[var(--c-neg)] border-[rgba(201,106,92,0.35)]">
           {recorder.error}
         </div>
       )}
@@ -569,7 +569,7 @@ function ThreadView({
         </div>
       ) : (
       <>
-      <div className="card-glass p-4 max-h-[55vh] overflow-y-auto space-y-3">
+      <div className="c-panel p-3.5 max-h-[55vh] overflow-y-auto space-y-2.5">
         {loading ? (
           <SkeletonList count={3} />
         ) : messages.length === 0 ? (
@@ -614,7 +614,7 @@ function ThreadView({
       </div>
 
       {!readOnly && (
-        <div className="card-glass p-3 flex items-end gap-2">
+        <div className="c-panel p-2.5 flex items-end gap-2">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -696,7 +696,7 @@ function MentoringCard({ record }: { record: MentorDashboard }) {
   ];
 
   return (
-    <section className="card-glass p-5 space-y-3">
+    <section className="c-panel p-4 space-y-3">
       <div className="flex items-center gap-2">
         <GraduationCap className="w-4 h-4 text-emerald-300" />
         <h2 className="text-sm font-semibold text-zinc-200">
@@ -807,45 +807,28 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
   const mentored = conversations.filter((c) => c.my_role === "mentee");
 
   return (
-    <div className="space-y-5 animate-fade-in-up">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <button
-          type="button"
-          onClick={onBack}
-          className="btn-ghost inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
-          aria-label="Back to main menu"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back
-        </button>
-        <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-teal-300 bg-teal-500/10 border border-teal-500/30 px-3 py-1 rounded-full">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Speaking Buddy</span>
+    <div className="console space-y-3">
+      {/* A page title set in 36px gradient text over a blurred colour blob is
+          decoration; the person opening this already knows what they clicked.
+          A quiet identifying bar gives the space back to the conversations. */}
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--c-line)] pb-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Button variant="quiet" onClick={onBack}>
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Back
+          </Button>
+          <span className="h-4 w-px bg-[var(--c-line-strong)]" aria-hidden />
+          <h1 className="text-[13px] font-semibold text-[var(--c-text)] truncate">
+            Speaking Buddy
+          </h1>
         </div>
+        <p className="hidden sm:block text-[11.5px] text-[var(--c-faint)] truncate">
+          Nobody has to be online at the same time
+        </p>
       </div>
 
-      <header className="card-glass relative overflow-hidden p-6 md:p-8">
-        <div
-          aria-hidden
-          className="absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-to-br from-teal-500/25 via-emerald-500/15 to-transparent blur-3xl"
-        />
-        <div className="relative">
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-            Speaking{" "}
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-teal-300 via-emerald-400 to-cyan-400 animate-gradient-shift bg-[length:200%_200%]">
-              Buddy
-            </span>
-          </h1>
-          <p className="mt-2 text-zinc-400 text-sm md:text-base max-w-2xl leading-relaxed">
-            A 1:1 line to a peer, paired by your teacher. Send a message or a
-            voice note and pick it up whenever you're free — nobody has to be
-            online at the same time.
-          </p>
-        </div>
-      </header>
-
       {error && (
-        <div className="card-glass px-4 py-3 text-sm text-rose-300 border-rose-500/40">
+        <div className="c-panel px-3.5 py-2.5 text-[12.5px] text-[var(--c-neg)] border-[rgba(201,106,92,0.35)]">
           {error}
         </div>
       )}
@@ -876,7 +859,7 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
             ))}
           {mentored.length > 0 && (
             <section className="space-y-2">
-              <h2 className="text-xs uppercase tracking-widest text-zinc-500 flex items-center gap-2">
+              <h2 className="c-label flex items-center gap-1.5">
                 <GraduationCap className="w-3.5 h-3.5" />
                 Your mentors
               </h2>
@@ -891,7 +874,7 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
           )}
           {mentoring.length > 0 && (
             <section className="space-y-2">
-              <h2 className="text-xs uppercase tracking-widest text-zinc-500 flex items-center gap-2">
+              <h2 className="c-label flex items-center gap-1.5">
                 <UserRound className="w-3.5 h-3.5" />
                 Students you mentor
               </h2>

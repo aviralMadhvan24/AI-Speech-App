@@ -323,7 +323,7 @@ export function LastCycleSummary({ summary }: { summary: CycleSummary }) {
   const measured = summary.axes.filter((axis) => axis.delta !== null);
 
   return (
-    <div className={`card-glass p-4 border ${verdict.tone}`}>
+    <div className={`c-panel p-3.5 ${verdict.tone}`}>
       <span className="text-[10px] uppercase tracking-widest opacity-70">
         Last cycle
       </span>
@@ -387,7 +387,7 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
           ["Drills", counts.practice ?? 0],
           ["Total this cycle", total],
         ].map(([label, value]) => (
-          <div key={label as string} className="card-glass p-3">
+          <div key={label as string} className="c-panel p-3">
             <span className="block text-2xl font-bold tabular-nums text-zinc-100">
               {value as number}
             </span>
@@ -399,14 +399,14 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
       </div>
 
       {total === 0 ? (
-        <div className="card-glass p-5 text-sm text-zinc-400">
+        <div className="c-panel c-empty">
           Nothing scored yet in this cycle. Interviews, debates, group
           discussions and pronunciation drills all show up here as they happen.
         </div>
       ) : (
         <>
           {measured.length > 0 && (
-            <div className="card-glass p-4">
+            <div className="c-panel p-3.5">
               <h3 className="text-sm font-semibold text-zinc-200">Change this cycle</h3>
               <p className="text-xs text-zinc-500 mb-3">
                 Against where this cycle started
@@ -415,7 +415,7 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
             </div>
           )}
 
-          <div className="card-glass p-4">
+          <div className="c-panel p-3.5">
             <h3 className="text-sm font-semibold text-zinc-200">
               Scores across the cycle
             </h3>
@@ -438,7 +438,7 @@ export function GrowthPanel({ report }: { report: CycleReport }) {
             )}
           </div>
 
-          <div className="card-glass p-4">
+          <div className="c-panel p-3.5">
             <h3 className="text-sm font-semibold text-zinc-200 mb-1">
               What they did
             </h3>

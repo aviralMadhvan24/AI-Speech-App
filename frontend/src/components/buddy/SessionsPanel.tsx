@@ -173,7 +173,7 @@ function SessionRow({
   );
 
   return (
-    <li className="card-glass p-4 space-y-2">
+    <li className="c-panel p-3.5 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-semibold text-zinc-100">
           {session.topic || "Practice session"}
@@ -259,7 +259,7 @@ function SessionRow({
               isMentor ? "What did you notice?" : "What are you taking away?"
             }
             aria-label={isMentor ? "Mentor notes" : "Your reflection"}
-            className="flex-1 bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 resize-none focus:outline-none focus:border-brand-500/60"
+            className="flex-1 c-textarea"
           />
           <button
             type="button"
@@ -267,7 +267,7 @@ function SessionRow({
             onClick={() =>
               void run(() => completeSession(session.session_id, note.trim()))
             }
-            className="btn-primary px-3 py-2 text-sm disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+            className="c-btn c-btn-primary"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
           </button>
@@ -415,7 +415,7 @@ export function SessionsPanel({
 
   if (!hasCycle) {
     return (
-      <div className="card-glass p-5 text-sm text-zinc-400">
+      <div className="c-panel c-empty">
         Sessions belong to a cycle, and this pairing has none running. Ask your
         teacher to start one.
       </div>
@@ -424,7 +424,7 @@ export function SessionsPanel({
 
   return (
     <div className="space-y-3">
-      <div className="card-glass p-4 space-y-3">
+      <div className="c-panel p-3.5 space-y-3">
         <h3 className="text-sm font-semibold text-zinc-200">Plan a session</h3>
         <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr_auto] gap-2">
           <input
@@ -432,20 +432,20 @@ export function SessionsPanel({
             value={when}
             onChange={(event) => setWhen(event.target.value)}
             aria-label="When"
-            className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+            className="c-select"
           />
           <input
             value={topic}
             onChange={(event) => setTopic(event.target.value)}
             placeholder="What will you work on?"
             aria-label="Topic"
-            className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-brand-500/60"
+            className="c-input"
           />
           <select
             value={mode}
             onChange={(event) => setMode(event.target.value as SessionMode)}
             aria-label="Mode"
-            className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+            className="c-select"
           >
             {(Object.keys(MODE_LABEL) as SessionMode[]).map((key) => (
               <option key={key} value={key}>
@@ -466,7 +466,7 @@ export function SessionsPanel({
                 setPromptId("");
               }}
               aria-label="Practice material"
-              className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+              className="c-select"
             >
               <option value="">No set material</option>
               {(Object.keys(PROMPT_LABEL) as PromptKind[]).map((kind) => (
@@ -480,7 +480,7 @@ export function SessionsPanel({
                 value={promptId}
                 onChange={(event) => setPromptId(event.target.value)}
                 aria-label="Practice item"
-                className="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-brand-500/60"
+                className="c-select"
               >
                 <option value="">Pick one…</option>
                 {choices.map((prompt) => (
@@ -501,7 +501,7 @@ export function SessionsPanel({
           type="button"
           onClick={() => void handlePlan()}
           disabled={planning || !when}
-          className="btn-primary inline-flex items-center gap-2 px-4 py-2 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+          className="c-btn c-btn-primary"
         >
           {planning ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -513,9 +513,9 @@ export function SessionsPanel({
       </div>
 
       {loading ? (
-        <div className="card-glass p-5 text-sm text-zinc-500">Loading sessions…</div>
+        <div className="c-panel c-empty">Loading sessions…</div>
       ) : sessions.length === 0 ? (
-        <div className="card-glass p-5 text-sm text-zinc-400">
+        <div className="c-panel c-empty">
           No sessions yet. Planning one is what turns a chat into practice.
         </div>
       ) : (
