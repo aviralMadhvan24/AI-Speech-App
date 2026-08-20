@@ -4,7 +4,6 @@ import {
   Handshake,
   Link2,
   Loader2,
-  Sparkles,
   Star,
   Unlink,
   UserCheck,
@@ -281,7 +280,17 @@ function SpeakerRow({
   );
 }
 
+import { Button, Panel, Tabs, Tag } from "../console/Console";
+import { ConcernsPanel } from "../buddy/ConcernsPanel";
+import { DigestPanel } from "../buddy/DigestPanel";
+import { MentorCandidates } from "../buddy/MentorCandidates";
+import { ProgrammePanel } from "../buddy/ProgrammePanel";
+
+type AdminTab = "programme" | "chase" | "reported" | "mentors" | "pairings";
+
 export function AdminBuddiesView() {
+  const [tab, setTab] = useState<AdminTab>("programme");
+  const [openConcerns, setOpenConcerns] = useState<Record<string, number>>({});
   const [candidates, setCandidates] = useState<MentorCandidatesResponse | null>(null);
   const [pairs, setPairs] = useState<BuddyPair[]>([]);
   const [health, setHealth] = useState<Record<string, PairHealth>>({});
@@ -309,6 +318,7 @@ export function AdminBuddiesView() {
       setCandidates(candidateData);
       setPairs(pairData.pairs);
       setHealth(pairData.health ?? {});
+      setOpenConcerns(pairData.open_concerns ?? {});
       setCycles(cycleData.cycles);
       setError(null);
     } catch (err) {
@@ -461,71 +471,78 @@ export function AdminBuddiesView() {
     ["stalled", "quiet"].includes(health[p.pair_id]?.state ?? ""),
   ).length;
 
+  const concernCount = Object.values(openConcerns).reduce((sum, n) => sum + n, 0);
+
   return (
-    <div className="space-y-6">
+    <div className="console space-y-3">
       {error && (
-        <div className="card-glass px-4 py-3 text-sm text-rose-300 border-rose-500/40">
+        <div className="c-panel px-3.5 py-2.5 text-[12.5px] text-[var(--c-neg)] border-[rgba(201,106,92,0.35)]">
           {error}
         </div>
       )}
 
-      {/* --- Mentor approval --- */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300" />
-            Suggested mentors
-          </h2>
-          <p className="text-xs text-zinc-500">
-            Scoring {candidates?.threshold ?? 0}+ across at least{" "}
-            {candidates?.min_sample_size ?? 0} attempts
-          </p>
+      <Tabs
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "programme", label: "Programme" },
+          { id: "chase", label: "Needs chasing", count: needAttention },
+          { id: "reported", label: "Reported", count: concernCount },
+          { id: "mentors", label: "Mentors", count: suggested.length },
+          { id: "pairings", label: "Pairings", count: activePairs.length },
+        ]}
+      />
+
+      {tab === "programme" && <ProgrammePanel />}
+      {tab === "chase" && <DigestPanel />}
+      {tab === "reported" && <ConcernsPanel />}
+
+      {tab === "mentors" && (
+        <div className="space-y-3">
+          <MentorCandidates
+            data={candidates}
+            busy={busyEmail !== null}
+            onDecide={(email, status) => void handleDecide(email, status)}
+          />
+
+      {/* The full ranking, behind a toggle. Everyone is here including the
+          already-decided, which is the reference list rather than the
+          worklist — `MentorCandidates` above is the thing to act on. */}
+          {ranking.length > 0 && (
+            <Panel
+              title="Full ranking"
+              subtitle={`Every student with scored speaking work (${ranking.length})`}
+              actions={
+                <Button variant="quiet" onClick={() => setShowAll((c) => !c)}>
+                  {showAll ? "Hide" : "Show"}
+                </Button>
+              }
+              flush={showAll}
+            >
+              {showAll ? (
+                <div className="space-y-2 p-3">
+                  {ranking.map((speaker) => (
+                    <SpeakerRow
+                      key={speaker.email}
+                      speaker={speaker}
+                      busy={busyEmail === speaker.email}
+                      onDecide={(status) => void handleDecide(speaker.email, status)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[12px] text-[var(--c-faint)]">
+                  Ordered by lifetime average — which is exactly what hides the
+                  students who climbed. Use the suggestions above to act.
+                </p>
+              )}
+            </Panel>
+          )}
         </div>
+      )}
 
-        {suggested.length === 0 ? (
-          <div className="card-glass p-6 text-sm text-zinc-500 text-center">
-            No new suggestions. Students need a consistent record before the
-            system puts them forward.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {suggested.map((speaker) => (
-              <SpeakerRow
-                key={speaker.email}
-                speaker={speaker}
-                busy={busyEmail === speaker.email}
-                onDecide={(status) => void handleDecide(speaker.email, status)}
-              />
-            ))}
-          </div>
-        )}
-
-        {ranking.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowAll((current) => !current)}
-            className="btn-ghost text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
-          >
-            {showAll
-              ? "Hide the full ranking"
-              : `Show the full ranking (${ranking.length})`}
-          </button>
-        )}
-
-        {showAll && (
-          <div className="space-y-2">
-            {ranking.map((speaker) => (
-              <SpeakerRow
-                key={speaker.email}
-                speaker={speaker}
-                busy={busyEmail === speaker.email}
-                onDecide={(status) => void handleDecide(speaker.email, status)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
+      {tab === "pairings" && (
+        <div className="space-y-6">
       {/* --- Pairing --- */}
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
@@ -670,6 +687,17 @@ export function AdminBuddiesView() {
                           {HEALTH[pairHealth.state].label}
                         </span>
                       )}
+                      {/* Separate from health on purpose — health measures
+                          activity, and a busy pairing can still be the wrong
+                          pairing. See the Reported tab to act on it. */}
+                      {(openConcerns[pair.pair_id] ?? 0) > 0 && (
+                        <Tag
+                          tone="neg"
+                          title="Somebody in this pairing reported it as not working"
+                        >
+                          Reported
+                        </Tag>
+                      )}
                     </div>
                     <p className="text-xs text-zinc-600 mt-1">
                       {pair.mentor_email} · {pair.mentee_email}
@@ -741,6 +769,8 @@ export function AdminBuddiesView() {
           </div>
         )}
       </section>
+        </div>
+      )}
     </div>
   );
 }

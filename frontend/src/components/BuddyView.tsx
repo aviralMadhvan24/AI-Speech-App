@@ -20,6 +20,7 @@ import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { GrowthPanel, LastCycleSummary } from "./buddy/GrowthPanel";
 import { MentorGuide } from "./buddy/MentorGuide";
+import { RaiseConcern } from "./buddy/RaiseConcern";
 import { SessionsPanel } from "./buddy/SessionsPanel";
 import {
   fetchMessages,
@@ -549,12 +550,23 @@ function ThreadView({
           <GrowthPanel report={report} />
         </div>
       ) : tab === "sessions" ? (
-        <SessionsPanel
-          pairId={pairId}
-          isMentor={conversation.my_role === "mentor"}
-          hasCycle={Boolean(report?.cycle)}
-          onChanged={refreshCycle}
-        />
+        <div className="space-y-4">
+          <SessionsPanel
+            pairId={pairId}
+            isMentor={conversation.my_role === "mentor"}
+            hasCycle={Boolean(report?.cycle)}
+            onChanged={refreshCycle}
+          />
+          {/* Deliberately understated and deliberately here rather than in the
+              header or under the chat: a prominent control invites reporting a
+              mentor for one slow week, and under the messages it would read as
+              an accusation aimed at whatever was said last. */}
+          {!readOnly && (
+            <div className="console pt-1">
+              <RaiseConcern pairId={pairId} />
+            </div>
+          )}
+        </div>
       ) : (
       <>
       <div className="card-glass p-4 max-h-[55vh] overflow-y-auto space-y-3">

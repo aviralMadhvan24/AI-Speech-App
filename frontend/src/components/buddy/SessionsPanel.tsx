@@ -20,6 +20,7 @@ import {
   type PromptKind,
   type SessionMode,
 } from "../../buddyApi";
+import { ASPECT_LABEL, RateSession } from "./RateSession";
 
 const MODE_LABEL: Record<SessionMode, string> = {
   async_voice: "Voice notes",
@@ -94,7 +95,9 @@ function RatingStars({
     [onChanged, session.session_id],
   );
 
-  if (rating === null && !canRate) return null;
+  // Unrated and rateable is `RateSession`'s job — it collects the reason too.
+  // This is the record afterwards, and the mentor's read-only view.
+  if (rating === null) return null;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -272,11 +275,44 @@ function SessionRow({
       )}
 
       {session.status === "completed" && (
-        <RatingStars
-          session={session}
-          canRate={!isMentor}
-          onChanged={onChanged}
-        />
+        <div className="space-y-2">
+          <RatingStars
+            session={session}
+            canRate={!isMentor}
+            onChanged={onChanged}
+          />
+
+          {/* The reasons, shown to BOTH sides. This is feedback to the mentor,
+              which is why they can read it; the private channel is the
+              "this pairing isn't working" link on the conversation. */}
+          {session.mentee_rating !== null &&
+            (session.mentee_rating_aspects.length > 0 ||
+              session.mentee_rating_note) && (
+              <div className="flex flex-col gap-1.5">
+                {session.mentee_rating_aspects.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {session.mentee_rating_aspects.map((aspect) => (
+                      <span
+                        key={aspect}
+                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-zinc-700/70 text-zinc-400"
+                      >
+                        {ASPECT_LABEL[aspect] ?? aspect}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {session.mentee_rating_note && (
+                  <p className="text-xs text-zinc-400 italic">
+                    “{session.mentee_rating_note}”
+                  </p>
+                )}
+              </div>
+            )}
+
+          {!isMentor && session.mentee_rating === null && (
+            <RateSession session={session} onRated={onChanged} />
+          )}
+        </div>
       )}
     </li>
   );

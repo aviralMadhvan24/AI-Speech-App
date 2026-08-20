@@ -27,11 +27,15 @@ const cancelSession = vi.fn();
 const rateSession = vi.fn();
 const fetchPracticePrompts = vi.fn();
 const fetchMyMentoring = vi.fn();
+const fetchMyConcern = vi.fn();
+const raiseConcern = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
   rateSession: (...args: unknown[]) => rateSession(...args),
   fetchPracticePrompts: (...args: unknown[]) => fetchPracticePrompts(...args),
   fetchMyMentoring: (...args: unknown[]) => fetchMyMentoring(...args),
+  fetchMyConcern: (...args: unknown[]) => fetchMyConcern(...args),
+  raiseConcern: (...args: unknown[]) => raiseConcern(...args),
   fetchSessions: (...args: unknown[]) => fetchSessions(...args),
   planSession: (...args: unknown[]) => planSession(...args),
   completeSession: (...args: unknown[]) => completeSession(...args),
@@ -135,6 +139,7 @@ beforeEach(() => {
     cycles_completed: 0,
     mentees_improved: 0,
   });
+  fetchMyConcern.mockResolvedValue({ concern: null });
 });
 
 /** A pair between cycles: nothing to track, so nothing to show. */
@@ -168,6 +173,8 @@ function session(overrides: Record<string, unknown> = {}) {
     prompt_id: null,
     prompt_title: null,
     mentee_rating: null,
+    mentee_rating_aspects: [],
+    mentee_rating_note: "",
     created_by: "mentor@kiet.edu",
     created_at: "2026-08-18T10:00:00Z",
     ...overrides,
@@ -852,8 +859,85 @@ describe("BuddyView — rating a session", () => {
 
     const user = await openSessionsAs("mentee");
     await user.click(await screen.findByRole("button", { name: "Rate 4 out of 5" }));
+    await user.click(await screen.findByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(rateSession).toHaveBeenCalledWith("s-1", 4));
+    await waitFor(() => expect(rateSession).toHaveBeenCalledWith("s-1", 4, [], ""));
+  });
+
+  it("asks what worked for a high rating and what went wrong for a low one", async () => {
+    // Showing all eight reasons at once asks the mentee to do the sorting,
+    // and they skip it. The question follows the answer.
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed" })],
+      total: 1,
+    });
+    rateSession.mockResolvedValue(session({ status: "completed", mentee_rating: 2 }));
+
+    const user = await openSessionsAs("mentee");
+
+    await user.click(await screen.findByRole("button", { name: "Rate 5 out of 5" }));
+    expect(await screen.findByText("What worked?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Came prepared" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Feedback was vague" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Rate 2 out of 5" }));
+    expect(await screen.findByText("What went wrong?")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Feedback was vague" }),
+    ).toBeInTheDocument();
+  });
+
+  it("sends the reasons along with the number", async () => {
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed" })],
+      total: 1,
+    });
+    rateSession.mockResolvedValue(session({ status: "completed", mentee_rating: 2 }));
+
+    const user = await openSessionsAs("mentee");
+    await user.click(await screen.findByRole("button", { name: "Rate 2 out of 5" }));
+    await user.click(await screen.findByRole("button", { name: "Feedback was vague" }));
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(rateSession).toHaveBeenCalledWith("s-1", 2, ["vague"], ""),
+    );
+  });
+
+  it("tells the mentee their mentor will read it", async () => {
+    // Pretending a 1:1 rating were anonymous is a lie the reader can disprove.
+    // The private channel is the concern link, and this says so.
+    fetchSessions.mockResolvedValue({
+      sessions: [session({ status: "completed" })],
+      total: 1,
+    });
+
+    const user = await openSessionsAs("mentee");
+    await user.click(await screen.findByRole("button", { name: "Rate 3 out of 5" }));
+
+    expect(await screen.findByText(/Your mentor sees this/)).toBeInTheDocument();
+  });
+
+  it("shows the mentor the reasons, not just the number", async () => {
+    // The whole point: a bare 2/5 tells them to feel bad and nothing more.
+    fetchSessions.mockResolvedValue({
+      sessions: [
+        session({
+          status: "completed",
+          mentee_rating: 2,
+          mentee_rating_aspects: ["vague"],
+          mentee_rating_note: "be more specific",
+        }),
+      ],
+      total: 1,
+    });
+
+    await openSessionsAs("mentor");
+
+    expect(await screen.findByText("Feedback was vague")).toBeInTheDocument();
+    expect(screen.getByText(/be more specific/)).toBeInTheDocument();
   });
 
   it("never offers the mentor a way to rate their own session", async () => {
@@ -888,7 +972,7 @@ describe("BuddyView — rating a session", () => {
     await openSessionsAs("mentee");
 
     await screen.findByText("Two-minute intro");
-    expect(screen.queryByText("How useful was it?")).not.toBeInTheDocument();
+    expect(screen.queryByText("How was it?")).not.toBeInTheDocument();
   });
 });
 

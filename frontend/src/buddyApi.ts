@@ -76,13 +76,29 @@ export interface SpeakerRanking {
   /** How their mentees rated them, 1-5. Ability and mentoring are different. */
   mentor_rating: number | null;
   sessions_mentored: number;
+  /**
+   * What they did as a MENTEE. `speaking_score` is a lifetime mean, so a
+   * student who climbed carries their early work forever — this is the
+   * evidence that gets them suggested anyway.
+   */
+  improved_cycles: number;
+  best_gain: number | null;
+  grew_from: number | null;
+  grew_to: number | null;
+  /** Why they are being suggested. Null when they are not. */
+  suggestion_basis: SuggestionBasis | null;
 }
+
+export type SuggestionBasis = "score" | "growth" | "both";
 
 export interface MentorCandidatesResponse {
   suggested: SpeakerRanking[];
   ranking: SpeakerRanking[];
   threshold: number;
   min_sample_size: number;
+  /** The growth path's bars, sent so the UI never hardcodes them. */
+  growth_min_gain: number;
+  growth_min_final: number;
 }
 
 export interface MentorRecord {
@@ -142,6 +158,11 @@ export interface PairsResponse {
   total: number;
   /** Keyed by pair_id. Derived per request, so it is never stale. */
   health: Record<string, PairHealth>;
+  /**
+   * Open concern count per pair_id, absent when zero. Separate from health on
+   * purpose: a pairing can be perfectly busy and still be the wrong pairing.
+   */
+  open_concerns: Record<string, number>;
 }
 
 export type CycleStatus = "active" | "closed";
@@ -230,6 +251,21 @@ export interface ActivityItem {
 }
 
 export type SessionStatus = "planned" | "completed" | "missed";
+
+/**
+ * Reasons a mentee can attach to a rating. Praise and criticism both — a
+ * vocabulary of only complaints turns the rating into a report card and
+ * mentors stop reading it.
+ */
+export type RatingAspect =
+  | "prepared"
+  | "specific"
+  | "encouraging"
+  | "punctual"
+  | "unprepared"
+  | "vague"
+  | "harsh"
+  | "no_show";
 export type SessionMode = "async_voice" | "live_call" | "in_person";
 
 export interface BuddySession {
@@ -251,6 +287,13 @@ export interface BuddySession {
   prompt_title: string | null;
   /** The mentee's 1-5 verdict. Mentees only — a self-rating means nothing. */
   mentee_rating: number | null;
+  /**
+   * Why. Visible to the mentor along with the number: this is feedback TO
+   * them, not a report about them. The private channel is a concern, which
+   * the mentor never sees.
+   */
+  mentee_rating_aspects: RatingAspect[];
+  mentee_rating_note: string;
   created_by: string;
   created_at: string;
 }
@@ -510,10 +553,12 @@ export function planSession(
 export function rateSession(
   sessionId: string,
   rating: number,
+  aspects: RatingAspect[] = [],
+  note = "",
 ): Promise<BuddySession> {
   return postJson<BuddySession>(
     `/buddy/sessions/${encodeURIComponent(sessionId)}/rate`,
-    { rating },
+    { rating, aspects, note },
   );
 }
 
@@ -590,4 +635,169 @@ export function closeCycle(cycleId: string): Promise<BuddyCycle> {
 
 export function endPair(pairId: string): Promise<BuddyPair> {
   return postJson<BuddyPair>(`/buddy/admin/pairs/${encodeURIComponent(pairId)}/end`);
+}
+
+// ---------------------------------------------------------------------------
+// Concerns — either side saying the pairing is not working
+// ---------------------------------------------------------------------------
+//
+// Teacher-visible only. There is deliberately no call that returns the
+// partner's concerns to a participant: a mentee who has to weigh "will my
+// mentor see this" reports nothing at all.
+
+export type ConcernReason =
+  | "mismatch"
+  | "unresponsive"
+  | "schedule"
+  | "uncomfortable"
+  | "other";
+
+export type ConcernStatus = "open" | "resolved";
+
+export interface BuddyConcern {
+  concern_id: string;
+  pair_id: string;
+  raised_by: string;
+  /** Which side raised it — a silent mentee is a different problem. */
+  role: BuddyRole;
+  reason: ConcernReason;
+  detail: string;
+  status: ConcernStatus;
+  raised_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution: string;
+}
+
+export interface MyConcernResponse {
+  concern: BuddyConcern | null;
+}
+
+export interface ConcernsResponse {
+  concerns: BuddyConcern[];
+  total: number;
+}
+
+/** Flag a pairing as not working. Participants only; the teacher sees it. */
+export function raiseConcern(
+  pairId: string,
+  reason: ConcernReason,
+  detail = "",
+): Promise<BuddyConcern> {
+  return postJson<BuddyConcern>(
+    `/buddy/pairs/${encodeURIComponent(pairId)}/concern`,
+    { reason, detail },
+  );
+}
+
+/** The caller's OWN open concern on a pair, so the UI can say it was sent. */
+export function fetchMyConcern(pairId: string): Promise<MyConcernResponse> {
+  return fetchJson<MyConcernResponse>(
+    `/buddy/pairs/${encodeURIComponent(pairId)}/concern`,
+  );
+}
+
+export function fetchConcerns(includeResolved = false): Promise<ConcernsResponse> {
+  return fetchJson<ConcernsResponse>(
+    `/buddy/admin/concerns${includeResolved ? "?include_resolved=true" : ""}`,
+  );
+}
+
+export function resolveConcern(
+  concernId: string,
+  resolution: string,
+): Promise<BuddyConcern> {
+  return postJson<BuddyConcern>(
+    `/buddy/admin/concerns/${encodeURIComponent(concernId)}/resolve`,
+    { resolution },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Programme rollup — is any of this working
+// ---------------------------------------------------------------------------
+
+export interface VerdictCounts {
+  improved: number;
+  held: number;
+  declined: number;
+  not_enough_evidence: number;
+}
+
+export interface AxisMovement {
+  key: string;
+  label: string;
+  /** The denominator. An axis measured in 3 cycles of 40 says almost nothing. */
+  cycles_measured: number;
+  mean_baseline: number | null;
+  mean_final: number | null;
+  mean_delta: number | null;
+}
+
+export interface ProgrammeReport {
+  generated_at: string;
+  pairs_total: number;
+  pairs_active: number;
+  pairs_ended: number;
+  mentors_approved: number;
+  mentees_served: number;
+  health: Record<string, number>;
+  cycles_active: number;
+  cycles_closed: number;
+  verdicts: VerdictCounts;
+  cycles_measured: number;
+  /**
+   * improved / cycles_measured. Null when nothing was measurable — a rate over
+   * an empty denominator is unknown, not zero.
+   */
+  improvement_rate: number | null;
+  /** cycles_measured / cycles_closed. The caveat that belongs beside the rate. */
+  evidence_rate: number | null;
+  axes: AxisMovement[];
+  sessions_planned: number;
+  sessions_completed: number;
+  sessions_missed: number;
+  keep_rate: number | null;
+}
+
+export function fetchProgramme(): Promise<ProgrammeReport> {
+  return fetchJson<ProgrammeReport>("/buddy/admin/programme");
+}
+
+// ---------------------------------------------------------------------------
+// Digest — the nudges nobody is around to see
+// ---------------------------------------------------------------------------
+
+export interface Nudge {
+  email: string;
+  role: BuddyRole | "teacher";
+  pair_id: string;
+  partner_email: string | null;
+  state: PairState;
+  days_quiet: number | null;
+  message: string;
+  priority: number;
+  /** Distinguishes a pairing that never started from one that did work and stopped. */
+  sessions_kept: number;
+  next_session_at: string | null;
+}
+
+export interface DigestCounts {
+  stalled: number;
+  not_started: number;
+  quiet: number;
+  no_cycle: number;
+}
+
+export interface BuddyDigest {
+  generated_at: string;
+  nudges: Nudge[];
+  total: number;
+  counts: DigestCounts;
+  /** Chasing a pairing somebody already reported as broken is the wrong action. */
+  open_concerns: number;
+}
+
+export function fetchDigest(): Promise<BuddyDigest> {
+  return fetchJson<BuddyDigest>("/buddy/admin/digest");
 }

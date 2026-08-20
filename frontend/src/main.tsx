@@ -4,6 +4,10 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ToastProvider } from "./components/Toast";
 import "./index.css";
+// The console design system. Namespaced under `.console`, so it applies only
+// where a screen opts in and cannot disturb the existing theme. Loaded after
+// index.css so its tokens win where both would apply.
+import "./styles/console.css";
 // Side-effect import: registers dark-theme defaults for every Chart.js chart.
 import "./utils/chartDefaults";
 
