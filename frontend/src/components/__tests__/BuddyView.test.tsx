@@ -10,6 +10,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BuddyView } from "../BuddyView";
+import { MemoryRouter } from "react-router-dom";
 import type { BuddyMessage, ConversationSummary, Person } from "../../buddyApi";
 
 const fetchMyBuddies = vi.fn();
@@ -29,6 +30,8 @@ const fetchPracticePrompts = vi.fn();
 const fetchMyMentoring = vi.fn();
 const fetchMyConcern = vi.fn();
 const raiseConcern = vi.fn();
+const fetchMyNudges = vi.fn();
+const fetchMyRequest = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
   rateSession: (...args: unknown[]) => rateSession(...args),
@@ -48,6 +51,8 @@ vi.mock("../../buddyApi", () => ({
   sendVoiceNote: (...args: unknown[]) => sendVoiceNote(...args),
   fetchVoiceNoteUrl: (...args: unknown[]) => fetchVoiceNoteUrl(...args),
   fetchPairActivity: (...args: unknown[]) => fetchPairActivity(...args),
+  fetchMyNudges: (...args: unknown[]) => fetchMyNudges(...args),
+  fetchMyRequest: (...args: unknown[]) => fetchMyRequest(...args),
   // Not a network call — a pure label helper. Mocked as the real thing so the
   // component renders the same name here as it does in the browser.
   personLabel: (person: { name?: string | null; email?: string | null; user_id?: string } | null) =>
@@ -125,7 +130,14 @@ function message(overrides: Partial<BuddyMessage> = {}): BuddyMessage {
 }
 
 function renderView() {
-  return render(<BuddyView onBack={() => {}} />);
+  // A live session opens a debate room by navigating to it, so the panel calls
+  // `useNavigate`. In the app this view is always inside the router; rendering
+  // it bare here would only be testing an arrangement that never happens.
+  return render(
+    <MemoryRouter>
+      <BuddyView onBack={() => {}} />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -133,6 +145,14 @@ beforeEach(() => {
   recorder.isRecording = false;
   recorder.error = null;
   fetchMyBuddies.mockResolvedValue({ me: ME, conversations: [], total: 0 });
+  // Quiet by default: these are asides on this screen, and every existing test
+  // here is about the inbox and the thread rather than about them.
+  fetchMyNudges.mockResolvedValue({ nudges: [], total: 0 });
+  fetchMyRequest.mockResolvedValue({
+    request: null,
+    can_request: false,
+    reason: "already_paired",
+  });
   fetchMessages.mockResolvedValue({
     pair_id: "pair-1",
     partner: PARTNER,

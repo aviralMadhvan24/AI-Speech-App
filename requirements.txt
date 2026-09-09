@@ -22,3 +22,6 @@ transformers
 firebase-admin
 PyJWT
 livekit-api==1.0.6
+# Amazon SES, for the buddy digest. Only imported when MAIL_PROVIDER=ses, so
+# an install without it still runs: the mailer logs instead of sending.
+boto3

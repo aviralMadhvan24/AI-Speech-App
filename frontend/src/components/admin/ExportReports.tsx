@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, FileText, Loader2, Users, MessageSquareText, Users2, BarChart3 } from "lucide-react";
+import { Download, FileText, Handshake, Loader2, Users, MessageSquareText, Users2, BarChart3, CalendarCheck } from "lucide-react";
 import { useToast } from "../Toast";
 import { getCurrentIdToken } from "../../hooks/useAuth";
 
@@ -52,6 +52,22 @@ const EXPORT_OPTIONS: ExportOption[] = [
     endpoint: "/admin/export/gd_sessions.csv",
     icon: Users2,
     color: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30",
+  },
+  {
+    id: "buddy_pairs",
+    title: "Buddy Pairings",
+    description: "Every pairing with its cycle, health, and verdict",
+    endpoint: "/admin/export/buddy_pairs.csv",
+    icon: Handshake,
+    color: "text-teal-300 bg-teal-500/10 border-teal-500/30",
+  },
+  {
+    id: "buddy_sessions",
+    title: "Buddy Sessions",
+    description: "Every planned session, whether it was kept, and its rating",
+    endpoint: "/admin/export/buddy_sessions.csv",
+    icon: CalendarCheck,
+    color: "text-cyan-300 bg-cyan-500/10 border-cyan-500/30",
   },
 ];
 

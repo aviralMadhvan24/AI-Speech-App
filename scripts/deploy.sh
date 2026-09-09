@@ -282,6 +282,41 @@ echo ""
 #   [Install]
 #   WantedBy=multi-user.target
 #
+# ── /etc/systemd/system/softskills-buddy-digest.service ──
+#   [Unit]
+#   Description=Mail each person their outstanding buddy nudges
+#   After=network-online.target
+#   [Service]
+#   Type=oneshot
+#   User=ubuntu
+#   WorkingDirectory=/home/ubuntu/softskills2
+#   ExecStart=/home/ubuntu/softskills2/venv/bin/python scripts/send_buddy_digest.py
+#   EnvironmentFile=/home/ubuntu/softskills2/.env
+#
+# ── /etc/systemd/system/softskills-buddy-digest.timer ──
+#   [Unit]
+#   Description=Daily buddy digest
+#   [Timer]
+#   OnCalendar=*-*-* 09:00:00
+#   # This box is stopped between demos, so most days the 09:00 run does not
+#   # happen at 09:00 — Persistent makes it fire on the next boot instead of
+#   # being skipped. The script's own send log is what keeps that safe: a
+#   # recipient already mailed today is not mailed again, however many times
+#   # the machine starts.
+#   Persistent=true
+#   [Install]
+#   WantedBy=timers.target
+#
+#   Install once with:
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now softskills-buddy-digest.timer
+#
+#   Mail is off until `.env` sets MAIL_PROVIDER=ses, MAIL_FROM to an
+#   SES-verified sender, and AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY. Until
+#   then the job runs and logs what it would have sent, which is also how to
+#   check it is working:
+#     /home/ubuntu/softskills2/venv/bin/python scripts/send_buddy_digest.py --dry-run
+#
 # ── /etc/caddy/Caddyfile ──
 #   15.207.25.230.nip.io {
 #       handle /livekit-ws/* {

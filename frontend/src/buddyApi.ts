@@ -184,11 +184,29 @@ export interface StudentRow {
   open_request: BuddyRequest | null;
 }
 
+/**
+ * A mentee, and the approved mentor best placed to help them. Suggested,
+ * never applied: the teacher still makes every pairing. It exists because
+ * "who has no mentor" and "who is free to mentor" are two lists a person has
+ * to hold in their head at once, and holding thirty of each is what stops a
+ * teacher pairing anyone at all.
+ */
+export interface SuggestedPairing {
+  mentee: Person;
+  mentor: Person;
+  /** Why this mentor for this mentee, in the panel's own vocabulary. */
+  reason: string;
+  mentee_weakest_axis: string | null;
+  mentor_axis_score: number | null;
+  mentor_active_mentees: number;
+}
+
 export interface StudentsResponse {
   students: StudentRow[];
   total: number;
   /** How many students have no mentor — the headline number of the screen. */
   unpaired: number;
+  suggestions: SuggestedPairing[];
 }
 
 export interface BuddyPair {
@@ -376,6 +394,9 @@ export interface BuddySession {
    */
   mentee_rating_aspects: RatingAspect[];
   mentee_rating_note: string;
+  /** Set once a live session has opened a real room. Only "debate" today. */
+  room_kind: "debate" | null;
+  room_code: string | null;
   created_by_id: string;
   created_at: string;
 }
@@ -557,10 +578,6 @@ export async function fetchVoiceNoteUrl(messageId: string): Promise<string> {
 
 export function fetchMentorCandidates(): Promise<MentorCandidatesResponse> {
   return fetchJson<MentorCandidatesResponse>("/buddy/admin/mentor-candidates");
-}
-
-export function fetchMentors(): Promise<MentorsResponse> {
-  return fetchJson<MentorsResponse>("/buddy/admin/mentors");
 }
 
 export function decideMentor(
@@ -894,4 +911,128 @@ export interface BuddyDigest {
 
 export function fetchDigest(): Promise<BuddyDigest> {
   return fetchJson<BuddyDigest>("/buddy/admin/digest");
+}
+
+// ---------------------------------------------------------------------------
+// The caller's own share of all this
+// ---------------------------------------------------------------------------
+
+/**
+ * The counts the main menu needs, and nothing else. Deliberately not `/me`,
+ * which reads every message in every pairing to build previews — far too much
+ * work for a badge the menu renders on every navigation.
+ */
+export interface BuddyBadge {
+  unread: number;
+  /** Counted, not sent: the tile says "something needs you" without the reasons. */
+  nudges: number;
+  has_pairing: boolean;
+  can_request: boolean;
+}
+
+export function fetchBadge(): Promise<BuddyBadge> {
+  return fetchJson<BuddyBadge>("/buddy/badge");
+}
+
+/**
+ * The caller's own nudges. Until this existed the detection went only to a
+ * teacher's admin panel, so the two people who could actually restart a
+ * stalled pairing were the last to hear about it.
+ */
+export interface MyNudgesResponse {
+  nudges: Nudge[];
+  total: number;
+}
+
+export function fetchMyNudges(): Promise<MyNudgesResponse> {
+  return fetchJson<MyNudgesResponse>("/buddy/my-nudges");
+}
+
+// ---------------------------------------------------------------------------
+// Asking for a mentor
+// ---------------------------------------------------------------------------
+
+/** Why the caller may not ask right now. Rendered, never used as a branch key. */
+export type RequestBlockedReason = "teacher" | "already_requested" | "already_paired";
+
+export interface MyRequestResponse {
+  request: BuddyRequest | null;
+  can_request: boolean;
+  /** Sent so the UI states the reason rather than showing a dead control. */
+  reason: RequestBlockedReason | null;
+}
+
+export function fetchMyRequest(): Promise<MyRequestResponse> {
+  return fetchJson<MyRequestResponse>("/buddy/my-request");
+}
+
+export function requestBuddy(
+  note: string,
+  focusArea?: string | null,
+): Promise<BuddyRequest> {
+  return postJson<BuddyRequest>("/buddy/request", {
+    note,
+    focus_area: focusArea ?? null,
+  });
+}
+
+/** The teacher's queue of students who have asked. Oldest first — it is a queue. */
+export interface RequestsResponse {
+  requests: BuddyRequest[];
+  total: number;
+  people: People;
+}
+
+export function fetchRequests(includeResolved = false): Promise<RequestsResponse> {
+  return fetchJson<RequestsResponse>(
+    `/buddy/admin/requests${includeResolved ? "?include_resolved=true" : ""}`,
+  );
+}
+
+export function declineRequest(
+  requestId: string,
+  resolution: string,
+): Promise<BuddyRequest> {
+  return postJson<BuddyRequest>(
+    `/buddy/admin/requests/${encodeURIComponent(requestId)}/decline`,
+    { resolution },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Closing what has run out of time, and opening what has not started
+// ---------------------------------------------------------------------------
+
+/**
+ * What closing every expired cycle actually did. Returns the cycles rather
+ * than a count: each now carries a frozen verdict, and that verdict is the
+ * reason the sweep exists.
+ */
+export interface SweepCyclesResponse {
+  closed: BuddyCycle[];
+  total: number;
+}
+
+export function sweepCycles(): Promise<SweepCyclesResponse> {
+  return postJson<SweepCyclesResponse>("/buddy/admin/cycles/sweep");
+}
+
+/**
+ * A live session that now has a real room behind it. `live_call` used to be a
+ * mode with nothing behind it: the pair met somewhere off the platform and came
+ * back to tick a box. This room is the platform's own debate room, and its
+ * score lands in the store the cycle report already reads.
+ */
+export interface OpenRoomResponse {
+  session: BuddySession;
+  room_kind: string;
+  room_code: string;
+  /** False for whoever joins second — they get the room already there. */
+  created: boolean;
+}
+
+export function openSessionRoom(sessionId: string): Promise<OpenRoomResponse> {
+  return postJson<OpenRoomResponse>(
+    `/buddy/sessions/${encodeURIComponent(sessionId)}/room`,
+  );
 }

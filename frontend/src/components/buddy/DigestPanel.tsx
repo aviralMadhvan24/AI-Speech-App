@@ -10,35 +10,9 @@
  * one conversation, not three.
  */
 import { useEffect, useMemo, useState } from "react";
-import {
-  fetchDigest,
-  personLabel,
-  type BuddyDigest,
-  type Nudge,
-} from "../../buddyApi";
-import { Button, Dot, Empty, Panel, Tag, type Tone } from "../console/Console";
-
-const STATE_TONE: Record<string, Tone> = {
-  stalled: "neg",
-  quiet: "warn",
-  not_started: "info",
-  no_cycle: "neutral",
-  overdue: "warn",
-};
-
-const STATE_LABEL: Record<string, string> = {
-  stalled: "Stalled",
-  quiet: "Quiet",
-  not_started: "Not started",
-  no_cycle: "No cycle",
-  overdue: "Cycle overdue",
-};
-
-const ROLE_LABEL: Record<string, string> = {
-  mentor: "Mentor",
-  mentee: "Mentee",
-  teacher: "You",
-};
+import { fetchDigest, personLabel, type BuddyDigest, type Nudge } from "../../buddyApi";
+import { Button, Dot, Empty, Panel, Tag } from "../console/Console";
+import { NudgeDetail, ROLE_LABEL, STATE_LABEL, STATE_TONE } from "./NudgeList";
 
 function groupByPerson(nudges: Nudge[]) {
   const groups = new Map<string, Nudge[]>();
@@ -162,23 +136,7 @@ export function DigestPanel() {
                 <ul className="space-y-1.5 pl-4">
                   {items.map((nudge) => (
                     <li key={`${nudge.pair_id}-${nudge.role}`}>
-                      <p className="text-[12px] text-[var(--c-muted)] leading-relaxed">
-                        {nudge.message}
-                      </p>
-                      <p className="text-[11px] text-[var(--c-faint)] mt-0.5 tabular-nums">
-                        {nudge.partner
-                          ? `with ${personLabel(nudge.partner)} · `
-                          : ""}
-                        {STATE_LABEL[nudge.state] ?? nudge.state}
-                        {nudge.days_overdue !== null &&
-                          ` · ${nudge.days_overdue}d past its end date`}
-                        {nudge.days_quiet !== null &&
-                          ` · silent ${nudge.days_quiet}d`}
-                        {nudge.sessions_kept > 0 &&
-                          ` · ${nudge.sessions_kept} session${
-                            nudge.sessions_kept === 1 ? "" : "s"
-                          } kept before it stopped`}
-                      </p>
+                      <NudgeDetail nudge={nudge} />
                     </li>
                   ))}
                 </ul>

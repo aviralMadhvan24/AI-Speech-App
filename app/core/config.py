@@ -96,6 +96,25 @@ class Settings(BaseSettings):
     DEBATE_DEV_MODE: bool = False
     GD_DEV_MODE: bool = False
 
+    # --- Outbound mail ---
+    # The buddy programme detects a pairing going quiet, but a stalled pairing
+    # is precisely the one nobody is opening the app to look at — so the
+    # warning has to leave the app to be worth anything.
+    #
+    # "none" logs what it would have sent and returns success, which is the
+    # default on purpose: the digest must be runnable, testable and deployable
+    # before any credentials exist. Set to "ses" to actually send.
+    MAIL_PROVIDER: str = "none"
+    # Must be an SES-verified identity, or every send fails.
+    MAIL_FROM: str = "no-reply@example.invalid"
+    # Read through Settings for the same reason as the flags above: nothing in
+    # `app/` exports `.env` into the process environment, so `os.getenv` would
+    # only ever see these when they are real env vars. The box has no IAM
+    # instance role, so the credentials are explicit.
+    AWS_REGION: str = "ap-south-1"
+    AWS_ACCESS_KEY_ID: str | None = None
+    AWS_SECRET_ACCESS_KEY: str | None = None
+
     @field_validator("DEBATE_DEV_MODE", "GD_DEV_MODE", mode="before")
     @classmethod
     def _strip_inline_comment(cls, value: object) -> object:

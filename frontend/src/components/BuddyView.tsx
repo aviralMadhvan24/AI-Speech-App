@@ -11,14 +11,14 @@ import {
   Square,
   Star,
   UserRound,
-  Users2,
 } from "lucide-react";
 import { Avatar } from "./Avatar";
-import { EmptyState } from "./EmptyState";
 import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { GrowthPanel, LastCycleSummary } from "./buddy/GrowthPanel";
 import { MentorGuide } from "./buddy/MentorGuide";
+import { MyNudges } from "./buddy/MyNudges";
+import { RequestBuddy } from "./buddy/RequestBuddy";
 import { Button } from "./console/Console";
 import { RaiseConcern } from "./buddy/RaiseConcern";
 import { SessionsPanel } from "./buddy/SessionsPanel";
@@ -832,16 +832,16 @@ export function BuddyView({ onBack }: BuddyViewProps) {
         </div>
       )}
 
+      {!loading && !error && <MyNudges />}
+
       {/* On a failed load the banner above already says what went wrong;
           claiming "no buddy yet" as well would be a lie. */}
       {loading ? (
         <SkeletonList count={2} />
       ) : conversations.length === 0 && !error ? (
-        <EmptyState
-          icon={Users2}
-          title="No buddy yet"
-          description="Your teacher pairs strong speakers with students who want practice. Keep submitting interviews — that's what the pairing draws on."
-        />
+        // `RequestBuddy` owns this whole state: it explains the programme, and
+        // offers the way in to the student who is allowed to ask for one.
+        <RequestBuddy onRequested={() => void load()} />
       ) : (
         <div className="space-y-6">
           {/* Only for someone who actually mentors — an empty ledger shown to a

@@ -22,6 +22,7 @@ import {
   fetchStudents,
   personIn,
   personLabel,
+  sweepCycles,
   type BuddyPair,
   type CycleVerdict,
   type MentorCandidatesResponse,
@@ -30,6 +31,7 @@ import {
   type People,
   type SpeakerRanking,
   type StudentRow,
+  type SuggestedPairing,
 } from "../../buddyApi";
 
 /**
@@ -296,8 +298,15 @@ import { ConcernsPanel } from "../buddy/ConcernsPanel";
 import { DigestPanel } from "../buddy/DigestPanel";
 import { MentorCandidates } from "../buddy/MentorCandidates";
 import { ProgrammePanel } from "../buddy/ProgrammePanel";
+import { RequestsPanel } from "../buddy/RequestsPanel";
 
-type AdminTab = "programme" | "chase" | "reported" | "mentors" | "pairings";
+type AdminTab =
+  | "programme"
+  | "chase"
+  | "reported"
+  | "requests"
+  | "mentors"
+  | "pairings";
 
 export function AdminBuddiesView() {
   const [tab, setTab] = useState<AdminTab>("programme");
@@ -310,6 +319,11 @@ export function AdminBuddiesView() {
   // list of students *is* the input — which also means a teacher can finally
   // see who has no mentor rather than only pairing people they thought of.
   const [students, setStudents] = useState<StudentRow[]>([]);
+  // Suggested, never applied: clicking one fills the form, it does not pair.
+  const [suggestions, setSuggestions] = useState<SuggestedPairing[]>([]);
+  const [openRequests, setOpenRequests] = useState(0);
+  const [sweeping, setSweeping] = useState(false);
+  const [sweepResult, setSweepResult] = useState<string | null>(null);
   const [health, setHealth] = useState<Record<string, PairHealth>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +354,12 @@ export function AdminBuddiesView() {
       setOpenConcerns(pairData.open_concerns ?? {});
       setCycles(cycleData.cycles);
       setStudents(studentData.students);
+      setSuggestions(studentData.suggestions);
+      // The cohort already knows who is waiting, so the tab count costs no
+      // extra request.
+      setOpenRequests(
+        studentData.students.filter((row) => row.open_request !== null).length,
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the buddy data.");
@@ -367,6 +387,36 @@ export function AdminBuddiesView() {
     },
     [load],
   );
+
+  // `ends_at` was written when a cycle opened and then only ever displayed, so
+  // a cycle could run past its end indefinitely: the summary was never
+  // computed, the verdict never reached the pair, and the `improved` verdict
+  // that feeds growth back into mentor selection never fired. This is the one
+  // click that clears them.
+  const handleSweep = useCallback(async () => {
+    setSweeping(true);
+    setSweepResult(null);
+    setError(null);
+    try {
+      const { closed, total } = await sweepCycles();
+      const verdicts = closed
+        .map((cycle) => cycle.summary?.verdict)
+        .filter((verdict): verdict is CycleVerdict => Boolean(verdict))
+        .map((verdict) => VERDICT[verdict].label);
+      setSweepResult(
+        total === 0
+          ? "Nothing was overdue."
+          : `Closed ${total} cycle${total === 1 ? "" : "s"}${
+              verdicts.length > 0 ? ` — ${verdicts.join(", ")}` : ""
+            }.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not close them.");
+    } finally {
+      setSweeping(false);
+    }
+  }, [load]);
 
   const handleCreatePair = useCallback(async () => {
     const mentor = mentorId.trim();
@@ -512,6 +562,12 @@ export function AdminBuddiesView() {
   ).length;
 
   const concernCount = Object.values(openConcerns).reduce((sum, n) => sum + n, 0);
+  const unpairedCount = students.filter((row) => !row.has_mentor).length;
+  // Read off pair health rather than off `cycles`, so "overdue" means the same
+  // thing here as it does in the digest and on the pairing rows.
+  const overdueCount = activePairs.filter(
+    (p) => health[p.pair_id]?.state === "overdue",
+  ).length;
 
   return (
     <div className="console space-y-3">
@@ -528,6 +584,7 @@ export function AdminBuddiesView() {
           { id: "programme", label: "Programme" },
           { id: "chase", label: "Needs chasing", count: needAttention },
           { id: "reported", label: "Reported", count: concernCount },
+          { id: "requests", label: "Asked", count: openRequests },
           { id: "mentors", label: "Mentors", count: suggested.length },
           { id: "pairings", label: "Pairings", count: activePairs.length },
         ]}
@@ -536,6 +593,17 @@ export function AdminBuddiesView() {
       {tab === "programme" && <ProgrammePanel />}
       {tab === "chase" && <DigestPanel />}
       {tab === "reported" && <ConcernsPanel />}
+
+      {/* Pairing happens on the Pairings tab and nowhere else, so answering a
+          request hands the student over rather than duplicating the form. */}
+      {tab === "requests" && (
+        <RequestsPanel
+          onPair={(userId) => {
+            setMenteeId(userId);
+            setTab("pairings");
+          }}
+        />
+      )}
 
       {tab === "mentors" && (
         <div className="space-y-3">
@@ -583,6 +651,62 @@ export function AdminBuddiesView() {
 
       {tab === "pairings" && (
         <div className="space-y-6">
+
+      {/* --- Suggested pairings ---
+          "Who has no mentor" and "who is free to mentor" are two lists a
+          teacher has to hold in their head at once, and holding thirty of each
+          is what stops anyone being paired at all. Clicking a suggestion fills
+          the form below; it never pairs anybody on its own. */}
+      {suggestions.length > 0 && (
+        <Panel
+          title="Suggested pairings"
+          subtitle={`${unpairedCount} student${
+            unpairedCount === 1 ? "" : "s"
+          } have no mentor`}
+          flush
+        >
+          <ul>
+            {suggestions.map((suggestion) => (
+              <li
+                key={suggestion.mentee.user_id}
+                className="px-3.5 py-2.5 border-b border-[var(--c-line)] last:border-b-0 flex items-start justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap text-[12.5px]">
+                    <span className="font-semibold text-violet-300">
+                      {personLabel(suggestion.mentee)}
+                    </span>
+                    <span className="text-zinc-600">with</span>
+                    <span className="font-semibold text-emerald-300">
+                      {personLabel(suggestion.mentor)}
+                    </span>
+                    {suggestion.mentor_active_mentees > 0 && (
+                      <Tag tone="neutral">
+                        {suggestion.mentor_active_mentees} already
+                      </Tag>
+                    )}
+                  </div>
+                  {suggestion.reason && (
+                    <p className="text-[11.5px] text-[var(--c-muted)] mt-1 leading-relaxed">
+                      {suggestion.reason}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  variant="default"
+                  onClick={() => {
+                    setMentorId(suggestion.mentor.user_id);
+                    setMenteeId(suggestion.mentee.user_id);
+                  }}
+                >
+                  Use this
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
       {/* --- Pairing --- */}
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
@@ -703,12 +827,24 @@ export function AdminBuddiesView() {
             <UserCheck className="w-4 h-4 text-emerald-300" />
             Pairings
           </h2>
-          {needAttention > 0 && (
-            <p className="text-xs text-amber-300/90">
-              {needAttention} of {activePairs.length} need a look
-            </p>
-          )}
+          <div className="flex items-center gap-3 flex-wrap">
+            {needAttention > 0 && (
+              <p className="text-xs text-amber-300/90">
+                {needAttention} of {activePairs.length} need a look
+              </p>
+            )}
+            {overdueCount > 0 && (
+              <Button variant="default" disabled={sweeping} onClick={() => void handleSweep()}>
+                {sweeping
+                  ? "Closing…"
+                  : `Close ${overdueCount} overdue cycle${overdueCount === 1 ? "" : "s"}`}
+              </Button>
+            )}
+          </div>
         </div>
+        {sweepResult && (
+          <p className="text-xs text-[var(--c-muted)]">{sweepResult}</p>
+        )}
 
         {pairs.length === 0 ? (
           <div className="c-panel c-empty">

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Briefcase,
@@ -12,6 +12,7 @@ import {
   Users2,
 } from "lucide-react";
 import type { AuthUser } from "../types";
+import { fetchBadge, type BuddyBadge } from "../buddyApi";
 
 interface MainMenuViewProps {
   user: AuthUser;
@@ -42,6 +43,10 @@ interface Feature {
   iconGlow: string;
   onClick: () => void;
   ariaLabel: string;
+  /** A count worth interrupting for. Rendered as a bubble; 0 renders nothing. */
+  badge?: number;
+  /** Replaces the tagline when there is something specific to say. */
+  taglineOverride?: string;
 }
 
 export function MainMenuView({
@@ -57,6 +62,18 @@ export function MainMenuView({
   onSelectPotd,
   onSelectBuddy,
 }: MainMenuViewProps) {
+  const [buddy, setBuddy] = useState<BuddyBadge | null>(null);
+
+  // One cheap call, not `/buddy/me` — that reads every message in every pairing
+  // to build previews, and this menu re-renders on every navigation.
+  useEffect(() => {
+    fetchBadge()
+      .then(setBuddy)
+      // A badge that fails to load is a badge that is not shown. It must never
+      // be the reason the main menu does not render.
+      .catch(() => setBuddy(null));
+  }, []);
+
   const features: Feature[] = useMemo(
     () => {
       const base: Feature[] = [
@@ -179,6 +196,13 @@ export function MainMenuView({
           "bg-[var(--raised)] border border-[var(--hairline-strong)] shadow-[0_0_18px_-4px_rgba(45,212,191,0.55)]",
         onClick: onSelectBuddy,
         ariaLabel: "Open speaking buddy",
+        badge: (buddy?.unread ?? 0) + (buddy?.nudges ?? 0),
+        // Someone with no mentor is shown the way in rather than a count of
+        // nothing — the tile has to say which of the two it is.
+        taglineOverride:
+          buddy && !buddy.has_pairing && buddy.can_request
+            ? "Peer · Ask for one"
+            : undefined,
       },
     ];
 
@@ -213,6 +237,7 @@ export function MainMenuView({
       onSelectPotd,
       onSelectBuddy,
       showAdmin,
+      buddy,
     ],
   );
 
@@ -269,8 +294,16 @@ export function MainMenuView({
                     <span
                       className={`text-[10px] uppercase tracking-widest font-medium ${feature.accent}`}
                     >
-                      {feature.tagline}
+                      {feature.taglineOverride ?? feature.tagline}
                     </span>
+                    {(feature.badge ?? 0) > 0 && (
+                      <span
+                        className="text-[10px] font-semibold tabular-nums bg-brand-500/15 text-brand-300 border border-brand-500/30 px-1.5 py-0.5 rounded-full"
+                        aria-label={`${feature.badge} waiting`}
+                      >
+                        {feature.badge}
+                      </span>
+                    )}
                     {!isLive && (
                       <span className="text-[10px] uppercase tracking-widest font-medium bg-zinc-800/80 text-zinc-400 px-1.5 py-0.5 rounded">
                         Soon

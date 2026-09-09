@@ -6,13 +6,15 @@
  * whoever writes second does not overwrite the first.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarPlus, Check, Loader2, Star, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { CalendarPlus, Check, Loader2, Star, Video, X } from "lucide-react";
 import {
   cancelSession,
   completeSession,
   fetchPracticePrompts,
   fetchSessions,
   missSession,
+  openSessionRoom,
   planSession,
   rateSession,
   type BuddySession,
@@ -33,6 +35,19 @@ const PROMPT_LABEL: Record<PromptKind, string> = {
   debate: "Debate motion",
   gd: "Group discussion topic",
 };
+
+/** The four documented 409s from `POST /buddy/sessions/{id}/room`, in English. */
+function ROOM_ERROR(message: string): string {
+  if (message.includes("session_already_resolved"))
+    return "This session is already closed out — plan a new one to speak again.";
+  if (message.includes("not_a_live_session"))
+    return "Only a live-call session opens a room. This one is voice notes.";
+  if (message.includes("live_room_needs_a_debate_prompt"))
+    return "A live room needs a debate motion. Plan the session against one and it can host itself.";
+  if (message.includes("room_unavailable"))
+    return "The room could not be opened just now. Try again in a moment.";
+  return message || "Could not open the room.";
+}
 
 const STATUS_STYLE: Record<BuddySession["status"], string> = {
   planned: "text-amber-300 bg-amber-500/10 border-amber-500/30",
@@ -153,6 +168,9 @@ function SessionRow({
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [roomError, setRoomError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const myNote = isMentor ? session.mentor_notes : session.mentee_reflection;
   const theirNote = isMentor ? session.mentee_reflection : session.mentor_notes;
@@ -171,6 +189,21 @@ function SessionRow({
     },
     [onChanged],
   );
+
+  // Whoever calls first creates the room; the other side calls the same
+  // endpoint and is handed the code already there.
+  const openRoom = useCallback(async () => {
+    setJoining(true);
+    setRoomError(null);
+    try {
+      const { room_code } = await openSessionRoom(session.session_id);
+      navigate(`/debate/${room_code}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      setRoomError(ROOM_ERROR(message));
+      setJoining(false);
+    }
+  }, [navigate, session.session_id]);
 
   return (
     <li className="c-panel p-3.5 space-y-2">
@@ -216,8 +249,32 @@ function SessionRow({
         </div>
       )}
 
+      {roomError && <p className="text-[12px] text-rose-300">{roomError}</p>}
+
       {session.status === "planned" && !open && (
         <div className="flex gap-2 flex-wrap">
+          {/* `live_call` used to be a mode with no call behind it: the pair met
+              somewhere off the platform and came back to tick a box, so the
+              only record was their own word for it. This opens the platform's
+              own debate room on the motion the session already points at, and
+              what happens in it is scored into the cycle without either of
+              them reporting anything. Only debate — a GD room needs five to
+              start, and a pair cannot fill one. */}
+          {session.mode === "live_call" && session.prompt_kind === "debate" && (
+            <button
+              type="button"
+              disabled={joining}
+              onClick={() => void openRoom()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm border border-teal-500/40 text-teal-300 hover:bg-teal-500/10 transition disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60"
+            >
+              {joining ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Video className="w-3.5 h-3.5" />
+              )}
+              {session.room_code ? "Rejoin room" : "Open room"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setOpen(true)}
