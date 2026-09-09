@@ -948,6 +948,26 @@ export function fetchMyNudges(): Promise<MyNudgesResponse> {
   return fetchJson<MyNudgesResponse>("/buddy/my-nudges");
 }
 
+/**
+ * Whether the daily digest may be emailed to the caller.
+ *
+ * Phrased as opt-*out* because that is what the server stores: the default is
+ * to be reachable, and only dissent is recorded. Invert it for a checkbox.
+ */
+export interface MailPreference {
+  digest_opted_out: boolean;
+}
+
+export function fetchMailPreference(): Promise<MailPreference> {
+  return fetchJson<MailPreference>("/buddy/mail-preferences");
+}
+
+export function setMailPreference(optedOut: boolean): Promise<MailPreference> {
+  return postJson<MailPreference>("/buddy/mail-preferences", {
+    digest_opted_out: optedOut,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Asking for a mentor
 // ---------------------------------------------------------------------------

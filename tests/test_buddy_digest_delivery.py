@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core import mailer
+from app.storage.buddy import buddy_mail_prefs_store
 
 
 # --- The transport --------------------------------------------------------
@@ -98,6 +99,7 @@ def script(tmp_path, monkeypatch):
     module = importlib.import_module("scripts.send_buddy_digest")
     importlib.reload(module)
     monkeypatch.setattr(module, "SENT_LOG", tmp_path / "sent.jsonl")
+    monkeypatch.setattr(buddy_mail_prefs_store, "path", tmp_path / "prefs.jsonl")
     return module
 
 
@@ -211,3 +213,92 @@ def test_a_corrupt_row_in_the_send_log_does_not_remail_everyone(script):
     )
 
     assert script.already_sent_today() == {"u-1"}
+
+
+# --- Refusing the mail ---------------------------------------------------
+#
+# Anything that leaves the app has to be refusable, and refusable from the
+# place it arrives: a setting buried in an app somebody is not opening is not
+# an opt-out, it is a reason to press "spam".
+
+
+def test_someone_opted_out_is_not_mailed(script, monkeypatch):
+    monkeypatch.setattr(
+        script.digest_module,
+        "build_digest",
+        lambda: SimpleNamespace(total=1, nudges=[_nudge("u-1", "one@x.test")]),
+    )
+    monkeypatch.setattr(script, "send", lambda *a, **k: pytest.fail("mailed an opt-out"))
+    buddy_mail_prefs_store.set_opted_out("u-1", True)
+
+    assert script.main([]) == 0
+    # And nothing was recorded, so turning the setting back on resumes cleanly
+    # rather than looking like they were already mailed today.
+    assert not script.SENT_LOG.exists()
+
+
+def test_opting_back_in_resumes_the_mail(script, monkeypatch):
+    sent: list[str] = []
+    monkeypatch.setattr(
+        script.digest_module,
+        "build_digest",
+        lambda: SimpleNamespace(total=1, nudges=[_nudge("u-1", "one@x.test")]),
+    )
+    monkeypatch.setattr(script, "send", lambda to, *a, **k: sent.append(to) or True)
+
+    buddy_mail_prefs_store.set_opted_out("u-1", True)
+    assert script.main([]) == 0
+    assert sent == []
+
+    buddy_mail_prefs_store.set_opted_out("u-1", False)
+    assert script.main([]) == 0
+    assert sent == ["one@x.test"]
+
+
+def test_every_message_carries_a_working_unsubscribe_link(script, monkeypatch):
+    bodies: list[str] = []
+    monkeypatch.setattr(
+        script.digest_module,
+        "build_digest",
+        lambda: SimpleNamespace(total=1, nudges=[_nudge("u-1", "one@x.test")]),
+    )
+    monkeypatch.setattr(script.settings, "APP_BASE_URL", "https://example.test/")
+    monkeypatch.setattr(
+        script, "send", lambda _to, _s, body: bodies.append(body) or True
+    )
+
+    assert script.main([]) == 0
+
+    token = buddy_mail_prefs_store.get("u-1").unsubscribe_token
+    # One slash, not two: the base URL is allowed a trailing one.
+    assert f"https://example.test/buddy/unsubscribe?token={token}" in bodies[0]
+
+
+def test_a_dry_run_mints_no_token(script, monkeypatch):
+    """Asking what it would do must not write a row as a side effect."""
+    monkeypatch.setattr(
+        script.digest_module,
+        "build_digest",
+        lambda: SimpleNamespace(total=1, nudges=[_nudge("u-1", "one@x.test")]),
+    )
+    monkeypatch.setattr(script, "send", lambda *a, **k: pytest.fail("dry run sent"))
+
+    assert script.main(["--dry-run"]) == 0
+    assert buddy_mail_prefs_store.get("u-1") is None
+
+
+def test_a_reissued_token_kills_the_links_already_sent(script):
+    """Revocation is issuing a new token, which is why it is not a signature."""
+    first = buddy_mail_prefs_store.ensure("u-1").unsubscribe_token
+    assert buddy_mail_prefs_store.by_token(first).user_id == "u-1"
+
+    # Simulate reissue by writing a fresh row for the same person.
+    buddy_mail_prefs_store.path.write_text("", encoding="utf-8")
+    second = buddy_mail_prefs_store.ensure("u-1").unsubscribe_token
+
+    assert second != first
+    assert buddy_mail_prefs_store.by_token(first) is None
+
+
+def test_no_row_means_they_have_never_said_and_never_said_means_yes(script):
+    assert buddy_mail_prefs_store.is_opted_out("u-nobody") is False

@@ -259,6 +259,7 @@ _CYCLES_PATH = Path("outputs/buddy_cycles.jsonl")
 _SESSIONS_PATH = Path("outputs/buddy_sessions.jsonl")
 _CONCERNS_PATH = Path("outputs/buddy_concerns.jsonl")
 _REQUESTS_PATH = Path("outputs/buddy_requests.jsonl")
+_MAIL_PREFS_PATH = Path("outputs/buddy_mail_prefs.jsonl")
 
 
 def _now() -> str:
@@ -1005,6 +1006,106 @@ class BuddyRequestsStore:
         )
 
 
+class MailPreference(BaseModel):
+    """Whether one person wants the digest emailed to them.
+
+    Absence means yes. Storing only the people who have expressed a preference
+    keeps this file the size of the dissent rather than the size of the cohort,
+    and means a new student is never waiting on a row being written before the
+    programme can reach them.
+
+    ``unsubscribe_token`` is an opaque random id, not a signature over the user
+    id. That choice avoids a signing secret to configure, rotate and leak, and
+    it makes revocation trivial — issue a new token and every link in every
+    previously sent email is dead. It is a bearer credential, but the only
+    thing bearing it can do is stop that person's own mail.
+    """
+
+    user_id: str
+    # True means "do not email me". The name states the exception, which is
+    # what is actually stored.
+    digest_opted_out: bool = False
+    unsubscribe_token: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    updated_at: str
+
+
+class BuddyMailPrefsStore:
+    """One row per person who has expressed a mail preference.
+
+    Rewrites rather than appends on every change: this file has at most one row
+    per person and is read on every digest run, so an append-only log of
+    toggles would grow without bound and make "what is their setting now" a
+    scan rather than a lookup.
+    """
+
+    path: Path
+
+    def __init__(self, path: Path = _MAIL_PREFS_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[MailPreference]:
+        return _load(self.path, MailPreference)
+
+    def get(self, user_id: str) -> Optional[MailPreference]:
+        for pref in self.list_all():
+            if pref.user_id == user_id:
+                return pref
+        return None
+
+    def is_opted_out(self, user_id: str) -> bool:
+        """No row means they have never said, and never said means yes."""
+        pref = self.get(user_id)
+        return bool(pref and pref.digest_opted_out)
+
+    def opted_out_ids(self) -> set[str]:
+        """Every id to skip, in one pass — for the digest, which asks about all
+        of them at once and would otherwise re-read this file per recipient."""
+        return {p.user_id for p in self.list_all() if p.digest_opted_out}
+
+    def by_token(self, token: str) -> Optional[MailPreference]:
+        if not token:
+            return None
+        for pref in self.list_all():
+            if pref.unsubscribe_token == token:
+                return pref
+        return None
+
+    # --- Write ---
+
+    def ensure(self, user_id: str) -> MailPreference:
+        """This person's row, created opted-in if they have none.
+
+        Called before sending, because the link in the email needs a token and
+        a token has to exist somewhere first.
+        """
+        existing = self.get(user_id)
+        if existing is not None:
+            return existing
+        record = MailPreference(user_id=user_id, updated_at=_now())
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def set_opted_out(self, user_id: str, opted_out: bool) -> MailPreference:
+        """Set the preference, creating the row if this is their first word."""
+        prefs = self.list_all()
+        for index, pref in enumerate(prefs):
+            if pref.user_id == user_id:
+                updated = pref.model_copy(
+                    update={"digest_opted_out": opted_out, "updated_at": _now()}
+                )
+                prefs[index] = updated
+                overwrite_jsonl(self.path, [p.model_dump() for p in prefs])
+                return updated
+
+        record = MailPreference(
+            user_id=user_id, digest_opted_out=opted_out, updated_at=_now()
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+
 mentors_store = MentorsStore()
 buddy_pairs_store = BuddyPairsStore()
 buddy_messages_store = BuddyMessagesStore()
@@ -1012,3 +1113,4 @@ buddy_cycles_store = BuddyCyclesStore()
 buddy_sessions_store = BuddySessionsStore()
 buddy_concerns_store = BuddyConcernsStore()
 buddy_requests_store = BuddyRequestsStore()
+buddy_mail_prefs_store = BuddyMailPrefsStore()

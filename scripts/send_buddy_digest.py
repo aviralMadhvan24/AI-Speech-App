@@ -45,7 +45,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.buddy import digest as digest_module  # noqa: E402
 from app.buddy import identity  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.core.mailer import send  # noqa: E402
+from app.storage.buddy import buddy_mail_prefs_store  # noqa: E402
 
 SENT_LOG = Path("outputs/buddy_digest_sent.jsonl")
 
@@ -100,13 +102,17 @@ def record_sent(user_id: str, email: str, count: int) -> None:
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def compose(nudges: list) -> str:
+def compose(nudges: list, unsubscribe_token: str = "") -> str:
     """One person's message: what to do, then why it is being said.
 
     The evidence line matters as much as the instruction. "Pick this back up"
     is easy to dismiss; "silent 12 days, 3 sessions kept before it stopped"
     says this was working and then stopped, which is a different message from
     one that never started.
+
+    Ends with a one-click way out. Anything arriving uninvited has to be
+    refusable in the place it arrives — telling somebody to go and find a
+    setting inside an app they are not opening is how mail becomes spam.
     """
     role = nudges[0].role
     lines = [INTRO.get(role, INTRO["mentee"]), ""]
@@ -126,6 +132,16 @@ def compose(nudges: list) -> str:
             lines.append(f"  ({', '.join(detail)})")
 
     lines += ["", "Open Speaking Buddy to pick it back up."]
+
+    if unsubscribe_token:
+        base = settings.APP_BASE_URL.rstrip("/")
+        lines += [
+            "",
+            "---",
+            "Stop receiving these emails: "
+            f"{base}/buddy/unsubscribe?token={unsubscribe_token}",
+            "This only turns off the email. Your pairing is untouched.",
+        ]
     return "\n".join(lines)
 
 
@@ -154,9 +170,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         by_person.setdefault(nudge.user_id, []).append(nudge)
 
     already = set() if args.dry_run else already_sent_today()
+    # One pass for the whole cohort rather than a lookup per recipient — this
+    # file is re-read on every call, like every other store here.
+    opted_out = buddy_mail_prefs_store.opted_out_ids()
     sent = skipped = failed = 0
 
     for user_id, nudges in by_person.items():
+        if user_id in opted_out:
+            # They asked not to be emailed. The nudge is still waiting for them
+            # in the app; only the mail stops.
+            print(f"  . {user_id}: opted out of the digest, skipping")
+            skipped += 1
+            continue
+
         if user_id in already:
             print(f"  · {user_id}: already mailed today, skipping")
             skipped += 1
@@ -174,7 +200,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             skipped += 1
             continue
 
-        body = compose(nudges)
+        # A dry run must not write rows, so it composes without a token rather
+        # than minting one as a side effect of being asked what it would do.
+        token = (
+            ""
+            if args.dry_run
+            else buddy_mail_prefs_store.ensure(user_id).unsubscribe_token
+        )
+        body = compose(nudges, token)
 
         if args.dry_run:
             print(f"\n--- to {email} ({len(nudges)} nudge(s)) ---")

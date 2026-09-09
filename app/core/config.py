@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # default on purpose: the digest must be runnable, testable and deployable
     # before any credentials exist. Set to "ses" to actually send.
     MAIL_PROVIDER: str = "none"
+    # Where a link in an email should point. The digest's unsubscribe link is
+    # built from this, so a wrong value here is an unsubscribe that 404s —
+    # which is worse than no link at all.
+    APP_BASE_URL: str = "https://15.207.25.230.nip.io"
     # Must be an SES-verified identity, or every send fails.
     MAIL_FROM: str = "no-reply@example.invalid"
     # Read through Settings for the same reason as the flags above: nothing in

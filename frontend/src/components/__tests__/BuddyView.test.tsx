@@ -32,6 +32,8 @@ const fetchMyConcern = vi.fn();
 const raiseConcern = vi.fn();
 const fetchMyNudges = vi.fn();
 const fetchMyRequest = vi.fn();
+const fetchMailPreference = vi.fn();
+const setMailPreference = vi.fn();
 
 vi.mock("../../buddyApi", () => ({
   rateSession: (...args: unknown[]) => rateSession(...args),
@@ -53,6 +55,8 @@ vi.mock("../../buddyApi", () => ({
   fetchPairActivity: (...args: unknown[]) => fetchPairActivity(...args),
   fetchMyNudges: (...args: unknown[]) => fetchMyNudges(...args),
   fetchMyRequest: (...args: unknown[]) => fetchMyRequest(...args),
+  fetchMailPreference: (...args: unknown[]) => fetchMailPreference(...args),
+  setMailPreference: (...args: unknown[]) => setMailPreference(...args),
   // Not a network call — a pure label helper. Mocked as the real thing so the
   // component renders the same name here as it does in the browser.
   personLabel: (person: { name?: string | null; email?: string | null; user_id?: string } | null) =>
@@ -153,6 +157,10 @@ beforeEach(() => {
     can_request: false,
     reason: "already_paired",
   });
+  fetchMailPreference.mockResolvedValue({ digest_opted_out: false });
+  setMailPreference.mockImplementation((optedOut: boolean) =>
+    Promise.resolve({ digest_opted_out: optedOut }),
+  );
   fetchMessages.mockResolvedValue({
     pair_id: "pair-1",
     partner: PARTNER,

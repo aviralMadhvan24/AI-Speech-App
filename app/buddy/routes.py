@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi import status
 from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 
 from app.auth import User
 from app.auth import require_teacher
@@ -45,6 +46,8 @@ from app.buddy.schemas import BuddyBadge
 from app.buddy.schemas import CompleteSessionRequest
 from app.buddy.schemas import ConcernsResponse
 from app.buddy.schemas import DeclineRequestRequest
+from app.buddy.schemas import MailPreferenceResponse
+from app.buddy.schemas import SetMailPreferenceRequest
 from app.buddy.schemas import ConversationSummary
 from app.buddy.schemas import CreateCycleRequest
 from app.buddy.schemas import CreatePairRequest
@@ -80,6 +83,7 @@ from app.storage.buddy import BuddyMessage
 from app.storage.buddy import BuddyPair
 from app.storage.buddy import BuddySession
 from app.storage.buddy import buddy_concerns_store
+from app.storage.buddy import buddy_mail_prefs_store
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
 from app.storage.buddy import BuddyRequest
@@ -1242,6 +1246,101 @@ async def buddy_badge(current_user: User = Depends(require_user)) -> BuddyBadge:
         has_pairing=bool(active),
         can_request=can_request,
     )
+
+
+# ---------------------------------------------------------------------------
+# Whether we may email you
+# ---------------------------------------------------------------------------
+#
+# The digest leaves the app, and anything that leaves the app has to be
+# refusable. Two ways to refuse, because they serve different moments: a
+# signed-in toggle for someone deciding in the app, and a link in the mail
+# itself for someone who has just received one and wants it to stop now.
+#
+# The link carries an opaque token rather than a signature over the user id.
+# There is no secret to configure, rotate or leak, and revoking is issuing a
+# new token — which kills every link in every email already sent.
+
+
+@router.get("/mail-preferences", response_model=MailPreferenceResponse)
+async def get_mail_preferences(
+    current_user: User = Depends(require_user),
+) -> MailPreferenceResponse:
+    """The caller's own setting. No row means they have never said, and never
+    said means yes."""
+    return MailPreferenceResponse(
+        digest_opted_out=buddy_mail_prefs_store.is_opted_out(current_user.uid)
+    )
+
+
+@router.post("/mail-preferences", response_model=MailPreferenceResponse)
+async def set_mail_preferences(
+    body: SetMailPreferenceRequest,
+    current_user: User = Depends(require_user),
+) -> MailPreferenceResponse:
+    """Turn the digest email on or off for yourself."""
+    updated = buddy_mail_prefs_store.set_opted_out(
+        current_user.uid, body.digest_opted_out
+    )
+    logger.info(
+        "buddy_mail_pref user=%s opted_out=%s",
+        current_user.uid,
+        updated.digest_opted_out,
+    )
+    return MailPreferenceResponse(digest_opted_out=updated.digest_opted_out)
+
+
+# Deliberately unauthenticated: it is clicked from an email client, which
+# carries no session, and demanding a sign-in to stop unwanted mail is how you
+# get a spam complaint instead of an unsubscribe. The token grants exactly one
+# capability — silencing that person's own digest — so bearing it is not worth
+# much to anyone else.
+@router.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe(token: str = "") -> HTMLResponse:
+    """One click, from the email, no sign-in."""
+    pref = buddy_mail_prefs_store.by_token(token)
+    if pref is None:
+        # Same page either way, minus the confirmation. A token that says
+        # "no such person" would let someone test tokens for valid ones.
+        logger.info("buddy_unsubscribe_unknown_token")
+        return HTMLResponse(
+            _unsubscribe_page(
+                "That link has expired",
+                "It may already have been used, or replaced by a newer one. "
+                "You can turn these emails off from the Speaking Buddy screen "
+                "in the app.",
+            ),
+            status_code=200,
+        )
+
+    buddy_mail_prefs_store.set_opted_out(pref.user_id, True)
+    logger.info("buddy_unsubscribe user=%s", pref.user_id)
+    return HTMLResponse(
+        _unsubscribe_page(
+            "You will not get these emails again",
+            "Your pairing is untouched and everything still works in the app — "
+            "only the daily email has stopped. You can turn it back on from the "
+            "Speaking Buddy screen whenever you like.",
+        )
+    )
+
+
+def _unsubscribe_page(heading: str, body: str) -> str:
+    """A whole page, because a mail client opens this in a real browser tab.
+
+    Inline styles and no assets: this is served to someone who has just decided
+    they want less from us, and a page that needs to load a bundle to say one
+    sentence is the wrong answer.
+    """
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Speaking Buddy</title></head>
+<body style="margin:0;background:#0b0b0c;color:#e7e7e9;font:16px/1.6 system-ui,sans-serif">
+<div style="max-width:34rem;margin:12vh auto;padding:0 1.5rem">
+<h1 style="font-size:1.35rem;margin:0 0 .75rem">{heading}</h1>
+<p style="margin:0;color:#a8a8ad">{body}</p>
+</div></body></html>"""
 
 
 # ---------------------------------------------------------------------------

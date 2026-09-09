@@ -110,6 +110,24 @@ class BuddyBadge(BaseModel):
     can_request: bool = False
 
 
+# --- Mail preferences ---
+
+
+class MailPreferenceResponse(BaseModel):
+    """Whether the caller wants the digest emailed to them.
+
+    Phrased as opt-*out* because that is what is stored: the default is to be
+    reachable, and only dissent is recorded. A client rendering a checkbox
+    should invert it rather than the server pretending the default is a row.
+    """
+
+    digest_opted_out: bool = False
+
+
+class SetMailPreferenceRequest(BaseModel):
+    digest_opted_out: bool
+
+
 # --- Teacher-facing ---
 
 

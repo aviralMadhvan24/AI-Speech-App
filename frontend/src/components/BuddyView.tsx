@@ -16,6 +16,7 @@ import { Avatar } from "./Avatar";
 import { SkeletonList } from "./Skeleton";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { GrowthPanel, LastCycleSummary } from "./buddy/GrowthPanel";
+import { MailPreference } from "./buddy/MailPreference";
 import { MentorGuide } from "./buddy/MentorGuide";
 import { MyNudges } from "./buddy/MyNudges";
 import { RequestBuddy } from "./buddy/RequestBuddy";
@@ -886,6 +887,10 @@ export function BuddyView({ onBack }: BuddyViewProps) {
               ))}
             </section>
           )}
+
+          <div className="border-t border-[var(--c-line)] pt-1">
+            <MailPreference />
+          </div>
         </div>
       )}
     </div>
