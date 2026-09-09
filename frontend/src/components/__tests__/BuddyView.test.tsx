@@ -10,7 +10,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BuddyView } from "../BuddyView";
-import type { BuddyMessage, ConversationSummary } from "../../buddyApi";
+import type { BuddyMessage, ConversationSummary, Person } from "../../buddyApi";
 
 const fetchMyBuddies = vi.fn();
 const fetchMessages = vi.fn();
@@ -48,6 +48,10 @@ vi.mock("../../buddyApi", () => ({
   sendVoiceNote: (...args: unknown[]) => sendVoiceNote(...args),
   fetchVoiceNoteUrl: (...args: unknown[]) => fetchVoiceNoteUrl(...args),
   fetchPairActivity: (...args: unknown[]) => fetchPairActivity(...args),
+  // Not a network call — a pure label helper. Mocked as the real thing so the
+  // component renders the same name here as it does in the browser.
+  personLabel: (person: { name?: string | null; email?: string | null; user_id?: string } | null) =>
+    person ? person.name || person.email || person.user_id : "Unknown",
 }));
 
 const recorder = {
@@ -72,15 +76,25 @@ HTMLMediaElement.prototype.pause = vi.fn();
 URL.createObjectURL = vi.fn(() => "blob:voice-note");
 URL.revokeObjectURL = vi.fn();
 
-const ME = "mentee@kiet.edu";
+const ME: Person = {
+  user_id: "u-mentee",
+  email: "mentee@kiet.edu",
+  name: "Bea Mentee",
+  role: "student",
+};
+const PARTNER: Person = {
+  user_id: "u-mentor",
+  email: "mentor@kiet.edu",
+  name: "Ada Mentor",
+  role: "student",
+};
 
 function conversation(
   overrides: Partial<ConversationSummary> = {},
 ): ConversationSummary {
   return {
     pair_id: "pair-1",
-    partner_email: "mentor@kiet.edu",
-    partner_name: "Ada Mentor",
+    partner: PARTNER,
     my_role: "mentee",
     status: "active",
     unread_count: 0,
@@ -98,7 +112,7 @@ function message(overrides: Partial<BuddyMessage> = {}): BuddyMessage {
   return {
     message_id: "m-1",
     pair_id: "pair-1",
-    sender_email: "mentor@kiet.edu",
+    sender_id: PARTNER.user_id,
     kind: "text",
     body: "how did it go?",
     audio_id: null,
@@ -111,18 +125,18 @@ function message(overrides: Partial<BuddyMessage> = {}): BuddyMessage {
 }
 
 function renderView() {
-  return render(<BuddyView userEmail={ME} onBack={() => {}} />);
+  return render(<BuddyView onBack={() => {}} />);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   recorder.isRecording = false;
   recorder.error = null;
-  fetchMyBuddies.mockResolvedValue({ conversations: [], total: 0 });
+  fetchMyBuddies.mockResolvedValue({ me: ME, conversations: [], total: 0 });
   fetchMessages.mockResolvedValue({
     pair_id: "pair-1",
-    partner_email: "mentor@kiet.edu",
-    partner_name: "Ada Mentor",
+    partner: PARTNER,
+    me: ME,
     messages: [],
     total: 0,
   });
@@ -210,9 +224,10 @@ describe("BuddyView — conversation list", () => {
 
   it("separates the people you mentor from the people who mentor you", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [
-        conversation({ pair_id: "p-mentee", my_role: "mentee", partner_name: "Ada" }),
-        conversation({ pair_id: "p-mentor", my_role: "mentor", partner_name: "Bob" }),
+        conversation({ pair_id: "p-mentee", my_role: "mentee" }),
+        conversation({ pair_id: "p-mentor", my_role: "mentor" }),
       ],
       total: 2,
     });
@@ -227,6 +242,7 @@ describe("BuddyView — conversation list", () => {
 
   it("shows the unread count and the last message", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ unread_count: 3 })],
       total: 1,
     });
@@ -239,7 +255,8 @@ describe("BuddyView — conversation list", () => {
 
   it("falls back to the email when the partner has no display name", async () => {
     fetchMyBuddies.mockResolvedValue({
-      conversations: [conversation({ partner_name: null })],
+      me: ME,
+      conversations: [conversation({ partner: { ...PARTNER, name: null } })],
       total: 1,
     });
 
@@ -260,6 +277,7 @@ describe("BuddyView — conversation list", () => {
 describe("BuddyView — thread", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ unread_count: 1 })],
       total: 1,
     });
@@ -275,8 +293,8 @@ describe("BuddyView — thread", () => {
   it("loads the history and clears the unread badge on open", async () => {
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [message()],
       total: 1,
     });
@@ -298,7 +316,7 @@ describe("BuddyView — thread", () => {
 
   it("sends a typed message and appends it to the thread", async () => {
     sendMessage.mockResolvedValue(
-      message({ message_id: "m-new", sender_email: ME, body: "much better, thanks" }),
+      message({ message_id: "m-new", sender_id: ME.user_id, body: "much better, thanks" }),
     );
 
     const user = await openThread();
@@ -348,7 +366,7 @@ describe("BuddyView — thread", () => {
     recorder.isRecording = true;
     recorder.stop.mockResolvedValue(blob);
     sendVoiceNote.mockResolvedValue(
-      message({ message_id: "m-voice", sender_email: ME, kind: "voice", body: "" }),
+      message({ message_id: "m-voice", sender_id: ME.user_id, kind: "voice", body: "" }),
     );
 
     const user = await openThread();
@@ -362,8 +380,8 @@ describe("BuddyView — thread", () => {
   it("shows a voice note as a playable bubble, not empty text", async () => {
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [message({ kind: "voice", body: "", audio_id: "a-1" })],
       total: 1,
     });
@@ -378,8 +396,8 @@ describe("BuddyView — thread", () => {
   it("only fetches the audio when the student presses play", async () => {
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [message({ kind: "voice", body: "", audio_id: "a-1" })],
       total: 1,
     });
@@ -397,14 +415,15 @@ describe("BuddyView — thread", () => {
 describe("BuddyView — staying up to date", () => {
   const thread = {
     pair_id: "pair-1",
-    partner_email: "mentor@kiet.edu",
-    partner_name: "Ada Mentor",
+    partner: PARTNER,
+    me: ME,
   };
 
   it("refreshes the inbox so a reply appears without a page reload", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       fetchMyBuddies.mockResolvedValue({
+        me: ME,
         conversations: [conversation({ last_message_preview: "how did it go?" })],
         total: 1,
       });
@@ -413,6 +432,7 @@ describe("BuddyView — staying up to date", () => {
       expect(await screen.findByText("how did it go?")).toBeInTheDocument();
 
       fetchMyBuddies.mockResolvedValue({
+        me: ME,
         conversations: [
           conversation({ last_message_preview: "one more thing", unread_count: 1 }),
         ],
@@ -431,6 +451,7 @@ describe("BuddyView — staying up to date", () => {
 
   it("refreshes the inbox when the student comes back to the tab", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation()],
       total: 1,
     });
@@ -449,6 +470,7 @@ describe("BuddyView — staying up to date", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       fetchMyBuddies.mockResolvedValue({
+        me: ME,
         conversations: [conversation()],
         total: 1,
       });
@@ -484,6 +506,7 @@ describe("BuddyView — staying up to date", () => {
 describe("BuddyView — the cycle", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: "mentor" })],
       total: 1,
     });
@@ -581,8 +604,8 @@ describe("BuddyView — the cycle", () => {
     fetchPairActivity.mockResolvedValue({ ...emptyReport(), cycle: cycle() });
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [message({ body: "how did it go?" })],
       total: 1,
     });
@@ -598,6 +621,7 @@ describe("BuddyView — the cycle", () => {
 describe("BuddyView — sessions", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: "mentor" })],
       total: 1,
     });
@@ -712,6 +736,7 @@ describe("BuddyView — sessions", () => {
 describe("BuddyView — nudges", () => {
   async function openInbox(overrides: Partial<ConversationSummary>) {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation(overrides)],
       total: 1,
     });
@@ -745,6 +770,7 @@ describe("BuddyView — nudges", () => {
 describe("BuddyView — practice material", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: "mentor" })],
       total: 1,
     });
@@ -840,6 +866,7 @@ describe("BuddyView — rating a session", () => {
 
   async function openSessionsAs(role: "mentor" | "mentee") {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: role })],
       total: 1,
     });
@@ -979,6 +1006,7 @@ describe("BuddyView — rating a session", () => {
 describe("BuddyView — the closing verdict", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation()],
       total: 1,
     });
@@ -1039,6 +1067,7 @@ describe("BuddyView — the closing verdict", () => {
 describe("BuddyView — the mentor's own record", () => {
   it("shows a mentor what their mentoring has added up to", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: "mentor" })],
       total: 1,
     });
@@ -1061,6 +1090,7 @@ describe("BuddyView — the mentor's own record", () => {
 
   it("tells a brand-new mentor how to start instead of showing four zeros", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ my_role: "mentor" })],
       total: 1,
     });
@@ -1083,6 +1113,7 @@ describe("BuddyView — the mentor's own record", () => {
 
   it("shows a mentee no ledger for a job they do not have", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation()],
       total: 1,
     });
@@ -1097,6 +1128,7 @@ describe("BuddyView — the mentor's own record", () => {
 describe("BuddyView — ended pairings", () => {
   beforeEach(() => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation({ status: "ended" })],
       total: 1,
     });
@@ -1110,8 +1142,8 @@ describe("BuddyView — ended pairings", () => {
   it("keeps the history readable but removes the composer", async () => {
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [message({ body: "good luck!" })],
       total: 1,
     });
@@ -1134,16 +1166,17 @@ describe("BuddyView — ended pairings", () => {
 describe("BuddyView — own vs partner messages", () => {
   it("renders both sides of the conversation", async () => {
     fetchMyBuddies.mockResolvedValue({
+      me: ME,
       conversations: [conversation()],
       total: 1,
     });
     fetchMessages.mockResolvedValue({
       pair_id: "pair-1",
-      partner_email: "mentor@kiet.edu",
-      partner_name: "Ada Mentor",
+      partner: PARTNER,
+      me: ME,
       messages: [
-        message({ message_id: "m-1", sender_email: "MENTOR@kiet.edu", body: "theirs" }),
-        message({ message_id: "m-2", sender_email: ME.toUpperCase(), body: "mine" }),
+        message({ message_id: "m-1", sender_id: PARTNER.user_id, body: "theirs" }),
+        message({ message_id: "m-2", sender_id: ME.user_id, body: "mine" }),
       ],
       total: 2,
     });
@@ -1152,9 +1185,9 @@ describe("BuddyView — own vs partner messages", () => {
     renderView();
     await user.click(await screen.findByRole("button", { name: /Ada Mentor/ }));
 
-    // The sender comparison is case-insensitive on both sides, so neither
-    // bubble is dropped or attributed to the wrong person. "Mine" is rendered
-    // as the accented, right-aligned bubble; the partner's is not.
+    // Each bubble is attributed by comparing sender ids against the `me` the
+    // server resolved — exactly, since an id is opaque and has no second
+    // spelling. "Mine" is the accented, right-aligned bubble; theirs is not.
     const mine = (await screen.findByText("mine")).closest("div");
     const theirs = screen.getByText("theirs").closest("div");
 

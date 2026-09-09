@@ -5,7 +5,10 @@ work for the open cycle and nothing else, so anything dated outside it must be
 absent from the report rather than merely hidden by the client.
 
 Debate and GD records are stubbed at the store boundary — what matters here is
-the uid -> email join and the window, not how those rooms persist themselves.
+the window, not how those rooms persist themselves. Those two stores key on the
+same ``user_id`` this module is asked about, so they need no join at all;
+interviews and drills key on the address, which is resolved once per call
+through ``app.buddy.identity``.
 """
 
 from __future__ import annotations
@@ -18,13 +21,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.buddy import growth
+from app.buddy import identity
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import BuddyCyclesStore
 from app.storage.buddy import CycleBaseline
 
 
-MENTEE = "mentee@kiet.edu"
-UID = "firebase-uid-mentee"
+MENTEE = "u-mentee"
+EMAIL = "mentee@example.com"
 
 START = "2026-08-01T00:00:00+00:00"
 END = "2026-09-01T00:00:00+00:00"
@@ -58,7 +62,7 @@ def _debate(at_unix: float, score: float, title: str = "AI in classrooms"):
     return SimpleNamespace(
         completed_at=at_unix,
         motion_title=title,
-        participants=[{"participant_id": "p1", "user_id": UID}],
+        participants=[{"participant_id": "p1", "user_id": MENTEE}],
         effective_scores=[SimpleNamespace(participant_id="p1", effective_score=score)],
     )
 
@@ -67,7 +71,7 @@ def _gd(at_unix: float, score: float, title: str = "Remote work"):
     return SimpleNamespace(
         completed_at=at_unix,
         topic_title=title,
-        participants=[{"participant_id": "g1", "user_id": UID}],
+        participants=[{"participant_id": "g1", "user_id": MENTEE}],
         scores=[SimpleNamespace(participant_id="g1", total_score=score)],
     )
 
@@ -75,10 +79,10 @@ def _gd(at_unix: float, score: float, title: str = "Remote work"):
 def _cycle(**overrides) -> BuddyCycle:
     defaults = dict(
         pair_id="pair-1",
-        mentee_email=MENTEE,
+        mentee_id=MENTEE,
         starts_at=START,
         ends_at=END,
-        created_by="teacher@kiet.edu",
+        created_by_id="u-teacher",
         created_at=START,
         baseline=CycleBaseline(content=60.0, pronunciation=70.0, live_speaking=50.0),
     )
@@ -89,22 +93,18 @@ def _cycle(**overrides) -> BuddyCycle:
 @pytest.fixture()
 def sources(monkeypatch):
     """Point growth at controllable stand-ins for all four score sources."""
-    state = SimpleNamespace(submissions=[], debates=[], gds=[], attempts=[], uid=UID)
+    state = SimpleNamespace(
+        submissions=[], debates=[], gds=[], attempts=[], email=EMAIL
+    )
 
     monkeypatch.setattr(
         growth.submissions_store,
         "list_for_student",
         lambda email: state.submissions,
     )
-    monkeypatch.setattr(
-        growth,
-        "users_store",
-        SimpleNamespace(
-            get_by_email=lambda email: (
-                SimpleNamespace(firebase_uid=state.uid) if state.uid else None
-            )
-        ),
-    )
+    # The one lookup left: the address-keyed stores need it, the id-keyed ones
+    # do not. `email=None` stands for a student the users log has never seen.
+    monkeypatch.setattr(identity, "email_for", lambda user_id: state.email)
 
     import app.storage.debates as debates_store
     import app.storage.gd_sessions as gd_sessions_store
@@ -140,18 +140,18 @@ def test_store_allows_only_one_open_cycle_per_pair(tmp_path):
     store = BuddyCyclesStore(path=tmp_path / "cycles.jsonl")
     store.create(
         pair_id="pair-1",
-        mentee_email=MENTEE,
+        mentee_id=MENTEE,
         starts_at=START,
         ends_at=END,
-        created_by="teacher@kiet.edu",
+        created_by_id="u-teacher",
     )
     with pytest.raises(ValueError):
         store.create(
             pair_id="pair-1",
-            mentee_email=MENTEE,
+            mentee_id=MENTEE,
             starts_at=START,
             ends_at=END,
-            created_by="teacher@kiet.edu",
+            created_by_id="u-teacher",
         )
 
 
@@ -159,20 +159,20 @@ def test_closing_a_cycle_frees_the_pair_for_a_renewal(tmp_path):
     store = BuddyCyclesStore(path=tmp_path / "cycles.jsonl")
     first = store.create(
         pair_id="pair-1",
-        mentee_email=MENTEE,
+        mentee_id=MENTEE,
         starts_at=START,
         ends_at=END,
-        created_by="teacher@kiet.edu",
+        created_by_id="u-teacher",
     )
     store.close(first.cycle_id)
 
     assert store.active_for_pair("pair-1") is None
     renewal = store.create(
         pair_id="pair-1",
-        mentee_email=MENTEE,
+        mentee_id=MENTEE,
         starts_at=END,
         ends_at="2026-10-01T00:00:00+00:00",
-        created_by="teacher@kiet.edu",
+        created_by_id="u-teacher",
     )
     assert store.active_for_pair("pair-1").cycle_id == renewal.cycle_id
     # The closed period is kept, which is the point of cycles over pair dates.
@@ -256,7 +256,7 @@ def test_a_broken_attempts_store_does_not_blank_the_panel(sources, monkeypatch):
     assert next(a for a in report.axes if a.key == "content").latest == 70.0
 
 
-def test_debates_and_gds_are_attributed_through_the_uid_join(sources):
+def test_debates_and_gds_are_attributed_by_id_with_no_join(sources):
     sources.debates = [_debate(_unix(10), 64.0)]
     sources.gds = [_gd(_unix(12), 58.0)]
 
@@ -268,16 +268,25 @@ def test_debates_and_gds_are_attributed_through_the_uid_join(sources):
     assert {item.kind for item in report.activity} == {"debate", "gd"}
 
 
-def test_a_student_with_no_account_yields_no_live_work(sources):
-    """Without a uid there is no join, so debates simply do not appear."""
-    sources.uid = None
+def test_a_student_with_no_account_still_has_their_live_work(sources):
+    """No address to resolve costs the address-keyed sources, and only those.
+
+    Debates and GD carry the id itself, so they attribute with no lookup —
+    which is the whole reason the programme moved onto ids.
+    """
+    sources.email = None
     sources.debates = [_debate(_unix(10), 64.0)]
+    sources.submissions = [_submission(_iso(15), content=70.0)]
 
     report = growth.build_report(_cycle(), MENTEE)
 
-    assert report.counts["debate"] == 0
+    assert report.counts["debate"] == 1
     live = next(axis for axis in report.axes if axis.key == "live_speaking")
-    assert live.sample_size == 0
+    assert live.sample_size == 1
+
+    assert report.counts["interview"] == 0
+    content = next(axis for axis in report.axes if axis.key == "content")
+    assert content.sample_size == 0
 
 
 # --- Axes -----------------------------------------------------------------

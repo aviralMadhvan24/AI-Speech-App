@@ -7,15 +7,21 @@ opened, or after it closed, is never returned.
 
 Attribution
 -----------
-Four sources feed a report, and they identify a student differently:
+Everything public here is asked about a ``user_id``. Four sources feed a
+report and they identify a student differently, so the id is resolved to an
+address exactly once per call and handed to the two collectors that need one:
 
-- interview submissions carry ``student_email`` directly;
-- completed debates and GD sessions carry ``participants[].user_id``, the
-  Firebase uid, which joins to ``firebase_uid`` in ``users_store``;
+- completed debates and GD sessions carry ``participants[].user_id`` — the
+  same id this module is asked about, so they join with no lookup at all;
+- interview submissions carry ``student_email``, and
 - pronunciation attempts (``outputs/attempts.jsonl``) carry ``student_email``
   on every row written since that field was added. Rows from before it have no
   owner and never can — they are unattributable by construction, and are
   skipped rather than handed to whoever asks.
+
+A student the platform has never seen has no address to resolve, and that
+reads as "no work found" rather than as an error: an empty report for someone
+with no history is the correct answer.
 
 Debates and GD sessions timestamp with a unix float while interviews use an ISO
 string, so everything is normalised to ISO here before any window comparison.
@@ -32,8 +38,8 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import Field
 
+from app.buddy import identity
 from app.storage import submissions_store
-from app.storage import users_store
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import CycleAxisResult
 from app.storage.buddy import CycleBaseline
@@ -128,11 +134,6 @@ def _iso(unix_ts: Optional[float]) -> Optional[str]:
 
 def _mean(values: list[float]) -> Optional[float]:
     return round(sum(values) / len(values), 2) if values else None
-
-
-def _uid_for(email: str) -> Optional[str]:
-    record = users_store.get_by_email(email)
-    return record.firebase_uid if record else None
 
 
 def _interview_events(email: str) -> list[tuple[str, str, Optional[float], Optional[float]]]:
@@ -247,10 +248,14 @@ def _attempt_events(email: str) -> list[tuple[str, str, float]]:
     return out
 
 
-def _live_events(email: str) -> list[tuple[str, str, float, ActivityKind]]:
-    """Debates and GDs together — both are 'speaking with an audience'."""
-    uid = _uid_for(email)
-    if uid is None:
+def _live_events(user_id: str) -> list[tuple[str, str, float, ActivityKind]]:
+    """Debates and GDs together — both are 'speaking with an audience'.
+
+    Takes the user id unchanged: both stores already record it, which is what
+    made it the right key for this programme in the first place.
+    """
+    uid = user_id
+    if not uid:
         return []
 
     events: list[tuple[str, str, float, ActivityKind]] = []
@@ -265,21 +270,30 @@ def _live_events(email: str) -> list[tuple[str, str, float, ActivityKind]]:
     return events
 
 
-def baseline_for(email: str, before: str) -> CycleBaseline:
+def baseline_for(user_id: str, before: str) -> CycleBaseline:
     """Average every scored result from before a cycle opened.
 
     This is the line a cycle's progress is read against, so it deliberately
     looks at the student's whole history up to that moment rather than a single
     most-recent attempt, which would make the baseline hostage to one bad day.
     """
-    content = [c for at, _, c, _ in _interview_events(email) if at < before and c is not None]
+    # Resolved once and reused: each collector below would otherwise re-read
+    # the users log to answer the same question about the same person.
+    email = identity.email_for(user_id) or ""
+    interviews = _interview_events(email) if email else []
+
+    content = [c for at, _, c, _ in interviews if at < before and c is not None]
     # Interviews and standalone drills both score pronunciation, so both set
     # the line the cycle is read against — otherwise a mentee who practises
     # only by drilling starts every cycle with no baseline at all.
     pronunciation = [
-        p for at, _, _, p in _interview_events(email) if at < before and p is not None
-    ] + [score for at, _, score in _attempt_events(email) if at < before]
-    live = [score for at, _, score, _ in _live_events(email) if at < before]
+        p for at, _, _, p in interviews if at < before and p is not None
+    ] + [
+        score
+        for at, _, score in (_attempt_events(email) if email else [])
+        if at < before
+    ]
+    live = [score for at, _, score, _ in _live_events(user_id) if at < before]
 
     return CycleBaseline(
         content=_mean(content),
@@ -288,7 +302,7 @@ def baseline_for(email: str, before: str) -> CycleBaseline:
     )
 
 
-def build_summary(cycle: BuddyCycle, mentee_email: str) -> CycleSummary:
+def build_summary(cycle: BuddyCycle, mentee_id: str) -> CycleSummary:
     """Freeze what a cycle achieved, for storing at the moment it closes.
 
     Derived from the same report the pair saw all along, so the closing verdict
@@ -296,7 +310,7 @@ def build_summary(cycle: BuddyCycle, mentee_email: str) -> CycleSummary:
     recomputed for the same reason the baseline is: a finished period's result
     must not drift as unrelated later work is scored.
     """
-    report = build_report(cycle, mentee_email)
+    report = build_report(cycle, mentee_id)
 
     axes = [
         CycleAxisResult(
@@ -336,7 +350,7 @@ def build_summary(cycle: BuddyCycle, mentee_email: str) -> CycleSummary:
     )
 
 
-def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
+def build_report(cycle: Optional[BuddyCycle], mentee_id: str) -> CycleReport:
     """Assemble the cycle panel for one mentee.
 
     With no open cycle there is no window, and therefore nothing a mentor is
@@ -344,6 +358,8 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
     """
     if cycle is None:
         return CycleReport()
+
+    email = identity.email_for(mentee_id) or ""
 
     activity: list[ActivityItem] = []
     by_date: dict[str, TrendPoint] = {}
@@ -358,7 +374,7 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
     pronunciation_scores: list[tuple[str, float]] = []
     live_scores: list[tuple[str, float]] = []
 
-    for at, title, content, pronunciation in _interview_events(mentee_email):
+    for at, title, content, pronunciation in (_interview_events(email) if email else []):
         if not cycle.covers(at):
             continue
         activity.append(
@@ -372,14 +388,14 @@ def build_report(cycle: Optional[BuddyCycle], mentee_email: str) -> CycleReport:
             pronunciation_scores.append((at, pronunciation))
             point.pronunciation = pronunciation
 
-    for at, title, score in _attempt_events(mentee_email):
+    for at, title, score in (_attempt_events(email) if email else []):
         if not cycle.covers(at):
             continue
         activity.append(ActivityItem(kind="practice", at=at, title=title, score=score))
         pronunciation_scores.append((at, score))
         _slot(at).pronunciation = score
 
-    for at, title, score, kind in _live_events(mentee_email):
+    for at, title, score, kind in _live_events(mentee_id):
         if not cycle.covers(at):
             continue
         activity.append(ActivityItem(kind=kind, at=at, title=title, score=score))

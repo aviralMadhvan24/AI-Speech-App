@@ -271,3 +271,179 @@ async def export_analytics_summary(
     
     filename = f"analytics_summary_{datetime.now().strftime('%Y%m%d')}.csv"
     return _csv_response(rows, filename)
+
+
+# ---------------------------------------------------------------------------
+# Buddy programme
+# ---------------------------------------------------------------------------
+#
+# None of this could leave the app before, so a programme with a year of
+# pairings behind it still could not put a single number in front of a
+# department review without someone reading panels off a screen.
+#
+# Both exports resolve `user_id` to a name and address at write time — the
+# stored rows carry ids only (see `app.buddy.identity`), and a spreadsheet of
+# opaque ids answers nobody's question.
+
+
+def _buddy_people() -> dict:
+    """Every known user, keyed by id, for labelling exported rows."""
+    return {u.firebase_uid: u for u in users_store.list_all()}
+
+
+def _label(people: dict, user_id: str) -> tuple[str, str]:
+    """(name, email) for an id, blank when the users log has never seen it."""
+    record = people.get(user_id)
+    if record is None:
+        return "", ""
+    return record.display_name or "", record.email or ""
+
+
+@router.get("/buddy_pairs.csv")
+async def export_buddy_pairs_csv(
+    current_user: User = Depends(require_teacher),
+) -> Response:
+    """One row per buddy pairing: who, how it is going, and how it came out."""
+    del current_user
+
+    from app.buddy import health as buddy_health
+    from app.storage.buddy import buddy_cycles_store
+    from app.storage.buddy import buddy_pairs_store
+
+    people = _buddy_people()
+    pairs = buddy_pairs_store.list_all()
+    pairs.sort(key=lambda p: p.created_at, reverse=True)
+
+    try:
+        index = buddy_health.build_index(pairs)
+    except Exception as exc:  # an export must not fail on a derived column
+        logger.warning("buddy_export_health_failed err=%s", type(exc).__name__)
+        index = {}
+
+    cycles_by_pair: dict[str, list] = {}
+    for cycle in buddy_cycles_store.list_all():
+        cycles_by_pair.setdefault(cycle.pair_id, []).append(cycle)
+
+    rows = [
+        [
+            "Pair ID",
+            "Mentor",
+            "Mentor Email",
+            "Mentee",
+            "Mentee Email",
+            "Status",
+            "Created",
+            "Ended",
+            "Health",
+            "Days Quiet",
+            "Messages",
+            "Sessions Completed",
+            "Sessions Missed",
+            "Cycles",
+            "Cycles Closed",
+            "Latest Verdict",
+        ]
+    ]
+
+    for pair in pairs:
+        mentor_name, mentor_email = _label(people, pair.mentor_id)
+        mentee_name, mentee_email = _label(people, pair.mentee_id)
+        entry = index.get(pair.pair_id)
+        cycles = cycles_by_pair.get(pair.pair_id, [])
+        closed = [c for c in cycles if c.status == "closed" and c.summary is not None]
+        closed.sort(key=lambda c: c.closed_at or "", reverse=True)
+
+        rows.append([
+            pair.pair_id,
+            mentor_name,
+            mentor_email,
+            mentee_name,
+            mentee_email,
+            pair.status,
+            pair.created_at[:10],
+            (pair.ended_at or "")[:10],
+            entry.state if entry else "",
+            str(entry.days_quiet) if entry and entry.days_quiet is not None else "",
+            str(entry.message_count) if entry else "",
+            str(entry.sessions.completed) if entry else "",
+            str(entry.sessions.missed) if entry else "",
+            str(len(cycles)),
+            str(len(closed)),
+            # The most recent frozen verdict. Blank rather than "held" when
+            # nothing has closed: a pairing that has not finished a period has
+            # no result, and printing one would invent it.
+            closed[0].summary.verdict if closed else "",
+        ])
+
+    filename = f"buddy_pairs_{datetime.now().strftime('%Y%m%d')}.csv"
+    return _csv_response(rows, filename)
+
+
+@router.get("/buddy_sessions.csv")
+async def export_buddy_sessions_csv(
+    current_user: User = Depends(require_teacher),
+) -> Response:
+    """One row per planned session — the programme's practice record.
+
+    Includes sessions that were missed and sessions still pending, because a
+    keep rate computed from completed sessions alone is not a keep rate.
+    """
+    del current_user
+
+    from app.storage.buddy import buddy_cycles_store
+    from app.storage.buddy import buddy_pairs_store
+    from app.storage.buddy import buddy_sessions_store
+
+    people = _buddy_people()
+    pairs = {p.pair_id: p for p in buddy_pairs_store.list_all()}
+    cycles = {c.cycle_id: c for c in buddy_cycles_store.list_all()}
+
+    sessions = buddy_sessions_store.list_all()
+    sessions.sort(key=lambda s: s.scheduled_at, reverse=True)
+
+    rows = [
+        [
+            "Session ID",
+            "Pair ID",
+            "Mentor",
+            "Mentee",
+            "Mentee Email",
+            "Cycle Goal",
+            "Scheduled",
+            "Status",
+            "Mode",
+            "Practice Kind",
+            "Practice Topic",
+            "Room Code",
+            "Duration (min)",
+            "Mentee Rating",
+            "Rating Reasons",
+        ]
+    ]
+
+    for session in sessions:
+        pair = pairs.get(session.pair_id)
+        cycle = cycles.get(session.cycle_id)
+        mentor_name, _ = _label(people, pair.mentor_id) if pair else ("", "")
+        mentee_name, mentee_email = _label(people, pair.mentee_id) if pair else ("", "")
+
+        rows.append([
+            session.session_id,
+            session.pair_id,
+            mentor_name,
+            mentee_name,
+            mentee_email,
+            cycle.goal if cycle else "",
+            session.scheduled_at[:16],
+            session.status,
+            session.mode,
+            session.prompt_kind or "",
+            session.prompt_title or session.topic,
+            session.room_code or "",
+            str(session.duration_minutes) if session.duration_minutes else "",
+            str(session.mentee_rating) if session.mentee_rating else "",
+            " ".join(session.mentee_rating_aspects),
+        ])
+
+    filename = f"buddy_sessions_{datetime.now().strftime('%Y%m%d')}.csv"
+    return _csv_response(rows, filename)

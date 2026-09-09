@@ -10,6 +10,8 @@ redirecting each one's `path` at a temp file points every caller at test data.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
+from app.buddy import identity
 from app.buddy.routes import router as buddy_router
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_messages_store
@@ -24,10 +27,10 @@ from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import mentors_store
 
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", name="Mentor", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", name="Mentee", role="student")
-STRANGER = User(uid="u-stranger", email="stranger@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", name="Mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", name="Mentee", role="student")
+STRANGER = User(uid="u-stranger", email="u-stranger", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 
 @pytest.fixture()
@@ -71,9 +74,9 @@ def buddy_app(tmp_path, monkeypatch):
 def pair(buddy_app):
     """An active mentor/mentee pairing to talk in."""
     return buddy_pairs_store.create(
-        mentor_email=MENTOR.email,
-        mentee_email=MENTEE.email,
-        created_by=TEACHER.email,
+        mentor_id=MENTOR.uid,
+        mentee_id=MENTEE.uid,
+        created_by_id=TEACHER.uid,
     )
 
 
@@ -91,29 +94,39 @@ def test_members_can_read_the_conversation(buddy_app, pair):
 def test_a_member_sees_the_other_as_their_partner(buddy_app, pair):
     buddy_app.as_(MENTEE)
     body = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/messages").json()
-    assert body["partner_email"] == MENTOR.email
+    assert body["partner"]["user_id"] == MENTOR.uid
 
 
-def test_thread_and_inbox_agree_on_the_partner_name(buddy_app):
-    """The name captured on the pair is what both endpoints report."""
-    pair = buddy_pairs_store.create(
-        mentor_email=MENTOR.email,
-        mentee_email=MENTEE.email,
-        created_by=TEACHER.email,
-        mentor_name="Ada Mentor",
-        mentee_name="Bob Mentee",
+def test_thread_and_inbox_agree_on_the_partner(buddy_app, pair, monkeypatch):
+    """Both endpoints resolve the same id to the same person.
+
+    The pair stores ids only, so the name comes from the users log on every
+    read — which is the point: one place resolves it, and the two endpoints
+    cannot drift apart the way two stored copies could.
+    """
+    names = {MENTOR.uid: "Ada Mentor", MENTEE.uid: "Bob Mentee"}
+    monkeypatch.setattr(
+        identity,
+        "_records",
+        lambda: [
+            SimpleNamespace(
+                firebase_uid=uid, email=f"{uid}@x.test", display_name=name,
+                role="student",
+            )
+            for uid, name in names.items()
+        ],
     )
 
     buddy_app.as_(MENTEE)
     thread = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/messages").json()
     inbox = buddy_app.get("/buddy/me").json()["conversations"][0]
-    assert thread["partner_name"] == inbox["partner_name"] == "Ada Mentor"
+    assert thread["partner"]["name"] == inbox["partner"]["name"] == "Ada Mentor"
 
     # And from the other side of the same pairing.
     buddy_app.as_(MENTOR)
     thread = buddy_app.get(f"/buddy/pairs/{pair.pair_id}/messages").json()
     inbox = buddy_app.get("/buddy/me").json()["conversations"][0]
-    assert thread["partner_name"] == inbox["partner_name"] == "Bob Mentee"
+    assert thread["partner"]["name"] == inbox["partner"]["name"] == "Bob Mentee"
 
 
 def test_strangers_are_refused(buddy_app, pair):
@@ -242,8 +255,8 @@ def test_inbox_shows_unread_count_and_preview(buddy_app, pair):
 
 
 def test_inbox_orders_by_most_recent_activity(buddy_app):
-    quiet = buddy_pairs_store.create("a@x.com", MENTEE.email, created_by=TEACHER.email)
-    busy = buddy_pairs_store.create("b@x.com", MENTEE.email, created_by=TEACHER.email)
+    quiet = buddy_pairs_store.create("u-a", MENTEE.uid, created_by_id=TEACHER.uid)
+    busy = buddy_pairs_store.create("u-b", MENTEE.uid, created_by_id=TEACHER.uid)
 
     buddy_app.as_(MENTEE)
     buddy_app.post(f"/buddy/pairs/{busy.pair_id}/messages", json={"body": "hi"})
@@ -258,7 +271,7 @@ def test_inbox_orders_by_most_recent_activity(buddy_app):
 def test_voice_note_of_a_stranger_is_not_served(buddy_app, pair):
     message = buddy_messages_store.create(
         pair_id=pair.pair_id,
-        sender_email=MENTOR.email,
+        sender_id=MENTOR.uid,
         kind="voice",
         audio_id="a1",
         audio_path="uploads/a1.webm",
@@ -272,7 +285,7 @@ def test_voice_note_path_outside_uploads_is_refused(buddy_app, pair):
     """A stored path is never trusted as a key into the filesystem."""
     message = buddy_messages_store.create(
         pair_id=pair.pair_id,
-        sender_email=MENTOR.email,
+        sender_id=MENTOR.uid,
         kind="voice",
         audio_id="a1",
         audio_path="../../etc/passwd",
@@ -298,7 +311,7 @@ def test_admin_routes_are_teacher_only(buddy_app):
     assert (
         buddy_app.post(
             "/buddy/admin/pairs",
-            json={"mentor_email": "a@x.com", "mentee_email": "b@x.com"},
+            json={"mentor_id": "u-a", "mentee_id": "u-b"},
         ).status_code
         == 403
     )
@@ -307,7 +320,7 @@ def test_admin_routes_are_teacher_only(buddy_app):
 def test_decision_must_be_approved_or_rejected(buddy_app):
     buddy_app.as_(TEACHER)
     response = buddy_app.post(
-        "/buddy/admin/mentors/ada@x.com/decision", json={"status": "maybe"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "maybe"}
     )
     assert response.status_code == 400
 
@@ -315,22 +328,24 @@ def test_decision_must_be_approved_or_rejected(buddy_app):
 def test_approving_a_mentor_records_the_decision(buddy_app):
     buddy_app.as_(TEACHER)
     response = buddy_app.post(
-        "/buddy/admin/mentors/Ada@X.com/decision", json={"status": "approved"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "approved"}
     )
 
     assert response.status_code == 200
     mentors = response.json()["mentors"]
     assert len(mentors) == 1
-    assert mentors[0]["email"] == "ada@x.com"
+    # The id is recorded verbatim. It is opaque, so unlike an address there is
+    # nothing to normalise and no second spelling of it to reconcile.
+    assert mentors[0]["user_id"] == "u-ada"
     assert mentors[0]["status"] == "approved"
-    assert mentors[0]["decided_by"] == TEACHER.email
+    assert mentors[0]["decided_by_id"] == TEACHER.uid
 
 
 def test_pairing_requires_an_approved_mentor(buddy_app):
     buddy_app.as_(TEACHER)
     response = buddy_app.post(
         "/buddy/admin/pairs",
-        json={"mentor_email": "ada@x.com", "mentee_email": "bob@x.com"},
+        json={"mentor_id": "u-ada", "mentee_id": "u-bob"},
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "mentor_not_approved"
@@ -339,12 +354,12 @@ def test_pairing_requires_an_approved_mentor(buddy_app):
 def test_a_rejected_mentor_cannot_be_paired(buddy_app):
     buddy_app.as_(TEACHER)
     buddy_app.post(
-        "/buddy/admin/mentors/ada@x.com/decision", json={"status": "rejected"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "rejected"}
     )
 
     response = buddy_app.post(
         "/buddy/admin/pairs",
-        json={"mentor_email": "ada@x.com", "mentee_email": "bob@x.com"},
+        json={"mentor_id": "u-ada", "mentee_id": "u-bob"},
     )
     assert response.status_code == 400
 
@@ -352,12 +367,12 @@ def test_a_rejected_mentor_cannot_be_paired(buddy_app):
 def test_a_student_cannot_mentor_themselves(buddy_app):
     buddy_app.as_(TEACHER)
     buddy_app.post(
-        "/buddy/admin/mentors/ada@x.com/decision", json={"status": "approved"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "approved"}
     )
 
     response = buddy_app.post(
         "/buddy/admin/pairs",
-        json={"mentor_email": "ada@x.com", "mentee_email": "Ada@X.com"},
+        json={"mentor_id": "u-ada", "mentee_id": "u-ada"},
     )
     assert response.status_code == 400
 
@@ -365,20 +380,20 @@ def test_a_student_cannot_mentor_themselves(buddy_app):
 def test_creating_a_pair_then_duplicating_it_conflicts(buddy_app):
     buddy_app.as_(TEACHER)
     buddy_app.post(
-        "/buddy/admin/mentors/ada@x.com/decision", json={"status": "approved"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "approved"}
     )
 
     created = buddy_app.post(
         "/buddy/admin/pairs",
-        json={"mentor_email": "Ada@X.com", "mentee_email": "Bob@X.com"},
+        json={"mentor_id": "u-ada", "mentee_id": "u-bob"},
     )
     assert created.status_code == 200
-    assert created.json()["mentor_email"] == "ada@x.com"
+    assert created.json()["mentor_id"] == "u-ada"
     assert created.json()["status"] == "active"
 
     duplicate = buddy_app.post(
         "/buddy/admin/pairs",
-        json={"mentor_email": "ada@x.com", "mentee_email": "bob@x.com"},
+        json={"mentor_id": "u-ada", "mentee_id": "u-bob"},
     )
     assert duplicate.status_code == 409
 
@@ -386,9 +401,9 @@ def test_creating_a_pair_then_duplicating_it_conflicts(buddy_app):
 def test_a_pair_can_be_recreated_after_it_ends(buddy_app):
     buddy_app.as_(TEACHER)
     buddy_app.post(
-        "/buddy/admin/mentors/ada@x.com/decision", json={"status": "approved"}
+        "/buddy/admin/mentors/u-ada/decision", json={"status": "approved"}
     )
-    payload = {"mentor_email": "ada@x.com", "mentee_email": "bob@x.com"}
+    payload = {"mentor_id": "u-ada", "mentee_id": "u-bob"}
     first = buddy_app.post("/buddy/admin/pairs", json=payload).json()
 
     ended = buddy_app.post(f"/buddy/admin/pairs/{first['pair_id']}/end")
@@ -420,13 +435,13 @@ def _approve_and_pair(buddy_app, **extra):
     """Approve a mentor and pair them, returning the create response."""
     buddy_app.as_(TEACHER)
     mentors_store.set_status(
-        email=MENTOR.email, status="approved", decided_by=TEACHER.email
+        user_id=MENTOR.uid, status="approved", decided_by_id=TEACHER.uid
     )
     return buddy_app.post(
         "/buddy/admin/pairs",
         json={
-            "mentor_email": MENTOR.email,
-            "mentee_email": MENTEE.email,
+            "mentor_id": MENTOR.uid,
+            "mentee_id": MENTEE.uid,
             **extra,
         },
     )
@@ -439,7 +454,7 @@ def test_pairing_opens_a_cycle_by_default(buddy_app):
 
     cycle = buddy_cycles_store.active_for_pair(response.json()["pair_id"])
     assert cycle is not None
-    assert cycle.mentee_email == MENTEE.email
+    assert cycle.mentee_id == MENTEE.uid
     assert cycle.starts_at < cycle.ends_at
 
 

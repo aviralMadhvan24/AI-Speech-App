@@ -25,8 +25,8 @@ from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
-STUDENT = User(uid="u-student", email="mentee@x.com", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
+STUDENT = User(uid="u-student", email="u-mentee", role="student")
 
 STARTS = "2026-01-01T00:00:00+00:00"
 ENDS = "2026-02-01T00:00:00+00:00"
@@ -81,14 +81,14 @@ def _axis(key: str, baseline=None, final=None, label="Axis"):
 def _closed(mentee: str, verdict: str, axes: list[CycleAxisResult]):
     """A pair with one closed cycle, frozen with the given axes."""
     pair = buddy_pairs_store.create(
-        mentor_email="mentor@x.com", mentee_email=mentee, created_by=TEACHER.email
+        mentor_id="u-mentor", mentee_id=mentee, created_by_id=TEACHER.uid
     )
     cycle = buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=mentee,
+        mentee_id=mentee,
         starts_at=STARTS,
         ends_at=ENDS,
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
     buddy_cycles_store.close(
         cycle.cycle_id,
@@ -114,9 +114,9 @@ def test_an_empty_programme_reports_unknown_not_zero(buddy_app):
 
 def test_unmeasured_cycles_are_excluded_from_the_rate_not_counted_as_failures(buddy_app):
     """Otherwise poor measurement coverage reads as a failing programme."""
-    _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
-    _closed("b@x.com", "not_enough_evidence", [_axis("content")])
-    _closed("c@x.com", "not_enough_evidence", [_axis("content")])
+    _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
+    _closed("u-b", "not_enough_evidence", [_axis("content")])
+    _closed("u-c", "not_enough_evidence", [_axis("content")])
 
     report = programme.build_report()
 
@@ -128,8 +128,8 @@ def test_unmeasured_cycles_are_excluded_from_the_rate_not_counted_as_failures(bu
 
 def test_the_evidence_rate_is_reported_next_to_the_improvement_rate(buddy_app):
     """A reader told "100% improved" is entitled to see it was 1 cycle in 4."""
-    _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
-    for email in ("b@x.com", "c@x.com", "d@x.com"):
+    _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
+    for email in ("u-b", "u-c", "u-d"):
         _closed(email, "not_enough_evidence", [_axis("content")])
 
     report = programme.build_report()
@@ -141,7 +141,7 @@ def test_the_evidence_rate_is_reported_next_to_the_improvement_rate(buddy_app):
 def test_an_unsampled_axis_does_not_drag_its_mean_toward_zero(buddy_app):
     """A cycle that never measured live speaking says nothing about it."""
     _closed(
-        "a@x.com",
+        "u-a",
         "improved",
         [_axis("content", 50.0, 70.0), _axis("live_speaking")],
     )
@@ -161,8 +161,8 @@ def test_every_axis_is_listed_even_when_never_measured(buddy_app):
 
 
 def test_a_declining_programme_is_reported_as_declining(buddy_app):
-    _closed("a@x.com", "declined", [_axis("content", 70.0, 55.0)])
-    _closed("b@x.com", "declined", [_axis("content", 65.0, 60.0)])
+    _closed("u-a", "declined", [_axis("content", 70.0, 55.0)])
+    _closed("u-b", "declined", [_axis("content", 65.0, 60.0)])
 
     report = programme.build_report()
 
@@ -177,14 +177,14 @@ def test_a_declining_programme_is_reported_as_declining(buddy_app):
 def test_open_cycles_are_counted_but_never_scored(buddy_app):
     """A cycle still running has no verdict to contribute."""
     pair = buddy_pairs_store.create(
-        mentor_email="mentor@x.com", mentee_email="a@x.com", created_by=TEACHER.email
+        mentor_id="u-mentor", mentee_id="u-a", created_by_id=TEACHER.uid
     )
     buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email="a@x.com",
+        mentee_id="u-a",
         starts_at=STARTS,
         ends_at=ENDS,
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
 
     report = programme.build_report()
@@ -195,8 +195,8 @@ def test_open_cycles_are_counted_but_never_scored(buddy_app):
 
 
 def test_a_mentee_with_two_pairings_is_one_person_served(buddy_app):
-    _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
-    _closed("A@X.COM", "improved", [_axis("content", 62.0, 70.0)])
+    _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
+    _closed("u-a", "improved", [_axis("content", 62.0, 70.0)])
 
     report = programme.build_report()
 
@@ -206,7 +206,7 @@ def test_a_mentee_with_two_pairings_is_one_person_served(buddy_app):
 
 def test_ended_pairings_still_count_as_reach(buddy_app):
     """They happened. Dropping them would make the programme look smaller."""
-    pair = _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
+    pair = _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
     buddy_pairs_store.end(pair.pair_id)
 
     report = programme.build_report()
@@ -217,8 +217,8 @@ def test_ended_pairings_still_count_as_reach(buddy_app):
 
 
 def test_only_approved_mentors_are_counted(buddy_app):
-    mentors_store.set_status("yes@x.com", "approved", decided_by=TEACHER.email)
-    mentors_store.set_status("no@x.com", "rejected", decided_by=TEACHER.email)
+    mentors_store.set_status("u-yes", "approved", decided_by_id=TEACHER.uid)
+    mentors_store.set_status("u-no", "rejected", decided_by_id=TEACHER.uid)
 
     assert programme.build_report().mentors_approved == 1
 
@@ -226,21 +226,21 @@ def test_only_approved_mentors_are_counted(buddy_app):
 def test_the_keep_rate_ignores_sessions_that_have_not_come_due(buddy_app):
     """A planned session is neither kept nor missed yet."""
     pair = buddy_pairs_store.create(
-        mentor_email="mentor@x.com", mentee_email="a@x.com", created_by=TEACHER.email
+        mentor_id="u-mentor", mentee_id="u-a", created_by_id=TEACHER.uid
     )
     cycle = buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email="a@x.com",
+        mentee_id="u-a",
         starts_at=STARTS,
         ends_at=ENDS,
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
     for status_value in ("completed", "completed", "completed", "missed", "planned"):
         session = buddy_sessions_store.create(
             pair_id=pair.pair_id,
             cycle_id=cycle.cycle_id,
             scheduled_at=STARTS,
-            created_by=TEACHER.email,
+            created_by_id=TEACHER.uid,
         )
         if status_value == "completed":
             buddy_sessions_store.complete(session.session_id)
@@ -257,7 +257,7 @@ def test_the_keep_rate_ignores_sessions_that_have_not_come_due(buddy_app):
 def test_health_is_counted_across_active_pairings(buddy_app):
     """The rollup reuses health rather than re-deriving what "quiet" means."""
     buddy_pairs_store.create(
-        mentor_email="mentor@x.com", mentee_email="a@x.com", created_by=TEACHER.email
+        mentor_id="u-mentor", mentee_id="u-a", created_by_id=TEACHER.uid
     )
 
     report = programme.build_report()
@@ -267,7 +267,7 @@ def test_health_is_counted_across_active_pairings(buddy_app):
 
 
 def test_broken_health_does_not_blank_the_rollup(buddy_app, monkeypatch):
-    _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
+    _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
     monkeypatch.setattr(
         programme.health,
         "build_index",
@@ -289,7 +289,7 @@ def test_the_rollup_is_teacher_only(buddy_app):
 
 
 def test_the_rollup_is_served_over_http(buddy_app):
-    _closed("a@x.com", "improved", [_axis("content", 50.0, 62.0)])
+    _closed("u-a", "improved", [_axis("content", 50.0, 62.0)])
 
     body = buddy_app.get("/buddy/admin/programme").json()
 

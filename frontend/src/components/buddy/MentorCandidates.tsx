@@ -54,7 +54,7 @@ function CandidateRow({
   busy,
 }: {
   candidate: SpeakerRanking;
-  onDecide: (email: string, status: "approved" | "rejected") => void;
+  onDecide: (userId: string, status: "approved" | "rejected") => void;
   busy: boolean;
 }) {
   const basis = candidate.suggestion_basis;
@@ -65,7 +65,7 @@ function CandidateRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[12.5px] font-semibold text-[var(--c-text)] truncate">
-              {candidate.name || candidate.email}
+              {candidate.name || candidate.email || candidate.user_id}
             </span>
             {basis && <Tag tone={BASIS_TONE[basis]}>{BASIS_LABEL[basis]}</Tag>}
           </div>
@@ -112,14 +112,14 @@ function CandidateRow({
           <Button
             variant="primary"
             disabled={busy}
-            onClick={() => onDecide(candidate.email, "approved")}
+            onClick={() => onDecide(candidate.user_id, "approved")}
           >
             Approve
           </Button>
           <Button
             variant="quiet"
             disabled={busy}
-            onClick={() => onDecide(candidate.email, "rejected")}
+            onClick={() => onDecide(candidate.user_id, "rejected")}
           >
             Not now
           </Button>
@@ -135,7 +135,7 @@ export function MentorCandidates({
   busy = false,
 }: {
   data: MentorCandidatesResponse | null;
-  onDecide: (email: string, status: "approved" | "rejected") => void;
+  onDecide: (userId: string, status: "approved" | "rejected") => void;
   busy?: boolean;
 }) {
   if (!data) {
@@ -174,7 +174,7 @@ export function MentorCandidates({
           <ul>
             {data.suggested.map((candidate) => (
               <CandidateRow
-                key={candidate.email}
+                key={candidate.user_id}
                 candidate={candidate}
                 onDecide={onDecide}
                 busy={busy}

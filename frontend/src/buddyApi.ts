@@ -8,6 +8,37 @@ import { getCurrentIdToken } from "./hooks/useAuth";
 // Domain types — mirror the JSON shapes the backend serializes.
 // ---------------------------------------------------------------------------
 
+/**
+ * One human, as the API describes them. Buddy rows store a `user_id` and
+ * nothing else; the name and address are resolved server-side on every read,
+ * so nothing here can go stale the way a stored copy would. Either may be
+ * null for someone the users log has never seen.
+ */
+export interface Person {
+  user_id: string;
+  email: string | null;
+  name: string | null;
+  role: string | null;
+}
+
+/** What to print for a person. Mirrors `Person.label` on the server. */
+export function personLabel(person: Person | null | undefined): string {
+  if (!person) return "Unknown";
+  return person.name || person.email || person.user_id;
+}
+
+/**
+ * List responses ship a `people` map alongside the rows so ids buried in a
+ * row can be rendered without a request per name. An id missing from the map
+ * is still a real id — show it rather than dropping the row.
+ */
+export type People = Record<string, Person>;
+
+export function personIn(people: People, userId: string | null): Person {
+  if (!userId) return { user_id: "", email: null, name: null, role: null };
+  return people[userId] ?? { user_id: userId, email: null, name: null, role: null };
+}
+
 export type BuddyRole = "mentor" | "mentee";
 export type PairStatus = "active" | "ended";
 export type MentorStatus = "suggested" | "approved" | "rejected";
@@ -15,8 +46,7 @@ export type MessageKind = "text" | "voice";
 
 export interface ConversationSummary {
   pair_id: string;
-  partner_email: string;
-  partner_name: string | null;
+  partner: Person;
   /** "mentor" means the current user mentors the partner. */
   my_role: BuddyRole;
   status: PairStatus;
@@ -31,6 +61,8 @@ export interface ConversationSummary {
 }
 
 export interface MyBuddiesResponse {
+  /** Who the server resolved the caller to be — used to tell own messages apart. */
+  me: Person;
   conversations: ConversationSummary[];
   total: number;
 }
@@ -38,7 +70,7 @@ export interface MyBuddiesResponse {
 export interface BuddyMessage {
   message_id: string;
   pair_id: string;
-  sender_email: string;
+  sender_id: string;
   kind: MessageKind;
   body: string;
   audio_id: string | null;
@@ -50,8 +82,8 @@ export interface BuddyMessage {
 
 export interface MessagesResponse {
   pair_id: string;
-  partner_email: string;
-  partner_name: string | null;
+  partner: Person;
+  me: Person;
   messages: BuddyMessage[];
   total: number;
 }
@@ -62,7 +94,8 @@ export interface MarkReadResponse {
 
 /** One student's demonstrated speaking ability, as the ranking sees it. */
 export interface SpeakerRanking {
-  email: string;
+  user_id: string;
+  email: string | null;
   name: string | null;
   speaking_score: number;
   sample_size: number;
@@ -102,12 +135,11 @@ export interface MentorCandidatesResponse {
 }
 
 export interface MentorRecord {
-  email: string;
-  name: string | null;
+  user_id: string;
   status: MentorStatus;
   speaking_score: number;
   sample_size: number;
-  decided_by: string | null;
+  decided_by_id: string | null;
   decided_at: string | null;
   created_at: string;
 }
@@ -115,15 +147,55 @@ export interface MentorRecord {
 export interface MentorsResponse {
   mentors: MentorRecord[];
   total: number;
+  people: People;
+}
+
+export type RequestStatus = "open" | "paired" | "declined";
+
+/** A student asking to be given a mentor. */
+export interface BuddyRequest {
+  request_id: string;
+  user_id: string;
+  note: string;
+  focus_area: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by_id: string | null;
+  pair_id: string | null;
+}
+
+/**
+ * One student as the pairing screen sees them. Pairing used to be two typed
+ * email addresses, which meant a teacher could only pair someone whose
+ * address they already had in mind. Ids cannot be typed at all, so the cohort
+ * itself is the input now.
+ */
+export interface StudentRow {
+  person: Person;
+  has_mentor: boolean;
+  mentor: Person | null;
+  speaking_score: number | null;
+  sample_size: number;
+  weakest_axis: string | null;
+  weakest_score: number | null;
+  is_approved_mentor: boolean;
+  active_mentees: number;
+  open_request: BuddyRequest | null;
+}
+
+export interface StudentsResponse {
+  students: StudentRow[];
+  total: number;
+  /** How many students have no mentor — the headline number of the screen. */
+  unpaired: number;
 }
 
 export interface BuddyPair {
   pair_id: string;
-  mentor_email: string;
-  mentee_email: string;
-  mentor_name: string | null;
-  mentee_name: string | null;
-  created_by: string;
+  mentor_id: string;
+  mentee_id: string;
+  created_by_id: string;
   created_at: string;
   status: PairStatus;
   ended_at: string | null;
@@ -136,6 +208,8 @@ export interface BuddyPair {
 export type PairState =
   | "ended"
   | "no_cycle"
+  /** The cycle ran past its end date: it needs closing, not chasing. */
+  | "overdue"
   | "not_started"
   | "on_track"
   | "quiet"
@@ -151,6 +225,8 @@ export interface PairHealth {
   last_activity_at: string | null;
   /** Null only when there is no cycle to measure inside. */
   days_quiet: number | null;
+  /** Days past the cycle's end date. Set only on an `overdue` pairing. */
+  days_overdue: number | null;
 }
 
 export interface PairsResponse {
@@ -163,6 +239,8 @@ export interface PairsResponse {
    * purpose: a pairing can be perfectly busy and still be the wrong pairing.
    */
   open_concerns: Record<string, number>;
+  /** Every participant and pairing teacher in `pairs`, keyed by user id. */
+  people: People;
 }
 
 export type CycleStatus = "active" | "closed";
@@ -207,14 +285,14 @@ export interface CycleSummary {
 export interface BuddyCycle {
   cycle_id: string;
   pair_id: string;
-  mentee_email: string;
+  mentee_id: string;
   goal: string;
   focus_area: string | null;
   starts_at: string;
   ends_at: string;
   baseline: CycleBaseline;
   status: CycleStatus;
-  created_by: string;
+  created_by_id: string;
   created_at: string;
   closed_at: string | null;
   /** Written once, on close. Null on an open cycle, or if reporting failed. */
@@ -224,6 +302,10 @@ export interface BuddyCycle {
 export interface CyclesResponse {
   cycles: BuddyCycle[];
   total: number;
+  /** Open past their own end date, newest first. Already filtered server-side
+   * so "overdue" means the same thing here as in the digest and pair list. */
+  overdue: BuddyCycle[];
+  people: People;
 }
 
 export interface GrowthAxis {
@@ -294,7 +376,7 @@ export interface BuddySession {
    */
   mentee_rating_aspects: RatingAspect[];
   mentee_rating_note: string;
-  created_by: string;
+  created_by_id: string;
   created_at: string;
 }
 
@@ -482,13 +564,18 @@ export function fetchMentors(): Promise<MentorsResponse> {
 }
 
 export function decideMentor(
-  email: string,
+  userId: string,
   status: "approved" | "rejected",
 ): Promise<MentorsResponse> {
   return postJson<MentorsResponse>(
-    `/buddy/admin/mentors/${encodeURIComponent(email)}/decision`,
+    `/buddy/admin/mentors/${encodeURIComponent(userId)}/decision`,
     { status },
   );
+}
+
+/** The cohort, for the two pairing dropdowns. */
+export function fetchStudents(): Promise<StudentsResponse> {
+  return fetchJson<StudentsResponse>("/buddy/admin/students");
 }
 
 export function fetchPairs(): Promise<PairsResponse> {
@@ -496,13 +583,13 @@ export function fetchPairs(): Promise<PairsResponse> {
 }
 
 export function createPair(
-  mentorEmail: string,
-  menteeEmail: string,
+  mentorId: string,
+  menteeId: string,
   cycle?: { weeks: number; goal: string; focusArea?: string | null },
 ): Promise<BuddyPair> {
   return postJson<BuddyPair>("/buddy/admin/pairs", {
-    mentor_email: mentorEmail,
-    mentee_email: menteeEmail,
+    mentor_id: mentorId,
+    mentee_id: menteeId,
     // Omitted means the backend default of a 4-week cycle; 0 pairs without one.
     ...(cycle
       ? {
@@ -657,7 +744,7 @@ export type ConcernStatus = "open" | "resolved";
 export interface BuddyConcern {
   concern_id: string;
   pair_id: string;
-  raised_by: string;
+  raised_by_id: string;
   /** Which side raised it — a silent mentee is a different problem. */
   role: BuddyRole;
   reason: ConcernReason;
@@ -665,7 +752,7 @@ export interface BuddyConcern {
   status: ConcernStatus;
   raised_at: string;
   resolved_at: string | null;
-  resolved_by: string | null;
+  resolved_by_id: string | null;
   resolution: string;
 }
 
@@ -676,6 +763,7 @@ export interface MyConcernResponse {
 export interface ConcernsResponse {
   concerns: BuddyConcern[];
   total: number;
+  people: People;
 }
 
 /** Flag a pairing as not working. Participants only; the teacher sees it. */
@@ -769,12 +857,16 @@ export function fetchProgramme(): Promise<ProgrammeReport> {
 // ---------------------------------------------------------------------------
 
 export interface Nudge {
-  email: string;
+  user_id: string;
+  /** Resolved for display, so a teacher reads a name rather than an id. */
+  person: Person;
   role: BuddyRole | "teacher";
   pair_id: string;
-  partner_email: string | null;
+  partner: Person | null;
   state: PairState;
   days_quiet: number | null;
+  /** Days past the cycle's end date. Set on an `overdue` nudge only. */
+  days_overdue: number | null;
   message: string;
   priority: number;
   /** Distinguishes a pairing that never started from one that did work and stopped. */
@@ -787,6 +879,8 @@ export interface DigestCounts {
   not_started: number;
   quiet: number;
   no_cycle: number;
+  /** Cycles past their end date — the teacher's job to close, not to chase. */
+  overdue: number;
 }
 
 export interface BuddyDigest {

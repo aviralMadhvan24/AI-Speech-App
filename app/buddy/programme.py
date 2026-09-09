@@ -35,6 +35,7 @@ from app.buddy import health
 from app.storage.buddy import BuddyCycle
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_pairs_store
+from app.storage.buddy import buddy_requests_store
 from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
@@ -98,6 +99,14 @@ class ProgrammeReport(BaseModel):
     # Outcomes, from frozen summaries only.
     cycles_active: int = 0
     cycles_closed: int = 0
+    # Cycles still open past their own end date. Reported next to the closed
+    # count because it is the number that explains a thin one: every overdue
+    # cycle is a period that produced no verdict, and so contributed nothing
+    # to any of the rates below.
+    cycles_overdue: int = 0
+    # Students waiting to be given a mentor. Reach is not just how many
+    # pairings exist — it is also who asked and has not been reached.
+    requests_open: int = 0
     verdicts: VerdictCounts = Field(default_factory=VerdictCounts)
     # Closed cycles where at least one axis moved between two known points.
     cycles_measured: int = 0
@@ -209,10 +218,12 @@ def build_report() -> ProgrammeReport:
         pairs_active=len(active_pairs),
         pairs_ended=len(pairs) - len(active_pairs),
         mentors_approved=sum(1 for m in mentors_store.list_all() if m.status == "approved"),
-        mentees_served=len({p.mentee_email.lower() for p in pairs}),
+        mentees_served=len({p.mentee_id for p in pairs}),
         health=states,
         cycles_active=sum(1 for c in cycles if c.status == "active"),
         cycles_closed=len(closed),
+        cycles_overdue=len(buddy_cycles_store.list_expired()),
+        requests_open=len(buddy_requests_store.list_open()),
         verdicts=verdicts,
         cycles_measured=len(measured),
         improvement_rate=_rate(verdicts.improved, len(measured)),

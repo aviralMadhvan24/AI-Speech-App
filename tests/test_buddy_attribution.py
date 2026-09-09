@@ -34,8 +34,14 @@ class _Submission:
         self.submitted_at = "2026-08-01T00:00:00+00:00"
 
 
-def _user(email, role="student"):
-    return SimpleNamespace(email=email, display_name="Student", role=role)
+def _user(user_id, role="student"):
+    """A users-log row. The stubs use one string as both id and address: the
+    ranking joins live work on the id and scored work on the address, and what
+    is under test here is which sources count, not the resolution between them.
+    """
+    return SimpleNamespace(
+        firebase_uid=user_id, email=user_id, display_name="Student", role=role
+    )
 
 
 @pytest.fixture()
@@ -69,7 +75,7 @@ def env(monkeypatch):
     return state
 
 
-def _attempt(score, email="ada@x.com"):
+def _attempt(score, email="u-ada"):
     return SimpleNamespace(
         pronunciation_available=score is not None,
         pronunciation_score=score,
@@ -86,8 +92,8 @@ def _debate(score):
 
 def test_a_debater_with_no_interviews_is_still_ranked(env):
     """The whole point: competitive speaking is speaking evidence."""
-    env.users.append(_user("ada@x.com"))
-    env.live["ada@x.com"] = [_debate(88.0), _debate(82.0)]
+    env.users.append(_user("u-ada"))
+    env.live["u-ada"] = [_debate(88.0), _debate(82.0)]
 
     ranking = service.rank_speakers()
 
@@ -98,15 +104,15 @@ def test_a_debater_with_no_interviews_is_still_ranked(env):
 
 
 def test_a_strong_debater_can_now_be_suggested_as_a_mentor(env):
-    env.users.append(_user("ada@x.com"))
-    env.live["ada@x.com"] = [_debate(90.0), _debate(86.0)]
+    env.users.append(_user("u-ada"))
+    env.live["u-ada"] = [_debate(90.0), _debate(86.0)]
 
-    assert [s.email for s in service.suggested_mentors()] == ["ada@x.com"]
+    assert [s.user_id for s in service.suggested_mentors()] == ["u-ada"]
 
 
 def test_attributed_pronunciation_practice_counts(env):
-    env.users.append(_user("ada@x.com"))
-    env.attempts["ada@x.com"] = [_attempt(70.0), _attempt(80.0)]
+    env.users.append(_user("u-ada"))
+    env.attempts["u-ada"] = [_attempt(70.0), _attempt(80.0)]
 
     ranking = service.rank_speakers()[0]
     assert ranking.pronunciation_avg == 75.0
@@ -115,10 +121,10 @@ def test_attributed_pronunciation_practice_counts(env):
 
 def test_every_axis_is_weighted_equally_not_by_volume(env):
     """Ten drills must not drown out one debate — axes average, then combine."""
-    env.users.append(_user("ada@x.com"))
-    env.submissions["ada@x.com"] = [_Submission(content=60.0)]
-    env.attempts["ada@x.com"] = [_attempt(100.0) for _ in range(10)]
-    env.live["ada@x.com"] = [_debate(50.0)]
+    env.users.append(_user("u-ada"))
+    env.submissions["u-ada"] = [_Submission(content=60.0)]
+    env.attempts["u-ada"] = [_attempt(100.0) for _ in range(10)]
+    env.live["u-ada"] = [_debate(50.0)]
 
     ranking = service.rank_speakers()[0]
     # (content 60 + pronunciation 100 + live 50) / 3, not a raw mean of 12.
@@ -133,8 +139,8 @@ def test_an_unattributed_attempt_belongs_to_nobody(env):
     from app.attempts import storage as attempts_storage
 
     rows = [_attempt(90.0, email=None)]
-    env.users.append(_user("ada@x.com"))
-    env.attempts["ada@x.com"] = [r for r in rows if r.student_email == "ada@x.com"]
+    env.users.append(_user("u-ada"))
+    env.attempts["u-ada"] = [r for r in rows if r.student_email == "u-ada"]
 
     assert service.rank_speakers() == []
     assert attempts_storage.list_for_student("") == []
@@ -148,8 +154,8 @@ def test_a_broken_live_store_does_not_blank_the_ranking(env, monkeypatch):
         raise RuntimeError("store is a mess")
 
     monkeypatch.setattr(growth, "_live_events", _boom)
-    env.users.append(_user("ada@x.com"))
-    env.submissions["ada@x.com"] = [_Submission(content=75.0)]
+    env.users.append(_user("u-ada"))
+    env.submissions["u-ada"] = [_Submission(content=75.0)]
 
     ranking = service.rank_speakers()[0]
     assert ranking.content_avg == 75.0
@@ -158,15 +164,15 @@ def test_a_broken_live_store_does_not_blank_the_ranking(env, monkeypatch):
 
 def test_one_interview_scoring_two_axes_is_one_piece_of_work(env):
     """sample_size counts work, not scores — MIN_SAMPLE_SIZE depends on it."""
-    env.users.append(_user("ada@x.com"))
-    env.submissions["ada@x.com"] = [_Submission(content=80.0, pronunciation=60.0)]
+    env.users.append(_user("u-ada"))
+    env.submissions["u-ada"] = [_Submission(content=80.0, pronunciation=60.0)]
 
     assert service.rank_speakers()[0].sample_size == 1
 
 
 def test_teachers_are_never_ranked_as_speakers(env):
-    env.users.append(_user("teacher@x.com", role="teacher"))
-    env.live["teacher@x.com"] = [_debate(95.0)]
+    env.users.append(_user("u-teacher", role="teacher"))
+    env.live["u-teacher"] = [_debate(95.0)]
 
     assert service.rank_speakers() == []
 
@@ -176,11 +182,11 @@ def test_teachers_are_never_ranked_as_speakers(env):
 
 def test_mentee_ratings_become_a_mentor_track_record(env, monkeypatch):
     """Being a strong speaker and being a good mentor are different things."""
-    env.users.append(_user("ada@x.com"))
-    env.live["ada@x.com"] = [_debate(90.0)]
+    env.users.append(_user("u-ada"))
+    env.live["u-ada"] = [_debate(90.0)]
 
     pair = SimpleNamespace(
-        pair_id="p1", mentor_email="ada@x.com", mentee_email="bob@x.com", status="active"
+        pair_id="p1", mentor_id="u-ada", mentee_id="u-bob", status="active"
     )
     sessions = [
         SimpleNamespace(pair_id="p1", status="completed", mentee_rating=5),

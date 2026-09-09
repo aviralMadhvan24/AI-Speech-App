@@ -12,9 +12,12 @@
 import { useEffect, useState } from "react";
 import {
   fetchConcerns,
+  personIn,
+  personLabel,
   resolveConcern,
   type BuddyConcern,
   type ConcernReason,
+  type People,
 } from "../../buddyApi";
 import { Button, Empty, Panel, Tag, type Tone } from "../console/Console";
 
@@ -44,9 +47,12 @@ function daysSince(iso: string): number {
 
 function ConcernRow({
   concern,
+  people,
   onResolved,
 }: {
   concern: BuddyConcern;
+  /** Names for the ids on the row — the concern itself stores only ids. */
+  people: People;
   onResolved: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -83,7 +89,7 @@ function ConcernRow({
             </span>
           </div>
           <p className="text-[12.5px] text-[var(--c-text)] mt-1.5">
-            {concern.raised_by}
+            {personLabel(personIn(people, concern.raised_by_id))}
           </p>
           {concern.detail && (
             <p className="text-[12px] text-[var(--c-muted)] mt-1 leading-relaxed">
@@ -132,13 +138,17 @@ function ConcernRow({
 
 export function ConcernsPanel() {
   const [concerns, setConcerns] = useState<BuddyConcern[]>([]);
+  const [people, setPeople] = useState<People>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = () => {
     setLoading(true);
     fetchConcerns()
-      .then((data) => setConcerns(data.concerns))
+      .then((data) => {
+        setConcerns(data.concerns);
+        setPeople(data.people);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   };
@@ -170,6 +180,7 @@ export function ConcernsPanel() {
             <ConcernRow
               key={concern.concern_id}
               concern={concern}
+              people={people}
               onResolved={load}
             />
           ))}

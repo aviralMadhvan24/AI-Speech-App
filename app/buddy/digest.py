@@ -7,12 +7,14 @@ irony is load-bearing: an async mentorship programme dies of silence, and the
 silence is what suppresses the warning about it.
 
 This turns the same derived states into an outbound worklist: who needs
-chasing, why, and how urgently. Nothing here sends anything. There is no mail
-transport in this codebase and no scheduler, so the digest is built as a plain
-value that a teacher can read today and a delivery job can serialise later
-without any of this logic moving.
+chasing, why, and how urgently. Nothing here sends anything — there is no mail
+transport in this codebase and no scheduler — but the worklist is addressed,
+and `for_recipient` hands one person their own share of it. That is what
+`GET /buddy/my-nudges` serves, so the student on a stalled pairing is told so
+by the app rather than only their teacher being told about them. A delivery
+job can serialise the same value later without any of this logic moving.
 
-Two judgements are worth stating because they are not obvious:
+Three judgements are worth stating because they are not obvious:
 
 - A nudge goes to whoever can actually act on it. `no_cycle` means the pairing
   has no open period, which only a teacher can fix — telling the student to
@@ -22,6 +24,12 @@ Two judgements are worth stating because they are not obvious:
 - On a quiet pairing both sides are listed, but the mentor's message is the
   firmer one. The mentor holds the job; a mentee waiting to be contacted is
   behaving exactly as the programme told them to.
+
+- An `overdue` cycle silences the nudges about silence. A pairing whose period
+  ended a fortnight ago does not need chasing towards a deadline that has
+  already passed; it needs closing, which writes the verdict the whole cycle
+  existed to produce. So that state routes one nudge to the teacher and none
+  to the pair.
 """
 
 from __future__ import annotations
@@ -35,6 +43,8 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from app.buddy import health
+from app.buddy import identity
+from app.buddy.identity import Person
 from app.storage.buddy import buddy_concerns_store
 from app.storage.buddy import buddy_cycles_store
 from app.storage.buddy import buddy_pairs_store
@@ -48,7 +58,8 @@ PRIORITY = {
     "stalled": 0,
     "not_started": 1,
     "quiet": 2,
-    "no_cycle": 3,
+    "overdue": 3,
+    "no_cycle": 4,
 }
 
 # What to say, per state and per side. The mentor's copy asks for an action;
@@ -67,18 +78,24 @@ MENTEE_MESSAGE = {
 
 TEACHER_MESSAGE = {
     "no_cycle": "This pairing has no open cycle, so nothing it does can be measured. Open one or end the pairing.",
+    "overdue": "This cycle has run past its end date. Close it to record what it achieved, then renew or end the pairing.",
 }
 
 
 class Nudge(BaseModel):
     """One person who should hear something about one pairing."""
 
-    email: str
+    user_id: str
+    # Resolved for display, so a teacher reading the digest sees a name rather
+    # than an opaque id. Derived per call — nothing here is stored.
+    person: Person
     role: str  # mentor | mentee | teacher
     pair_id: str
-    partner_email: Optional[str] = None
+    partner: Optional[Person] = None
     state: str
     days_quiet: Optional[int] = None
+    # Days past the cycle's end date, on an `overdue` nudge only.
+    days_overdue: Optional[int] = None
     message: str
     priority: int = 9
     # Carried so a reader can tell a pairing that never started from one that
@@ -91,6 +108,7 @@ class DigestCounts(BaseModel):
     stalled: int = 0
     not_started: int = 0
     quiet: int = 0
+    overdue: int = 0
     no_cycle: int = 0
 
 
@@ -107,8 +125,12 @@ class BuddyDigest(BaseModel):
     open_concerns: int = 0
 
 
-def _nudges_for_pair(pair, entry, sessions) -> list[Nudge]:
-    """The people to tell about one pairing, or nothing if it is fine."""
+def _nudges_for_pair(pair, entry, sessions, people: dict[str, Person]) -> list[Nudge]:
+    """The people to tell about one pairing, or nothing if it is fine.
+
+    ``people`` is the resolved identity map for the whole cohort, passed in
+    rather than looked up per nudge — see `build_digest`.
+    """
     state = entry.state
     if state not in PRIORITY:
         return []
@@ -117,39 +139,48 @@ def _nudges_for_pair(pair, entry, sessions) -> list[Nudge]:
     upcoming = [s for s in sessions if s.status == "planned"]
     next_at = upcoming[0].scheduled_at if upcoming else None
 
+    def who(user_id: str) -> Person:
+        return people.get(user_id) or Person(user_id=user_id)
+
     common = {
         "pair_id": pair.pair_id,
         "state": state,
         "days_quiet": entry.days_quiet,
+        "days_overdue": entry.days_overdue,
         "priority": PRIORITY[state],
         "sessions_kept": kept,
         "next_session_at": next_at,
     }
 
-    if state == "no_cycle":
-        # Only a teacher can open a cycle, so only a teacher is told.
+    if state in TEACHER_MESSAGE:
+        # Only a teacher can open or close a cycle, so only a teacher is told.
+        # Routing this to the students would send them after work they have no
+        # power to do, which is how people learn to ignore nudges.
         return [
             Nudge(
-                email=pair.created_by,
+                user_id=pair.created_by_id,
+                person=who(pair.created_by_id),
                 role="teacher",
-                partner_email=None,
-                message=TEACHER_MESSAGE["no_cycle"],
+                partner=None,
+                message=TEACHER_MESSAGE[state],
                 **common,
             )
         ]
 
     return [
         Nudge(
-            email=pair.mentor_email,
+            user_id=pair.mentor_id,
+            person=who(pair.mentor_id),
             role="mentor",
-            partner_email=pair.mentee_email,
+            partner=who(pair.mentee_id),
             message=MENTOR_MESSAGE[state],
             **common,
         ),
         Nudge(
-            email=pair.mentee_email,
+            user_id=pair.mentee_id,
+            person=who(pair.mentee_id),
             role="mentee",
-            partner_email=pair.mentor_email,
+            partner=who(pair.mentor_id),
             message=MENTEE_MESSAGE[state],
             **common,
         ),
@@ -174,6 +205,14 @@ def build_digest() -> BuddyDigest:
     for session in buddy_sessions_store.list_all():
         by_cycle.setdefault(session.cycle_id, []).append(session)
 
+    # One identity pass for every participant and every pairing teacher on
+    # screen. Resolving per nudge would re-read the users log twice per pair.
+    people = identity.resolve_many(
+        [p.mentor_id for p in active]
+        + [p.mentee_id for p in active]
+        + [p.created_by_id for p in active]
+    )
+
     nudges: list[Nudge] = []
     counts = DigestCounts()
 
@@ -185,14 +224,14 @@ def build_digest() -> BuddyDigest:
         cycle = buddy_cycles_store.active_for_pair(pair.pair_id)
         sessions = by_cycle.get(cycle.cycle_id, []) if cycle else []
 
-        produced = _nudges_for_pair(pair, entry, sessions)
+        produced = _nudges_for_pair(pair, entry, sessions, people)
         if produced and hasattr(counts, entry.state):
             setattr(counts, entry.state, getattr(counts, entry.state) + 1)
         nudges.extend(produced)
 
     # Most urgent first, then the longest-silent within a state — that is the
     # order someone would work down the list in.
-    nudges.sort(key=lambda n: (n.priority, -(n.days_quiet or 0), n.email))
+    nudges.sort(key=lambda n: (n.priority, -(n.days_quiet or 0), n.person.label))
 
     return BuddyDigest(
         generated_at=now,
@@ -203,12 +242,17 @@ def build_digest() -> BuddyDigest:
     )
 
 
-def for_recipient(email: str) -> list[Nudge]:
-    """One person's nudges, for a future per-user mail job.
+def for_recipient(user_id: str) -> list[Nudge]:
+    """One person's own nudges — what `GET /buddy/my-nudges` returns.
 
-    Exists so that adding a transport later is a delivery change and not a
-    logic change — whatever sends the mail should not be re-deciding who is
-    quiet.
+    The programme detects a stalled pairing and used to tell only the teacher
+    about it, which left the two people who could actually restart it as the
+    last to know. Delivery still has no transport, but a nudge the app shows
+    the person it is about is delivery enough to close that loop.
+
+    Whatever sends mail later should call this rather than re-deciding who is
+    quiet, so that adding a transport stays a delivery change.
     """
-    normalized = email.lower()
-    return [n for n in build_digest().nudges if n.email.lower() == normalized]
+    if not user_id:
+        return []
+    return [n for n in build_digest().nudges if n.user_id == user_id]

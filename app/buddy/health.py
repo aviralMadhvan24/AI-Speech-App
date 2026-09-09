@@ -43,7 +43,9 @@ from app.storage.buddy import buddy_sessions_store
 QUIET_AFTER_DAYS = 7
 STALLED_AFTER_DAYS = 14
 
-PairState = Literal["ended", "no_cycle", "not_started", "on_track", "quiet", "stalled"]
+PairState = Literal[
+    "ended", "no_cycle", "overdue", "not_started", "on_track", "quiet", "stalled"
+]
 
 
 class PairHealth(BaseModel):
@@ -58,6 +60,10 @@ class PairHealth(BaseModel):
     state: PairState = "no_cycle"
     has_cycle: bool = False
     cycle_ends_at: Optional[str] = None
+    # Days past the cycle's own end date, when it is still open. Carried so a
+    # teacher can tell a cycle that ended yesterday from one that has been
+    # hanging open for a month.
+    days_overdue: Optional[int] = None
     sessions: SessionConsistency = Field(default_factory=SessionConsistency)
     message_count: int = 0
     last_activity_at: Optional[str] = None
@@ -86,13 +92,21 @@ def _state(
     days_quiet: Optional[int],
     ever_active: bool,
     sessions: SessionConsistency,
+    days_overdue: Optional[int] = None,
 ) -> PairState:
     """Reduce a pairing's activity to one word a teacher can scan a list by.
 
-    Order matters: an ended pairing and then a missing cycle both outrank
-    silence, because neither is failing — one is finished, and the other has no
-    period to run in yet, which is the teacher's own next move rather than the
-    students'.
+    Order matters: an ended pairing, then a missing cycle, then a cycle past
+    its end date all outrank silence, because none of them is a pairing that
+    is failing — one is finished, one has no period to run in yet, and one has
+    run its period out. All three are the teacher's own next move rather than
+    the students'.
+
+    ``overdue`` outranks silence in particular because chasing a pair whose
+    cycle ended a fortnight ago is the wrong action: the period is over, and
+    what it needs is closing so its verdict gets written. Telling those two
+    students to "pick this back up" asks them to work towards a deadline that
+    has already passed.
     """
     if not is_active:
         # Deliberately quiet: a closed pairing going silent is the point of
@@ -100,6 +114,8 @@ def _state(
         return "ended"
     if not has_cycle:
         return "no_cycle"
+    if days_overdue is not None and days_overdue >= 0:
+        return "overdue"
     if days_quiet is None:
         return "on_track"
     # Two missed sessions is a pairing that is failing while still being
@@ -171,6 +187,15 @@ def build_index(pairs: Optional[list[BuddyPair]] = None) -> dict[str, PairHealth
             since = last_activity or _parse(cycle.starts_at)
         days_quiet = max(0, (now - since).days) if since is not None else None
 
+        # A cycle still open past its own end date. Measured here rather than
+        # inferred from `cycle_ends_at` by every caller in turn, so "overdue"
+        # means one thing across the digest, the teacher list and the sweep.
+        days_overdue: Optional[int] = None
+        if cycle is not None:
+            ends = _parse(cycle.ends_at)
+            if ends is not None and ends <= now:
+                days_overdue = max(0, (now - ends).days)
+
         index[pair.pair_id] = PairHealth(
             pair_id=pair.pair_id,
             state=_state(
@@ -179,9 +204,11 @@ def build_index(pairs: Optional[list[BuddyPair]] = None) -> dict[str, PairHealth
                 days_quiet=days_quiet,
                 ever_active=last_activity is not None,
                 sessions=consistency,
+                days_overdue=days_overdue,
             ),
             has_cycle=cycle is not None,
             cycle_ends_at=cycle.ends_at if cycle else None,
+            days_overdue=days_overdue,
             sessions=consistency,
             message_count=len(messages),
             last_activity_at=last_activity.isoformat() if last_activity else None,

@@ -31,6 +31,7 @@ import {
   markConversationRead,
   sendMessage,
   sendVoiceNote,
+  personLabel,
   type BuddyMessage,
   type ConversationSummary,
   type CycleReport,
@@ -38,8 +39,6 @@ import {
 } from "../buddyApi";
 
 interface BuddyViewProps {
-  /** The signed-in user's email — decides which side of the thread is "mine". */
-  userEmail: string;
   onBack: () => void;
 }
 
@@ -75,7 +74,7 @@ function useRefreshOnFocus(onFocus: () => void) {
 }
 
 function displayNameOf(conversation: ConversationSummary): string {
-  return conversation.partner_name || conversation.partner_email;
+  return personLabel(conversation.partner);
 }
 
 function formatTime(iso: string): string {
@@ -318,12 +317,12 @@ function CycleStrip({ report }: { report: CycleReport }) {
 
 function ThreadView({
   conversation,
-  userEmail,
+  myUserId,
   onBack,
   onActivity,
 }: {
   conversation: ConversationSummary;
-  userEmail: string;
+  myUserId: string;
   onBack: () => void;
   /** Tells the parent the inbox is stale (new message sent, or read cleared). */
   onActivity: () => void;
@@ -358,9 +357,7 @@ function ThreadView({
         // that was opening the thread or a poll landing while it sits open.
         // Leaving it unread would badge a conversation the student is reading.
         const unseen = data.messages.some(
-          (message) =>
-            message.read_at === null &&
-            message.sender_email.toLowerCase() !== userEmail.toLowerCase(),
+          (message) => message.read_at === null && message.sender_id !== myUserId,
         );
         if (unseen) {
           try {
@@ -376,7 +373,7 @@ function ThreadView({
         if (showSpinner) setLoading(false);
       }
     },
-    [pairId, userEmail],
+    [pairId, myUserId],
   );
 
   useEffect(() => {
@@ -579,7 +576,7 @@ function ThreadView({
           </p>
         ) : (
           messages.map((message) => {
-            const mine = message.sender_email.toLowerCase() === userEmail.toLowerCase();
+            const mine = message.sender_id === myUserId;
             return (
               <div
                 key={message.message_id}
@@ -741,17 +738,19 @@ function MentoringCard({ record }: { record: MentorDashboard }) {
 // Root
 // ---------------------------------------------------------------------------
 
-export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
+export function BuddyView({ onBack }: BuddyViewProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openPairId, setOpenPairId] = useState<string | null>(null);
   const [myRecord, setMyRecord] = useState<MentorDashboard | null>(null);
+  const [myUserId, setMyUserId] = useState("");
 
   const load = useCallback(async () => {
     try {
       const data = await fetchMyBuddies();
       setConversations(data.conversations);
+      setMyUserId(data.me.user_id);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load your buddies.");
@@ -793,7 +792,7 @@ export function BuddyView({ userEmail, onBack }: BuddyViewProps) {
     return (
       <ThreadView
         conversation={open}
-        userEmail={userEmail}
+        myUserId={myUserId}
         onBack={() => {
           setOpenPairId(null);
           void load();

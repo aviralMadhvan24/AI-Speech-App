@@ -767,7 +767,7 @@ export default function App() {
               <Route
                 path="/buddy"
                 element={
-                  <BuddyView userEmail={user.email} onBack={handleBackToMenu} />
+                  <BuddyView onBack={handleBackToMenu} />
                 }
               />
 

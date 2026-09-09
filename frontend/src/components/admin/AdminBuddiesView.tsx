@@ -19,12 +19,17 @@ import {
   endPair,
   fetchMentorCandidates,
   fetchPairs,
+  fetchStudents,
+  personIn,
+  personLabel,
   type BuddyPair,
   type CycleVerdict,
   type MentorCandidatesResponse,
   type PairHealth,
   type PairState,
+  type People,
   type SpeakerRanking,
+  type StudentRow,
 } from "../../buddyApi";
 
 /**
@@ -63,6 +68,12 @@ const HEALTH: Record<
     tone: "text-amber-300 bg-amber-500/10 border-amber-500/30",
     order: 2,
     hint: "Nothing is being tracked until you start one.",
+  },
+  overdue: {
+    label: "Overdue",
+    tone: "text-amber-300 bg-amber-500/10 border-amber-500/30",
+    order: 2.5,
+    hint: "The cycle ran past its end date — close it to record the verdict.",
   },
   not_started: {
     label: "Not started",
@@ -293,14 +304,20 @@ export function AdminBuddiesView() {
   const [openConcerns, setOpenConcerns] = useState<Record<string, number>>({});
   const [candidates, setCandidates] = useState<MentorCandidatesResponse | null>(null);
   const [pairs, setPairs] = useState<BuddyPair[]>([]);
+  // Pairs store ids only, so the names on this screen come from here.
+  const [people, setPeople] = useState<People>({});
+  // The cohort, for the two pairing dropdowns. An id cannot be typed, so the
+  // list of students *is* the input — which also means a teacher can finally
+  // see who has no mentor rather than only pairing people they thought of.
+  const [students, setStudents] = useState<StudentRow[]>([]);
   const [health, setHealth] = useState<Record<string, PairHealth>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyEmail, setBusyEmail] = useState<string | null>(null);
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
 
-  const [mentorEmail, setMentorEmail] = useState("");
-  const [menteeEmail, setMenteeEmail] = useState("");
+  const [mentorId, setMentorId] = useState("");
+  const [menteeId, setMenteeId] = useState("");
   const [cycleWeeks, setCycleWeeks] = useState(4);
   const [cycleGoal, setCycleGoal] = useState("");
   const [pairing, setPairing] = useState(false);
@@ -310,16 +327,19 @@ export function AdminBuddiesView() {
 
   const load = useCallback(async () => {
     try {
-      const [candidateData, pairData, cycleData] = await Promise.all([
+      const [candidateData, pairData, cycleData, studentData] = await Promise.all([
         fetchMentorCandidates(),
         fetchPairs(),
         fetchCycles(),
+        fetchStudents(),
       ]);
       setCandidates(candidateData);
       setPairs(pairData.pairs);
+      setPeople(pairData.people ?? {});
       setHealth(pairData.health ?? {});
       setOpenConcerns(pairData.open_concerns ?? {});
       setCycles(cycleData.cycles);
+      setStudents(studentData.students);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the buddy data.");
@@ -333,24 +353,24 @@ export function AdminBuddiesView() {
   }, [load]);
 
   const handleDecide = useCallback(
-    async (email: string, status: "approved" | "rejected") => {
-      setBusyEmail(email);
+    async (userId: string, status: "approved" | "rejected") => {
+      setBusyUserId(userId);
       setError(null);
       try {
-        await decideMentor(email, status);
+        await decideMentor(userId, status);
         await load();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not record that decision.");
       } finally {
-        setBusyEmail(null);
+        setBusyUserId(null);
       }
     },
     [load],
   );
 
   const handleCreatePair = useCallback(async () => {
-    const mentor = mentorEmail.trim();
-    const mentee = menteeEmail.trim();
+    const mentor = mentorId.trim();
+    const mentee = menteeId.trim();
     if (!mentor || !mentee) return;
 
     setPairing(true);
@@ -360,8 +380,8 @@ export function AdminBuddiesView() {
         weeks: cycleWeeks,
         goal: cycleGoal.trim(),
       });
-      setMentorEmail("");
-      setMenteeEmail("");
+      setMentorId("");
+      setMenteeId("");
       setCycleGoal("");
       await load();
     } catch (err) {
@@ -377,7 +397,7 @@ export function AdminBuddiesView() {
     } finally {
       setPairing(false);
     }
-  }, [load, mentorEmail, menteeEmail, cycleWeeks, cycleGoal]);
+  }, [load, mentorId, menteeId, cycleWeeks, cycleGoal]);
 
   const activeCycleFor = useCallback(
     (pairId: string) =>
@@ -448,6 +468,26 @@ export function AdminBuddiesView() {
     [candidates],
   );
 
+  // Least-loaded first: the mentor a teacher should reach for is the one with
+  // capacity, not whoever happens to sort first alphabetically.
+  const mentorOptions = useMemo(
+    () =>
+      students
+        .filter((row) => row.is_approved_mentor)
+        .sort((a, b) => a.active_mentees - b.active_mentees),
+    [students],
+  );
+
+  // Whoever asked comes first — they are the only students who have said out
+  // loud that they want this, and the queue is worth clearing.
+  const menteeOptions = useMemo(
+    () =>
+      students
+        .filter((row) => !row.has_mentor)
+        .sort((a, b) => Number(Boolean(b.open_request)) - Number(Boolean(a.open_request))),
+    [students],
+  );
+
   if (loading) {
     return (
       <div className="c-panel p-8 flex items-center justify-center">
@@ -501,8 +541,8 @@ export function AdminBuddiesView() {
         <div className="space-y-3">
           <MentorCandidates
             data={candidates}
-            busy={busyEmail !== null}
-            onDecide={(email, status) => void handleDecide(email, status)}
+            busy={busyUserId !== null}
+            onDecide={(userId, status) => void handleDecide(userId, status)}
           />
 
       {/* The full ranking, behind a toggle. Everyone is here including the
@@ -523,10 +563,10 @@ export function AdminBuddiesView() {
                 <div className="space-y-2 p-3">
                   {ranking.map((speaker) => (
                     <SpeakerRow
-                      key={speaker.email}
+                      key={speaker.user_id}
                       speaker={speaker}
-                      busy={busyEmail === speaker.email}
-                      onDecide={(status) => void handleDecide(speaker.email, status)}
+                      busy={busyUserId === speaker.user_id}
+                      onDecide={(status) => void handleDecide(speaker.user_id, status)}
                     />
                   ))}
                 </div>
@@ -556,32 +596,45 @@ export function AdminBuddiesView() {
               <span className="text-xs uppercase tracking-widest text-zinc-500">
                 Mentor
               </span>
-              <input
-                list="buddy-approved-mentors"
-                value={mentorEmail}
-                onChange={(event) => setMentorEmail(event.target.value)}
-                placeholder="approved.mentor@example.com"
-                className="c-input"
-              />
-              <datalist id="buddy-approved-mentors">
-                {approvedMentors.map((mentor) => (
-                  <option key={mentor.email} value={mentor.email}>
-                    {mentor.name || mentor.email}
+              <select
+                value={mentorId}
+                onChange={(event) => setMentorId(event.target.value)}
+                className="c-select"
+              >
+                <option value="">Choose an approved mentor…</option>
+                {mentorOptions.map((row) => (
+                  <option key={row.person.user_id} value={row.person.user_id}>
+                    {personLabel(row.person)}
+                    {row.active_mentees > 0
+                      ? ` · ${row.active_mentees} mentee${
+                          row.active_mentees === 1 ? "" : "s"
+                        }`
+                      : ""}
                   </option>
                 ))}
-              </datalist>
+              </select>
             </label>
 
             <label className="space-y-1.5">
               <span className="text-xs uppercase tracking-widest text-zinc-500">
                 Mentee
               </span>
-              <input
-                value={menteeEmail}
-                onChange={(event) => setMenteeEmail(event.target.value)}
-                placeholder="student@example.com"
-                className="c-input"
-              />
+              <select
+                value={menteeId}
+                onChange={(event) => setMenteeId(event.target.value)}
+                className="c-select"
+              >
+                <option value="">Choose a student…</option>
+                {/* Students already being mentored are excluded rather than
+                    shown and rejected: one mentor at a time is a rule the
+                    backend enforces, so offering them is offering a 409. */}
+                {menteeOptions.map((row) => (
+                  <option key={row.person.user_id} value={row.person.user_id}>
+                    {personLabel(row.person)}
+                    {row.open_request ? " · asked for a mentor" : ""}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 
@@ -630,7 +683,7 @@ export function AdminBuddiesView() {
           <button
             type="button"
             onClick={() => void handleCreatePair()}
-            disabled={pairing || !mentorEmail.trim() || !menteeEmail.trim()}
+            disabled={pairing || !mentorId || !menteeId}
             className="c-btn c-btn-primary"
           >
             {pairing ? (
@@ -674,11 +727,11 @@ export function AdminBuddiesView() {
                   <div className="flex-1 min-w-[220px]">
                     <div className="flex items-center gap-2 flex-wrap text-sm">
                       <span className="font-semibold text-emerald-300">
-                        {pair.mentor_name || pair.mentor_email}
+                        {personLabel(personIn(people, pair.mentor_id))}
                       </span>
                       <span className="text-zinc-600">mentors</span>
                       <span className="font-semibold text-violet-300">
-                        {pair.mentee_name || pair.mentee_email}
+                        {personLabel(personIn(people, pair.mentee_id))}
                       </span>
                       {pairHealth && (
                         <span
@@ -700,7 +753,8 @@ export function AdminBuddiesView() {
                       )}
                     </div>
                     <p className="text-xs text-zinc-600 mt-1">
-                      {pair.mentor_email} · {pair.mentee_email}
+                      {personIn(people, pair.mentor_id).email ?? pair.mentor_id} ·{" "}
+                      {personIn(people, pair.mentee_id).email ?? pair.mentee_id}
                     </p>
                     {!ended &&
                       (() => {

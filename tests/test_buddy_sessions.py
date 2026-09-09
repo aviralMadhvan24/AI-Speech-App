@@ -23,10 +23,10 @@ from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", name="Mentor", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", name="Mentee", role="student")
-STRANGER = User(uid="u-stranger", email="stranger@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", name="Mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", name="Mentee", role="student")
+STRANGER = User(uid="u-stranger", email="u-stranger", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 WHEN = "2026-08-20T15:00:00+00:00"
 
@@ -70,9 +70,9 @@ def buddy_app(tmp_path, monkeypatch):
 @pytest.fixture()
 def pair(buddy_app):
     return buddy_pairs_store.create(
-        mentor_email=MENTOR.email,
-        mentee_email=MENTEE.email,
-        created_by=TEACHER.email,
+        mentor_id=MENTOR.uid,
+        mentee_id=MENTEE.uid,
+        created_by_id=TEACHER.uid,
     )
 
 
@@ -81,10 +81,10 @@ def cycled(buddy_app, pair):
     """A pair with an open cycle — the only state sessions can be planned in."""
     buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=MENTEE.email,
+        mentee_id=MENTEE.uid,
         starts_at="2026-08-01T00:00:00+00:00",
         ends_at="2026-09-01T00:00:00+00:00",
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
     return pair
 
@@ -102,7 +102,7 @@ def _plan(buddy_app, pair_id, **body):
 def test_completing_twice_keeps_both_sides_notes(tmp_path):
     store = BuddySessionsStore(path=tmp_path / "sessions.jsonl")
     session = store.create(
-        pair_id="p1", cycle_id="c1", scheduled_at=WHEN, created_by=MENTOR.email
+        pair_id="p1", cycle_id="c1", scheduled_at=WHEN, created_by_id=MENTOR.uid
     )
 
     store.complete(session.session_id, note="Rushed the opening", is_mentor=True)
@@ -118,7 +118,7 @@ def test_completing_twice_keeps_both_sides_notes(tmp_path):
 def test_the_completion_time_is_not_moved_by_a_second_call(tmp_path):
     store = BuddySessionsStore(path=tmp_path / "sessions.jsonl")
     session = store.create(
-        pair_id="p1", cycle_id="c1", scheduled_at=WHEN, created_by=MENTOR.email
+        pair_id="p1", cycle_id="c1", scheduled_at=WHEN, created_by_id=MENTOR.uid
     )
 
     first = store.complete(session.session_id, note="a", is_mentor=True)
@@ -130,7 +130,7 @@ def test_the_completion_time_is_not_moved_by_a_second_call(tmp_path):
 def test_sessions_are_listed_in_the_order_they_will_happen(tmp_path):
     store = BuddySessionsStore(path=tmp_path / "sessions.jsonl")
     for at in ("2026-08-25T10:00:00+00:00", "2026-08-11T10:00:00+00:00"):
-        store.create(pair_id="p1", cycle_id="c1", scheduled_at=at, created_by="x@y.com")
+        store.create(pair_id="p1", cycle_id="c1", scheduled_at=at, created_by_id="u-x")
 
     assert [s.scheduled_at[:10] for s in store.list_for_cycle("c1")] == [
         "2026-08-11",

@@ -17,6 +17,7 @@ from app.auth import User
 from app.auth import require_teacher
 from app.auth import require_user
 from app.buddy import growth
+from app.buddy import identity
 from app.buddy.routes import router as buddy_router
 from app.storage.buddy import CycleBaseline
 from app.storage.buddy import buddy_cycles_store
@@ -26,9 +27,9 @@ from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 STARTS = "2026-08-01T00:00:00+00:00"
 ENDS = "2026-09-01T00:00:00+00:00"
@@ -42,12 +43,13 @@ def buddy_app(tmp_path, monkeypatch):
     monkeypatch.setattr(buddy_cycles_store, "path", tmp_path / "cycles.jsonl")
     monkeypatch.setattr(buddy_sessions_store, "path", tmp_path / "sessions.jsonl")
 
-    from app.storage import users_store
-
-    monkeypatch.setattr(users_store, "get_by_email", lambda email: None)
+    # These users are not in the real users log, so resolve their address here
+    # — the interview and drill sources are keyed on it.
+    monkeypatch.setattr(identity, "email_for", lambda user_id: f"{user_id}@x.test")
     # No scored work unless a test says otherwise.
     monkeypatch.setattr(growth, "_interview_events", lambda email: [])
-    monkeypatch.setattr(growth, "_live_events", lambda email: [])
+    monkeypatch.setattr(growth, "_attempt_events", lambda email: [])
+    monkeypatch.setattr(growth, "_live_events", lambda user_id: [])
 
     app = FastAPI()
     app.include_router(buddy_router)
@@ -75,14 +77,14 @@ def buddy_app(tmp_path, monkeypatch):
 @pytest.fixture()
 def cycled(buddy_app):
     pair = buddy_pairs_store.create(
-        mentor_email=MENTOR.email, mentee_email=MENTEE.email, created_by=TEACHER.email
+        mentor_id=MENTOR.uid, mentee_id=MENTEE.uid, created_by_id=TEACHER.uid
     )
     cycle = buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=MENTEE.email,
+        mentee_id=MENTEE.uid,
         starts_at=STARTS,
         ends_at=ENDS,
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
         goal="Speak two minutes without filler words",
         baseline=CycleBaseline(content=60.0),
     )
@@ -145,14 +147,14 @@ def test_a_cycle_with_nothing_measured_admits_it(buddy_app, cycled):
 def test_an_axis_with_no_baseline_does_not_vote(buddy_app, monkeypatch):
     """Nothing to measure against is not the same as no movement."""
     pair = buddy_pairs_store.create(
-        mentor_email=MENTOR.email, mentee_email=MENTEE.email, created_by=TEACHER.email
+        mentor_id=MENTOR.uid, mentee_id=MENTEE.uid, created_by_id=TEACHER.uid
     )
     cycle = buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=MENTEE.email,
+        mentee_id=MENTEE.uid,
         starts_at=STARTS,
         ends_at=ENDS,
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
         baseline=CycleBaseline(),  # nothing known at the start
     )
     _interviews(monkeypatch, 90.0)
@@ -189,13 +191,13 @@ def test_session_consistency_is_recorded_alongside_the_score(
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=STARTS,
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     missed = buddy_sessions_store.create(
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=STARTS,
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     buddy_sessions_store.complete(kept.session_id, is_mentor=True)
     buddy_sessions_store.mark_missed(missed.session_id)

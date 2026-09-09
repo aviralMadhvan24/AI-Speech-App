@@ -28,9 +28,9 @@ from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 STARTS = "2026-08-01T00:00:00+00:00"
 ENDS = "2026-09-01T00:00:00+00:00"
@@ -78,14 +78,14 @@ def paired(buddy_app):
     """A pair whose cycle opened just now, so health reads as freshly started."""
     now = datetime.now(timezone.utc)
     pair = buddy_pairs_store.create(
-        mentor_email=MENTOR.email, mentee_email=MENTEE.email, created_by=TEACHER.email
+        mentor_id=MENTOR.uid, mentee_id=MENTEE.uid, created_by_id=TEACHER.uid
     )
     cycle = buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=MENTEE.email,
+        mentee_id=MENTEE.uid,
         starts_at=now.isoformat(),
         ends_at=(now + timedelta(weeks=4)).isoformat(),
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
     return pair, cycle
 
@@ -95,7 +95,7 @@ def _completed_session(pair, cycle):
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=STARTS,
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     return buddy_sessions_store.complete(session.session_id, is_mentor=True)
 
@@ -209,7 +209,7 @@ def test_a_session_that_has_not_happened_cannot_be_rated(buddy_app, paired):
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=STARTS,
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     buddy_app.as_(MENTEE)
 
@@ -303,7 +303,7 @@ def test_the_inbox_answers_what_now_with_the_next_session(buddy_app, paired):
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at="2026-08-20T10:00:00+00:00",
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     buddy_app.as_(MENTEE)
 

@@ -1,12 +1,18 @@
 """Buddy mentorship storage — mentor approvals, pairs, and 1:1 messages.
 
-Three JSONL files, following the same store protocol as the rest of this
-package (see the package docstring for the migration note):
+Every row identifies a person by ``user_id`` — the platform's own user id
+(``User.uid``), never by email. See ``app.buddy.identity`` for why, and for the
+resolution of an id back into a name and address for display. Nothing here
+stores a name or an address: a denormalised copy is a copy that goes stale.
+
+JSONL files, following the same store protocol as the rest of this package
+(see the package docstring for the migration note):
 
 - ``outputs/buddy_mentors.jsonl``  — one row per student considered as a mentor
 - ``outputs/buddy_pairs.jsonl``    — one row per mentor/mentee pairing
 - ``outputs/buddy_messages.jsonl`` — one row per chat message or voice note
 - ``outputs/buddy_concerns.jsonl`` — one row per raised concern (teacher-only)
+- ``outputs/buddy_requests.jsonl`` — one row per student asking for a mentor
 
 Messages are append-only on the hot path; only ``mark_read`` rewrites, and it
 touches a single pair's rows. Fine at classroom scale, revisit with a real DB.
@@ -39,6 +45,15 @@ SessionStatus = Literal["planned", "completed", "missed"]
 SessionMode = Literal["async_voice", "live_call", "in_person"]
 # Which of the platform's own catalogs a session's practice material came from.
 PromptKind = Literal["pronunciation", "debate", "gd"]
+# Which live feature hosts a session. Only debate today, and deliberately so:
+# a debate room is exactly two people, which is exactly a buddy pair. A GD room
+# needs five to start, so a pair cannot hold one and the session stays
+# self-reported rather than being offered a room it can never fill.
+RoomKind = Literal["debate"]
+# Where a mentee stands in the queue for a mentor. `paired` is terminal and
+# carries the pair it produced, so the request log doubles as the record of
+# how long students actually wait.
+RequestStatus = Literal["open", "paired", "declined"]
 # Why a pairing was flagged. A closed list rather than free text so a
 # teacher can triage thirty of them without reading thirty paragraphs.
 ConcernReason = Literal["mismatch", "unresponsive", "schedule", "uncomfortable", "other"]
@@ -61,12 +76,11 @@ class MentorRecord(BaseModel):
     ``app.buddy.service.rank_speakers``.
     """
 
-    email: str
-    name: Optional[str] = None
+    user_id: str
     status: MentorStatus = "suggested"
     speaking_score: float = 0.0
     sample_size: int = 0
-    decided_by: Optional[str] = None
+    decided_by_id: Optional[str] = None
     decided_at: Optional[str] = None
     created_at: str
 
@@ -75,26 +89,22 @@ class BuddyPair(BaseModel):
     """One mentor/mentee relationship, created by a teacher."""
 
     pair_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    mentor_email: str
-    mentee_email: str
-    mentor_name: Optional[str] = None
-    mentee_name: Optional[str] = None
-    created_by: str
+    mentor_id: str
+    mentee_id: str
+    created_by_id: str
     created_at: str
     status: PairStatus = "active"
     ended_at: Optional[str] = None
 
-    def involves(self, email: str) -> bool:
-        normalized = email.lower()
-        return normalized in (self.mentor_email.lower(), self.mentee_email.lower())
+    def involves(self, user_id: str) -> bool:
+        return user_id in (self.mentor_id, self.mentee_id)
 
-    def partner_of(self, email: str) -> Optional[str]:
-        """The other participant's email, or None if `email` is not a member."""
-        normalized = email.lower()
-        if normalized == self.mentor_email.lower():
-            return self.mentee_email
-        if normalized == self.mentee_email.lower():
-            return self.mentor_email
+    def partner_of(self, user_id: str) -> Optional[str]:
+        """The other participant's id, or None if `user_id` is not a member."""
+        if user_id == self.mentor_id:
+            return self.mentee_id
+        if user_id == self.mentee_id:
+            return self.mentor_id
         return None
 
 
@@ -103,7 +113,7 @@ class BuddyMessage(BaseModel):
 
     message_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     pair_id: str
-    sender_email: str
+    sender_id: str
     kind: MessageKind = "text"
     body: str = ""
     audio_id: Optional[str] = None
@@ -170,14 +180,14 @@ class BuddyCycle(BaseModel):
 
     cycle_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     pair_id: str
-    mentee_email: str
+    mentee_id: str
     goal: str = ""
     focus_area: Optional[str] = None
     starts_at: str
     ends_at: str
     baseline: CycleBaseline = Field(default_factory=CycleBaseline)
     status: CycleStatus = "active"
-    created_by: str
+    created_by_id: str
     created_at: str
     closed_at: Optional[str] = None
     # Written once, when the cycle closes. See `CycleSummary`.
@@ -218,6 +228,17 @@ class BuddySession(BaseModel):
     prompt_kind: Optional[PromptKind] = None
     prompt_id: Optional[str] = None
     prompt_title: Optional[str] = None
+    # The real room this session was held in, once someone opened one. A
+    # `live_call` used to be a mode with no call behind it: the pair arranged
+    # something off-platform and came back to tick a box, so the only record
+    # of the practice was their own word for it. With a room code here the
+    # session is held in the platform's own debate room, and the scoring that
+    # room already does lands in the debate store — which is where
+    # `growth._live_events` reads from, so the work counts towards the cycle
+    # without anyone reporting it.
+    room_kind: Optional[RoomKind] = None
+    room_code: Optional[str] = None
+    room_opened_at: Optional[str] = None
     # The mentee's rating of this session, 1-5. The only signal the platform
     # has about whether a mentor is any good AT MENTORING, as opposed to being
     # a strong speaker — which is what got them selected.
@@ -227,7 +248,7 @@ class BuddySession(BaseModel):
     # pairing is wrong" is `BuddyConcern`, which the mentor never sees.
     mentee_rating_aspects: list[str] = Field(default_factory=list)
     mentee_rating_note: str = ""
-    created_by: str
+    created_by_id: str
     created_at: str
 
 
@@ -237,6 +258,7 @@ _MESSAGES_PATH = Path("outputs/buddy_messages.jsonl")
 _CYCLES_PATH = Path("outputs/buddy_cycles.jsonl")
 _SESSIONS_PATH = Path("outputs/buddy_sessions.jsonl")
 _CONCERNS_PATH = Path("outputs/buddy_concerns.jsonl")
+_REQUESTS_PATH = Path("outputs/buddy_requests.jsonl")
 
 
 def _now() -> str:
@@ -268,43 +290,39 @@ class MentorsStore:
     def list_by_status(self, status: MentorStatus) -> list[MentorRecord]:
         return [m for m in self.list_all() if m.status == status]
 
-    def get(self, email: str) -> Optional[MentorRecord]:
-        normalized = email.lower()
+    def get(self, user_id: str) -> Optional[MentorRecord]:
         for mentor in self.list_all():
-            if mentor.email.lower() == normalized:
+            if mentor.user_id == user_id:
                 return mentor
         return None
 
-    def is_approved(self, email: str) -> bool:
-        record = self.get(email)
+    def is_approved(self, user_id: str) -> bool:
+        record = self.get(user_id)
         return record is not None and record.status == "approved"
 
     # --- Write ---
 
     def set_status(
         self,
-        email: str,
+        user_id: str,
         status: MentorStatus,
-        decided_by: str,
+        decided_by_id: str,
         speaking_score: float = 0.0,
         sample_size: int = 0,
-        name: Optional[str] = None,
     ) -> MentorRecord:
         """Approve or reject a mentor, creating the row if it is new."""
         mentors = self.list_all()
-        normalized = email.lower()
         now = _now()
 
         for index, mentor in enumerate(mentors):
-            if mentor.email.lower() == normalized:
+            if mentor.user_id == user_id:
                 updated = mentor.model_copy(
                     update={
                         "status": status,
-                        "decided_by": decided_by,
+                        "decided_by_id": decided_by_id,
                         "decided_at": now,
                         "speaking_score": speaking_score or mentor.speaking_score,
                         "sample_size": sample_size or mentor.sample_size,
-                        "name": name or mentor.name,
                     }
                 )
                 mentors[index] = updated
@@ -312,12 +330,11 @@ class MentorsStore:
                 return updated
 
         record = MentorRecord(
-            email=normalized,
-            name=name,
+            user_id=user_id,
             status=status,
             speaking_score=speaking_score,
             sample_size=sample_size,
-            decided_by=decided_by,
+            decided_by_id=decided_by_id,
             decided_at=now,
             created_at=now,
         )
@@ -339,8 +356,8 @@ class BuddyPairsStore:
     def list_active(self) -> list[BuddyPair]:
         return [p for p in self.list_all() if p.status == "active"]
 
-    def list_for_user(self, email: str) -> list[BuddyPair]:
-        return [p for p in self.list_all() if p.involves(email)]
+    def list_for_user(self, user_id: str) -> list[BuddyPair]:
+        return [p for p in self.list_all() if p.involves(user_id)]
 
     def get(self, pair_id: str) -> Optional[BuddyPair]:
         for pair in self.list_all():
@@ -348,11 +365,21 @@ class BuddyPairsStore:
                 return pair
         return None
 
-    def find_active_between(self, mentor_email: str, mentee_email: str) -> Optional[BuddyPair]:
-        mentor = mentor_email.lower()
-        mentee = mentee_email.lower()
+    def find_active_between(self, mentor_id: str, mentee_id: str) -> Optional[BuddyPair]:
         for pair in self.list_active():
-            if pair.mentor_email.lower() == mentor and pair.mentee_email.lower() == mentee:
+            if pair.mentor_id == mentor_id and pair.mentee_id == mentee_id:
+                return pair
+        return None
+
+    def active_for_mentee(self, mentee_id: str) -> Optional[BuddyPair]:
+        """The mentee's current pairing, whoever mentors it.
+
+        A student has at most one mentor at a time — two people coaching the
+        same person to different plans is worse than one — and this is what
+        the pairing picker checks before offering someone as unpaired.
+        """
+        for pair in self.list_active():
+            if pair.mentee_id == mentee_id:
                 return pair
         return None
 
@@ -360,18 +387,14 @@ class BuddyPairsStore:
 
     def create(
         self,
-        mentor_email: str,
-        mentee_email: str,
-        created_by: str,
-        mentor_name: Optional[str] = None,
-        mentee_name: Optional[str] = None,
+        mentor_id: str,
+        mentee_id: str,
+        created_by_id: str,
     ) -> BuddyPair:
         record = BuddyPair(
-            mentor_email=mentor_email.lower(),
-            mentee_email=mentee_email.lower(),
-            mentor_name=mentor_name,
-            mentee_name=mentee_name,
-            created_by=created_by,
+            mentor_id=mentor_id,
+            mentee_id=mentee_id,
+            created_by_id=created_by_id,
             created_at=_now(),
             status="active",
         )
@@ -415,13 +438,27 @@ class BuddyMessagesStore:
                 return message
         return None
 
-    def unread_count(self, pair_id: str, for_email: str) -> int:
+    def unread_count(self, pair_id: str, for_user_id: str) -> int:
         """Messages in this pair the given user has not read yet."""
-        normalized = for_email.lower()
         return sum(
             1
             for m in self.list_for_pair(pair_id)
-            if m.sender_email.lower() != normalized and m.read_at is None
+            if m.sender_id != for_user_id and m.read_at is None
+        )
+
+    def unread_total(self, user_id: str, pair_ids: set[str]) -> int:
+        """Unread messages across all of this user's pairs, in ONE pass.
+
+        The main menu asks this on every render, for a user who may be in
+        several pairings; counting per pair would re-read the whole message
+        log once per pairing to answer a single badge.
+        """
+        if not pair_ids:
+            return 0
+        return sum(
+            1
+            for m in self.list_all()
+            if m.pair_id in pair_ids and m.sender_id != user_id and m.read_at is None
         )
 
     # --- Write ---
@@ -429,7 +466,7 @@ class BuddyMessagesStore:
     def create(
         self,
         pair_id: str,
-        sender_email: str,
+        sender_id: str,
         kind: MessageKind = "text",
         body: str = "",
         audio_id: Optional[str] = None,
@@ -438,7 +475,7 @@ class BuddyMessagesStore:
     ) -> BuddyMessage:
         record = BuddyMessage(
             pair_id=pair_id,
-            sender_email=sender_email.lower(),
+            sender_id=sender_id,
             kind=kind,
             body=body,
             audio_id=audio_id,
@@ -449,17 +486,16 @@ class BuddyMessagesStore:
         append_jsonl(self.path, record.model_dump())
         return record
 
-    def mark_read(self, pair_id: str, reader_email: str) -> int:
+    def mark_read(self, pair_id: str, reader_id: str) -> int:
         """Mark every message the reader did NOT send as read. Returns the count."""
         rows = self.list_all()
-        normalized = reader_email.lower()
         now = _now()
         changed = 0
         out: list[dict] = []
         for message in rows:
             if (
                 message.pair_id == pair_id
-                and message.sender_email.lower() != normalized
+                and message.sender_id != reader_id
                 and message.read_at is None
             ):
                 message = message.model_copy(update={"read_at": now})
@@ -499,15 +535,33 @@ class BuddyCyclesStore:
                 return cycle
         return None
 
+    def list_active(self) -> list[BuddyCycle]:
+        return [c for c in self.list_all() if c.status == "active"]
+
+    def list_expired(self, now: Optional[str] = None) -> list[BuddyCycle]:
+        """Cycles still open past their own end date, oldest first.
+
+        Nothing used to read `ends_at` at all: it was written when the cycle
+        opened and then only ever displayed. So a cycle ran past its end
+        forever, the frozen summary that closing writes was never written, and
+        the `improved` verdict that feeds the growth path back into mentor
+        selection never fired. A cycle that cannot end cannot conclude
+        anything, which makes the whole period unmeasurable.
+        """
+        cutoff = now or _now()
+        expired = [c for c in self.list_active() if c.ends_at <= cutoff]
+        expired.sort(key=lambda c: c.ends_at)
+        return expired
+
     # --- Write ---
 
     def create(
         self,
         pair_id: str,
-        mentee_email: str,
+        mentee_id: str,
         starts_at: str,
         ends_at: str,
-        created_by: str,
+        created_by_id: str,
         goal: str = "",
         focus_area: Optional[str] = None,
         baseline: Optional[CycleBaseline] = None,
@@ -518,13 +572,13 @@ class BuddyCyclesStore:
 
         record = BuddyCycle(
             pair_id=pair_id,
-            mentee_email=mentee_email.lower(),
+            mentee_id=mentee_id,
             goal=goal,
             focus_area=focus_area,
             starts_at=starts_at,
             ends_at=ends_at,
             baseline=baseline or CycleBaseline(),
-            created_by=created_by,
+            created_by_id=created_by_id,
             created_at=_now(),
         )
         append_jsonl(self.path, record.model_dump())
@@ -587,7 +641,7 @@ class BuddySessionsStore:
         pair_id: str,
         cycle_id: str,
         scheduled_at: str,
-        created_by: str,
+        created_by_id: str,
         topic: str = "",
         mode: SessionMode = "async_voice",
         prompt_kind: Optional[PromptKind] = None,
@@ -603,7 +657,7 @@ class BuddySessionsStore:
             prompt_kind=prompt_kind,
             prompt_id=prompt_id,
             prompt_title=prompt_title,
-            created_by=created_by.lower(),
+            created_by_id=created_by_id,
             created_at=_now(),
         )
         append_jsonl(self.path, record.model_dump())
@@ -669,6 +723,25 @@ class BuddySessionsStore:
             changes["duration_minutes"] = duration_minutes
         return self._update(session_id, changes)
 
+    def attach_room(
+        self, session_id: str, room_kind: RoomKind, room_code: str
+    ) -> Optional[BuddySession]:
+        """Point a session at the live room it is being held in.
+
+        Overwrites any code already there rather than refusing. Rooms are
+        process-local and swept when they go stale, so a session planned last
+        week can outlive the room someone opened for it; refusing to re-open
+        one would strand the pair with a code that leads nowhere.
+        """
+        return self._update(
+            session_id,
+            {
+                "room_kind": room_kind,
+                "room_code": room_code,
+                "room_opened_at": _now(),
+            },
+        )
+
     def mark_missed(self, session_id: str) -> Optional[BuddySession]:
         return self._update(session_id, {"status": "missed"})
 
@@ -699,7 +772,7 @@ class BuddyConcern(BaseModel):
 
     concern_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     pair_id: str
-    raised_by: str
+    raised_by_id: str
     # Which side raised it. A mentor reporting a mentee who never replies is a
     # different problem from a mentee reporting the same, and the count of each
     # is what tells a teacher whether their pairing rule is wrong.
@@ -709,7 +782,7 @@ class BuddyConcern(BaseModel):
     status: ConcernStatus = "open"
     raised_at: str
     resolved_at: Optional[str] = None
-    resolved_by: Optional[str] = None
+    resolved_by_id: Optional[str] = None
     resolution: str = ""
 
 
@@ -739,13 +812,12 @@ class BuddyConcernsStore:
                 return concern
         return None
 
-    def open_for(self, pair_id: str, email: str) -> Optional[BuddyConcern]:
+    def open_for(self, pair_id: str, user_id: str) -> Optional[BuddyConcern]:
         """This person's own unresolved concern on this pair, if any."""
-        normalized = email.lower()
         for concern in self.list_all():
             if (
                 concern.pair_id == pair_id
-                and concern.raised_by.lower() == normalized
+                and concern.raised_by_id == user_id
                 and concern.status == "open"
             ):
                 return concern
@@ -761,7 +833,7 @@ class BuddyConcernsStore:
     def raise_concern(
         self,
         pair_id: str,
-        raised_by: str,
+        raised_by_id: str,
         role: str,
         reason: str = "other",
         detail: str = "",
@@ -772,12 +844,12 @@ class BuddyConcernsStore:
         teacher can act on, and a queue with the same pairing five times in it
         is a worse queue.
         """
-        if self.open_for(pair_id, raised_by) is not None:
+        if self.open_for(pair_id, raised_by_id) is not None:
             raise ValueError("concern_already_open")
 
         concern = BuddyConcern(
             pair_id=pair_id,
-            raised_by=raised_by,
+            raised_by_id=raised_by_id,
             role=role,
             reason=reason,
             detail=detail.strip(),
@@ -787,7 +859,7 @@ class BuddyConcernsStore:
         return concern
 
     def resolve(
-        self, concern_id: str, resolved_by: str, resolution: str = ""
+        self, concern_id: str, resolved_by_id: str, resolution: str = ""
     ) -> Optional[BuddyConcern]:
         """Close a concern with the teacher's note on what they did about it."""
         concerns = self.list_all()
@@ -798,7 +870,7 @@ class BuddyConcernsStore:
                     update={
                         "status": "resolved",
                         "resolved_at": _now(),
-                        "resolved_by": resolved_by,
+                        "resolved_by_id": resolved_by_id,
                         "resolution": resolution.strip(),
                     }
                 )
@@ -809,9 +881,134 @@ class BuddyConcernsStore:
         return resolved
 
 
+class BuddyRequest(BaseModel):
+    """A student asking to be given a mentor.
+
+    Everything else in this programme is teacher-push: a teacher decides who
+    is mentored and pairs them. That is the right default — a student who
+    most needs coaching is often the last to ask — but it left no way in at
+    all for the student who *does* ask. Their only route was to be noticed.
+
+    Not a complaint and not a concern: `BuddyConcern` is for a pairing that
+    exists and is not working, is private to teachers, and reads as a
+    grievance. Asking for a mentor in the first place should cost nothing.
+    """
+
+    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    # What they want out of it, in their words. Optional: requiring a student
+    # to articulate their weakness before they can ask for help is a bar in
+    # front of the exact people this exists for.
+    note: str = ""
+    focus_area: Optional[str] = None
+    status: RequestStatus = "open"
+    created_at: str
+    resolved_at: Optional[str] = None
+    resolved_by_id: Optional[str] = None
+    # Set when the request produced a pairing, so a teacher can see that the
+    # queue actually cleared rather than that the row merely changed state.
+    pair_id: Optional[str] = None
+
+
+class BuddyRequestsStore:
+    path: Path
+
+    def __init__(self, path: Path = _REQUESTS_PATH):
+        self.path = path
+
+    # --- Read ---
+
+    def list_all(self) -> list[BuddyRequest]:
+        return _load(self.path, BuddyRequest)
+
+    def list_open(self) -> list[BuddyRequest]:
+        """The queue, oldest first — the student who has waited longest is
+        the one a teacher should reach next."""
+        pending = [r for r in self.list_all() if r.status == "open"]
+        pending.sort(key=lambda r: r.created_at)
+        return pending
+
+    def get(self, request_id: str) -> Optional[BuddyRequest]:
+        for request in self.list_all():
+            if request.request_id == request_id:
+                return request
+        return None
+
+    def open_for(self, user_id: str) -> Optional[BuddyRequest]:
+        """This student's own outstanding request, if they have one."""
+        for request in self.list_all():
+            if request.user_id == user_id and request.status == "open":
+                return request
+        return None
+
+    # --- Write ---
+
+    def create(
+        self, user_id: str, note: str = "", focus_area: Optional[str] = None
+    ) -> BuddyRequest:
+        """Raise a request. Raises ValueError if one is already outstanding.
+
+        One open request per student: asking twice does not move anyone up a
+        queue, and a queue with the same name in it three times is a worse
+        queue for the teacher working down it.
+        """
+        if self.open_for(user_id) is not None:
+            raise ValueError("request_already_open")
+
+        record = BuddyRequest(
+            user_id=user_id,
+            note=note.strip()[:500],
+            focus_area=focus_area,
+            created_at=_now(),
+        )
+        append_jsonl(self.path, record.model_dump())
+        return record
+
+    def resolve(
+        self,
+        request_id: str,
+        status: RequestStatus,
+        resolved_by_id: str,
+        pair_id: Optional[str] = None,
+    ) -> Optional[BuddyRequest]:
+        """Close a request as paired or declined."""
+        requests = self.list_all()
+        resolved: Optional[BuddyRequest] = None
+        for index, request in enumerate(requests):
+            if request.request_id == request_id:
+                resolved = request.model_copy(
+                    update={
+                        "status": status,
+                        "resolved_at": _now(),
+                        "resolved_by_id": resolved_by_id,
+                        "pair_id": pair_id,
+                    }
+                )
+                requests[index] = resolved
+                break
+        if resolved is not None:
+            overwrite_jsonl(self.path, [r.model_dump() for r in requests])
+        return resolved
+
+    def resolve_for_user(
+        self, user_id: str, resolved_by_id: str, pair_id: str
+    ) -> Optional[BuddyRequest]:
+        """Close whatever this student had outstanding, because they are now
+        paired. Called when a pairing is created so the queue clears itself —
+        a teacher who pairs someone should not also have to remember to tick
+        off the request that asked for it."""
+        pending = self.open_for(user_id)
+        if pending is None:
+            return None
+        return self.resolve(
+            pending.request_id, "paired", resolved_by_id, pair_id=pair_id
+        )
+
+
 mentors_store = MentorsStore()
 buddy_pairs_store = BuddyPairsStore()
 buddy_messages_store = BuddyMessagesStore()
 buddy_cycles_store = BuddyCyclesStore()
 buddy_sessions_store = BuddySessionsStore()
 buddy_concerns_store = BuddyConcernsStore()
+buddy_requests_store = BuddyRequestsStore()

@@ -10,7 +10,12 @@
  * one conversation, not three.
  */
 import { useEffect, useMemo, useState } from "react";
-import { fetchDigest, type BuddyDigest, type Nudge } from "../../buddyApi";
+import {
+  fetchDigest,
+  personLabel,
+  type BuddyDigest,
+  type Nudge,
+} from "../../buddyApi";
 import { Button, Dot, Empty, Panel, Tag, type Tone } from "../console/Console";
 
 const STATE_TONE: Record<string, Tone> = {
@@ -18,6 +23,7 @@ const STATE_TONE: Record<string, Tone> = {
   quiet: "warn",
   not_started: "info",
   no_cycle: "neutral",
+  overdue: "warn",
 };
 
 const STATE_LABEL: Record<string, string> = {
@@ -25,6 +31,7 @@ const STATE_LABEL: Record<string, string> = {
   quiet: "Quiet",
   not_started: "Not started",
   no_cycle: "No cycle",
+  overdue: "Cycle overdue",
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -36,7 +43,7 @@ const ROLE_LABEL: Record<string, string> = {
 function groupByPerson(nudges: Nudge[]) {
   const groups = new Map<string, Nudge[]>();
   for (const nudge of nudges) {
-    const key = nudge.email.toLowerCase();
+    const key = nudge.user_id;
     const existing = groups.get(key);
     if (existing) existing.push(nudge);
     else groups.set(key, [nudge]);
@@ -114,6 +121,7 @@ export function DigestPanel() {
                 ["quiet", counts.quiet],
                 ["not_started", counts.not_started],
                 ["no_cycle", counts.no_cycle],
+                ["overdue", counts.overdue],
               ] as const
             )
               .filter(([, n]) => n > 0)
@@ -133,15 +141,15 @@ export function DigestPanel() {
           </div>
 
           <ul>
-            {groups.map(([email, items]) => (
+            {groups.map(([userId, items]) => (
               <li
-                key={email}
+                key={userId}
                 className="px-3.5 py-2.5 border-b border-[var(--c-line)] last:border-b-0"
               >
                 <div className="flex items-center gap-2 mb-1.5">
                   <Dot tone={STATE_TONE[items[0].state] ?? "neutral"} />
                   <span className="text-[12.5px] font-semibold text-[var(--c-text)] truncate">
-                    {email}
+                    {personLabel(items[0].person)}
                   </span>
                   <Tag tone="neutral">{ROLE_LABEL[items[0].role] ?? items[0].role}</Tag>
                   {items.length > 1 && (
@@ -158,8 +166,12 @@ export function DigestPanel() {
                         {nudge.message}
                       </p>
                       <p className="text-[11px] text-[var(--c-faint)] mt-0.5 tabular-nums">
-                        {nudge.partner_email ? `with ${nudge.partner_email} · ` : ""}
+                        {nudge.partner
+                          ? `with ${personLabel(nudge.partner)} · `
+                          : ""}
                         {STATE_LABEL[nudge.state] ?? nudge.state}
+                        {nudge.days_overdue !== null &&
+                          ` · ${nudge.days_overdue}d past its end date`}
                         {nudge.days_quiet !== null &&
                           ` · silent ${nudge.days_quiet}d`}
                         {nudge.sessions_kept > 0 &&

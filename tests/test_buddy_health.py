@@ -29,9 +29,9 @@ from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", name="Mentor", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", name="Mentee", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", name="Mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", name="Mentee", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 
 def _days_ago(days: float) -> str:
@@ -77,19 +77,19 @@ def buddy_app(tmp_path, monkeypatch):
 @pytest.fixture()
 def pair(buddy_app):
     return buddy_pairs_store.create(
-        mentor_email=MENTOR.email,
-        mentee_email=MENTEE.email,
-        created_by=TEACHER.email,
+        mentor_id=MENTOR.uid,
+        mentee_id=MENTEE.uid,
+        created_by_id=TEACHER.uid,
     )
 
 
 def _open_cycle(pair, started_days_ago: float = 1):
     return buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=MENTEE.email,
+        mentee_id=MENTEE.uid,
         starts_at=_days_ago(started_days_ago),
         ends_at=(datetime.now(timezone.utc) + timedelta(weeks=4)).isoformat(),
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
 
 
@@ -116,7 +116,7 @@ def test_a_cycle_where_nothing_has_happened_yet_reads_as_not_started(pair):
 
 def test_a_pairing_talking_this_week_is_on_track(pair):
     _open_cycle(pair)
-    buddy_messages_store.create(pair.pair_id, MENTOR.email, body="how did it go?")
+    buddy_messages_store.create(pair.pair_id, MENTOR.uid, body="how did it go?")
 
     state = _health_of(pair)
     assert state.state == "on_track"
@@ -125,7 +125,7 @@ def test_a_pairing_talking_this_week_is_on_track(pair):
 
 def test_a_week_of_silence_is_quiet_and_two_is_stalled(pair, monkeypatch):
     cycle = _open_cycle(pair, started_days_ago=30)
-    message = buddy_messages_store.create(pair.pair_id, MENTOR.email, body="hello")
+    message = buddy_messages_store.create(pair.pair_id, MENTOR.uid, body="hello")
 
     for days, expected in ((8, "quiet"), (20, "stalled")):
         monkeypatch.setattr(
@@ -147,10 +147,10 @@ def test_missed_sessions_stall_a_pairing_that_is_still_nominally_talking(pair):
             pair_id=pair.pair_id,
             cycle_id=cycle.cycle_id,
             scheduled_at=_days_ago(1),
-            created_by=MENTOR.email,
+            created_by_id=MENTOR.uid,
         )
         buddy_sessions_store.mark_missed(session.session_id)
-    buddy_messages_store.create(pair.pair_id, MENTOR.email, body="sorry, busy week")
+    buddy_messages_store.create(pair.pair_id, MENTOR.uid, body="sorry, busy week")
 
     state = _health_of(pair)
     assert state.state == "stalled"
@@ -177,7 +177,7 @@ def test_a_planned_session_is_an_intention_not_activity(pair):
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=_days_ago(-7),
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
 
     state = _health_of(pair)
@@ -192,7 +192,7 @@ def test_completing_a_session_counts_as_activity(pair):
         pair_id=pair.pair_id,
         cycle_id=cycle.cycle_id,
         scheduled_at=_days_ago(1),
-        created_by=MENTOR.email,
+        created_by_id=MENTOR.uid,
     )
     buddy_sessions_store.complete(session.session_id, note="good pacing", is_mentor=True)
 
@@ -210,7 +210,7 @@ def test_sessions_from_a_previous_cycle_are_not_counted_against_the_open_one(pai
             pair_id=pair.pair_id,
             cycle_id=old.cycle_id,
             scheduled_at=_days_ago(50),
-            created_by=MENTOR.email,
+            created_by_id=MENTOR.uid,
         )
         buddy_sessions_store.mark_missed(stale.session_id)
     buddy_cycles_store.close(old.cycle_id)
@@ -223,7 +223,7 @@ def test_sessions_from_a_previous_cycle_are_not_counted_against_the_open_one(pai
 
 def test_another_pairs_messages_do_not_count_towards_this_one(pair):
     _open_cycle(pair)
-    buddy_messages_store.create("some-other-pair", MENTOR.email, body="not ours")
+    buddy_messages_store.create("some-other-pair", MENTOR.uid, body="not ours")
 
     state = _health_of(pair)
     assert state.message_count == 0
@@ -234,7 +234,7 @@ def test_a_timestamp_written_without_an_offset_is_read_as_utc(pair, monkeypatch)
     """One legacy row must not raise and blank the whole teacher view."""
     _open_cycle(pair, started_days_ago=30)
     naive = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-    message = buddy_messages_store.create(pair.pair_id, MENTOR.email, body="hi")
+    message = buddy_messages_store.create(pair.pair_id, MENTOR.uid, body="hi")
     monkeypatch.setattr(
         buddy_messages_store,
         "list_all",

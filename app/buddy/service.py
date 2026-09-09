@@ -4,11 +4,12 @@ Mentor selection is score-suggested and teacher-approved. This module owns the
 "suggested" half — ranking students by demonstrated speaking ability — while the
 approval itself is a teacher action recorded in ``MentorsStore``.
 
-Scoring sources — all four the platform can attribute to a student:
+Scoring sources — all four the platform can attribute to a student. Every
+student here is identified by ``user_id``; see ``app.buddy.identity``:
 
-- interview submissions carry ``student_email`` directly;
-- completed debates and GD sessions carry ``participants[].user_id`` (the
-  Firebase uid), joined to ``firebase_uid`` via ``users_store``;
+- completed debates and GD sessions carry ``participants[].user_id`` and join
+  on it directly;
+- interview submissions carry ``student_email``;
 - pronunciation attempts carry ``student_email`` on rows written after that
   field was added. Older rows have no owner and never can — they are skipped
   rather than guessed at.
@@ -90,9 +91,16 @@ class SpeakerSignals(NamedTuple):
 
 
 class SpeakerRanking(BaseModel):
-    """One student's demonstrated speaking ability, aggregated across attempts."""
+    """One student's demonstrated speaking ability, aggregated across attempts.
 
-    email: str
+    ``user_id`` is the identity and the only field a client should send back.
+    ``name`` and ``email`` are resolved for display so a teacher can tell two
+    students apart on screen; this is a response model and stores nothing, so
+    carrying them here cannot go stale the way a stored copy would.
+    """
+
+    user_id: str
+    email: Optional[str] = None
     name: Optional[str] = None
     speaking_score: float
     sample_size: int
@@ -125,8 +133,13 @@ def _mean(values: list[float]) -> Optional[float]:
     return round(sum(values) / len(values), 2) if values else None
 
 
-def _speaking_signals(email: str) -> SpeakerSignals:
+def _speaking_signals(user_id: str, email: Optional[str]) -> SpeakerSignals:
     """Collect every attributable 0-100 score for one student.
+
+    Takes both identifiers because the sources disagree on which they record:
+    debates and GD join on ``user_id``, submissions and attempts on the
+    address. The caller resolves the pair once — see ``rank_speakers``, which
+    already holds both for every student it walks.
 
     Only work that actually produced a score counts. An unavailable content
     result or a pending pronunciation pass is skipped rather than counted as
@@ -137,7 +150,7 @@ def _speaking_signals(email: str) -> SpeakerSignals:
     live_speaking: list[float] = []
     works = 0
 
-    for submission in submissions_store.list_for_student(email):
+    for submission in (submissions_store.list_for_student(email) if email else []):
         result = submission.content_result
         if result is None:
             continue
@@ -156,7 +169,7 @@ def _speaking_signals(email: str) -> SpeakerSignals:
     # Standalone pronunciation practice. Attributable only on rows written
     # since `student_email` was added to AttemptSummary.
     try:
-        for attempt in attempts_storage.list_for_student(email):
+        for attempt in (attempts_storage.list_for_student(email) if email else []):
             if attempt.pronunciation_available and attempt.pronunciation_score is not None:
                 pronunciation.append(float(attempt.pronunciation_score))
                 works += 1
@@ -168,7 +181,7 @@ def _speaking_signals(email: str) -> SpeakerSignals:
     try:
         from app.buddy.growth import _live_events
 
-        live_speaking.extend(score for _at, _title, score, _kind in _live_events(email))
+        live_speaking.extend(score for _at, _title, score, _kind in _live_events(user_id))
         works += len(live_speaking)
     except Exception as exc:
         logger.warning("buddy_rank_live_failed err=%s", type(exc).__name__)
@@ -189,7 +202,7 @@ class MentoringRecord(NamedTuple):
 
 
 def _mentoring_records() -> dict[str, MentoringRecord]:
-    """Sessions kept and mean mentee rating, per mentor email.
+    """Sessions kept and mean mentee rating, per mentor id.
 
     Built in one pass for the whole cohort — the ranking asks about every
     student at once, and doing this per mentor would re-read both stores once
@@ -202,7 +215,7 @@ def _mentoring_records() -> dict[str, MentoringRecord]:
     kept: dict[str, int] = {}
     ratings: dict[str, list[float]] = {}
     for pair in buddy_pairs_store.list_all():
-        mentor = pair.mentor_email.lower()
+        mentor = pair.mentor_id
         for session in sessions_by_pair.get(pair.pair_id, []):
             if session.status != "completed":
                 continue
@@ -211,11 +224,11 @@ def _mentoring_records() -> dict[str, MentoringRecord]:
                 ratings.setdefault(mentor, []).append(float(session.mentee_rating))
 
     return {
-        email: MentoringRecord(
+        mentor_id: MentoringRecord(
             sessions_mentored=count,
-            rating=_mean(ratings.get(email, [])),
+            rating=_mean(ratings.get(mentor_id, [])),
         )
-        for email, count in kept.items()
+        for mentor_id, count in kept.items()
     }
 
 
@@ -277,9 +290,9 @@ def _growth_records() -> dict[str, GrowthRecord]:
         if gain is None:
             continue
 
-        email = cycle.mentee_email.lower()
-        previous = records.get(email)
-        records[email] = GrowthRecord(
+        mentee_id = cycle.mentee_id
+        previous = records.get(mentee_id)
+        records[mentee_id] = GrowthRecord(
             improved_cycles=(previous.improved_cycles if previous else 0) + 1,
             gain=max(gain, previous.gain) if previous else gain,
             started_at=started if previous is None or gain > previous.gain else previous.started_at,
@@ -339,7 +352,7 @@ def rank_speakers() -> list[SpeakerRanking]:
         if user.role != "student":
             continue
 
-        signals = _speaking_signals(user.email)
+        signals = _speaking_signals(user.firebase_uid, user.email)
         sample_size = signals.work_count
         if sample_size == 0:
             continue
@@ -351,11 +364,12 @@ def rank_speakers() -> list[SpeakerRanking]:
         if not parts:
             continue
 
-        mentor = mentors_store.get(user.email)
-        record = mentoring.get(user.email.lower())
-        grew = growth.get(user.email.lower())
+        mentor = mentors_store.get(user.firebase_uid)
+        record = mentoring.get(user.firebase_uid)
+        grew = growth.get(user.firebase_uid)
         rankings.append(
             SpeakerRanking(
+                user_id=user.firebase_uid,
                 email=user.email,
                 name=user.display_name,
                 speaking_score=round(sum(parts) / len(parts), 2),
@@ -365,9 +379,7 @@ def rank_speakers() -> list[SpeakerRanking]:
                 live_speaking_avg=live_avg,
                 status=mentor.status if mentor else "none",
                 active_mentees=sum(
-                    1
-                    for p in active_pairs
-                    if p.mentor_email.lower() == user.email.lower()
+                    1 for p in active_pairs if p.mentor_id == user.firebase_uid
                 ),
                 mentor_rating=record.rating if record else None,
                 sessions_mentored=record.sessions_mentored if record else 0,
@@ -408,7 +420,7 @@ def suggested_mentors() -> list[SpeakerRanking]:
     return suggested
 
 
-def can_access_pair(pair_id: str, email: str, is_teacher: bool = False) -> bool:
+def can_access_pair(pair_id: str, user_id: str, is_teacher: bool = False) -> bool:
     """Whether this user may read or post in the conversation.
 
     Teachers can read any pair — this is a classroom tool and the pairing is
@@ -417,4 +429,4 @@ def can_access_pair(pair_id: str, email: str, is_teacher: bool = False) -> bool:
     pair = buddy_pairs_store.get(pair_id)
     if pair is None:
         return False
-    return is_teacher or pair.involves(email)
+    return is_teacher or pair.involves(user_id)

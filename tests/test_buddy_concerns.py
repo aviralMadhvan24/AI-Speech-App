@@ -27,10 +27,10 @@ from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", role="student")
-OUTSIDER = User(uid="u-out", email="nosy@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", role="student")
+OUTSIDER = User(uid="u-out", email="u-nosy", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 
 @pytest.fixture()
@@ -71,9 +71,9 @@ def buddy_app(tmp_path, monkeypatch):
 @pytest.fixture()
 def pair(buddy_app):
     return buddy_pairs_store.create(
-        mentor_email=MENTOR.email,
-        mentee_email=MENTEE.email,
-        created_by=TEACHER.email,
+        mentor_id=MENTOR.uid,
+        mentee_id=MENTEE.uid,
+        created_by_id=TEACHER.uid,
     )
 
 
@@ -201,12 +201,12 @@ def test_a_concern_on_an_unknown_pair_is_a_404(buddy_app):
 def test_the_queue_is_oldest_first_because_it_is_a_worklist(buddy_app, pair):
     """The pairing waiting three weeks must not be buried under fresh flags."""
     second = buddy_pairs_store.create(
-        mentor_email=MENTOR.email, mentee_email="other@x.com", created_by=TEACHER.email
+        mentor_id=MENTOR.uid, mentee_id="u-other", created_by_id=TEACHER.uid
     )
 
     buddy_app.as_(MENTEE)
     _raise(buddy_app, pair.pair_id, detail="first")
-    buddy_app.as_(User(uid="u-other", email="other@x.com", role="student"))
+    buddy_app.as_(User(uid="u-other", email="u-other", role="student"))
     _raise(buddy_app, second.pair_id, detail="second")
 
     buddy_app.as_(TEACHER)
@@ -241,7 +241,7 @@ def test_resolving_records_who_did_it_and_what_they_did(buddy_app, pair):
     ).json()
 
     assert resolved["status"] == "resolved"
-    assert resolved["resolved_by"] == TEACHER.email
+    assert resolved["resolved_by_id"] == TEACHER.uid
     assert resolved["resolution"] == "re-paired with a new mentor"
     assert resolved["resolved_at"] is not None
 

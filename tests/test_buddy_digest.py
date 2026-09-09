@@ -28,9 +28,9 @@ from app.storage.buddy import buddy_pairs_store
 from app.storage.buddy import buddy_sessions_store
 from app.storage.buddy import mentors_store
 
-MENTOR = User(uid="u-mentor", email="mentor@x.com", role="student")
-MENTEE = User(uid="u-mentee", email="mentee@x.com", role="student")
-TEACHER = User(uid="u-teacher", email="teacher@x.com", role="teacher")
+MENTOR = User(uid="u-mentor", email="u-mentor", role="student")
+MENTEE = User(uid="u-mentee", email="u-mentee", role="student")
+TEACHER = User(uid="u-teacher", email="u-teacher", role="teacher")
 
 
 @pytest.fixture()
@@ -68,21 +68,21 @@ def buddy_app(tmp_path, monkeypatch):
     return client
 
 
-def _pair(mentor=MENTOR.email, mentee=MENTEE.email):
+def _pair(mentor=MENTOR.uid, mentee=MENTEE.uid):
     return buddy_pairs_store.create(
-        mentor_email=mentor, mentee_email=mentee, created_by=TEACHER.email
+        mentor_id=mentor, mentee_id=mentee, created_by_id=TEACHER.uid
     )
 
 
-def _cycle(pair, *, opened_days_ago: int = 0, mentee=MENTEE.email):
+def _cycle(pair, *, opened_days_ago: int = 0, mentee=MENTEE.uid):
     """A cycle that opened `opened_days_ago` days back and runs four weeks on."""
     opened = datetime.now(timezone.utc) - timedelta(days=opened_days_ago)
     return buddy_cycles_store.create(
         pair_id=pair.pair_id,
-        mentee_email=mentee,
+        mentee_id=mentee,
         starts_at=opened.isoformat(),
         ends_at=(opened + timedelta(weeks=8)).isoformat(),
-        created_by=TEACHER.email,
+        created_by_id=TEACHER.uid,
     )
 
 
@@ -100,7 +100,7 @@ def test_a_pairing_with_no_cycle_nudges_the_teacher_not_the_student(buddy_app):
     report = digest.build_digest()
 
     assert [n.role for n in report.nudges] == ["teacher"]
-    assert report.nudges[0].email == TEACHER.email
+    assert report.nudges[0].user_id == TEACHER.uid
     assert "Open one or end the pairing" in report.nudges[0].message
 
 
@@ -111,8 +111,8 @@ def test_a_quiet_pairing_tells_both_sides(buddy_app):
     roles = _by_role(digest.build_digest())
 
     assert set(roles) == {"mentor", "mentee"}
-    assert roles["mentor"].email == MENTOR.email
-    assert roles["mentee"].email == MENTEE.email
+    assert roles["mentor"].user_id == MENTOR.uid
+    assert roles["mentee"].user_id == MENTEE.uid
 
 
 def test_the_mentor_is_asked_and_the_mentee_is_invited(buddy_app):
@@ -132,8 +132,8 @@ def test_each_nudge_names_the_partner_so_it_can_be_addressed(buddy_app):
 
     roles = _by_role(digest.build_digest())
 
-    assert roles["mentor"].partner_email == MENTEE.email
-    assert roles["mentee"].partner_email == MENTOR.email
+    assert roles["mentor"].partner.user_id == MENTEE.uid
+    assert roles["mentee"].partner.user_id == MENTOR.uid
 
 
 # --- What counts as needing a nudge ---------------------------------------
@@ -143,7 +143,7 @@ def test_a_healthy_pairing_produces_nothing(buddy_app):
     """A digest that lists everyone is a digest nobody reads."""
     pair = _pair()
     _cycle(pair, opened_days_ago=0)
-    buddy_messages_store.create(pair.pair_id, MENTOR.email, body="hello")
+    buddy_messages_store.create(pair.pair_id, MENTOR.uid, body="hello")
 
     report = digest.build_digest()
 
@@ -169,11 +169,11 @@ def test_an_ended_pairing_is_never_chased(buddy_app):
 
 def test_a_stalled_pairing_outranks_a_quiet_one(buddy_app):
     """Most urgent first — this is the order someone works down the list in."""
-    stalled = _pair(mentee="stalled@x.com")
-    _cycle(stalled, opened_days_ago=30, mentee="stalled@x.com")
+    stalled = _pair(mentee="u-stalled")
+    _cycle(stalled, opened_days_ago=30, mentee="u-stalled")
 
-    quiet = _pair(mentee="quiet@x.com")
-    _cycle(quiet, opened_days_ago=9, mentee="quiet@x.com")
+    quiet = _pair(mentee="u-quiet")
+    _cycle(quiet, opened_days_ago=9, mentee="u-quiet")
 
     states = [n.state for n in digest.build_digest().nudges]
 
@@ -202,7 +202,7 @@ def test_sessions_kept_rides_along_so_the_conversation_can_differ(buddy_app):
             pair_id=pair.pair_id,
             cycle_id=cycle.cycle_id,
             scheduled_at="2026-08-01T10:00:00+00:00",
-            created_by=TEACHER.email,
+            created_by_id=TEACHER.uid,
         )
 
     # Two misses stall a pairing that is otherwise still in touch — the case
@@ -221,7 +221,7 @@ def test_open_concerns_are_surfaced_so_nobody_chases_a_known_problem(buddy_app):
     pair = _pair()
     _cycle(pair, opened_days_ago=9)
     buddy_concerns_store.raise_concern(
-        pair_id=pair.pair_id, raised_by=MENTEE.email, role="mentee", reason="mismatch"
+        pair_id=pair.pair_id, raised_by_id=MENTEE.uid, role="mentee", reason="mismatch"
     )
 
     assert digest.build_digest().open_concerns == 1
@@ -250,7 +250,7 @@ def test_one_persons_nudges_can_be_selected(buddy_app):
     pair = _pair()
     _cycle(pair, opened_days_ago=9)
 
-    mine = digest.for_recipient("MENTOR@x.com")
+    mine = digest.for_recipient("u-mentor")
 
     assert len(mine) == 1
     assert mine[0].role == "mentor"
@@ -260,7 +260,7 @@ def test_someone_with_nothing_outstanding_gets_an_empty_list(buddy_app):
     pair = _pair()
     _cycle(pair, opened_days_ago=9)
 
-    assert digest.for_recipient("stranger@x.com") == []
+    assert digest.for_recipient("u-stranger") == []
 
 
 # --- Access ---------------------------------------------------------------
