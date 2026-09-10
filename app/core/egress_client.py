@@ -29,6 +29,17 @@ LIVEKIT_URL = settings.LIVEKIT_URL
 EGRESS_OUTPUT_DIR = "/opt/livekit/egress-out"
 
 
+class LiveKitUnreachableError(RuntimeError):
+    """The LiveKit server did not answer.
+
+    Kept distinct from "the room is empty" on purpose. Both used to reach the
+    caller as an empty participant list, so a LiveKit outage looked exactly
+    like a discussion nobody spoke in — the recording silently did not happen
+    and the session was still scored and reported as complete. Anything that
+    starts a recording needs to tell those two apart.
+    """
+
+
 class EgressClient:
     """Manages LiveKit Track Egress for per-participant recording."""
 
@@ -188,8 +199,10 @@ class EgressClient:
             )
             return list(response.participants)
         except Exception as e:
-            logger.error(f"Failed to list participants: {type(e).__name__}: {e}")
-            return []
+            raise LiveKitUnreachableError(
+                f"Failed to list participants in {room_name}: "
+                f"{type(e).__name__}: {e}"
+            ) from e
         finally:
             await self._close_api(lk_api)
 
@@ -198,16 +211,33 @@ class EgressClient:
         
         Returns map of participant_identity -> egress_id.
         Retries up to 3 times with 5s delay to wait for tracks to be published.
+        
+        Raises LiveKitUnreachableError if LiveKit never answered, so the caller
+        can distinguish "we could not record" from "nobody had anything to
+        record". Returns an empty map when LiveKit answered but the room held
+        no audio tracks.
         """
         started = {}
+        unreachable: Optional[LiveKitUnreachableError] = None
         
         # Retry loop — participants may not have published tracks yet
         for attempt in range(4):
-            participants = await self.get_room_participants(room_name)
-            
-            logger.info(
-                f"Egress attempt {attempt+1}: found {len(participants)} participants in {room_name}"
-            )
+            try:
+                participants = await self.get_room_participants(room_name)
+            except LiveKitUnreachableError as exc:
+                # Worth retrying: LiveKit restarting mid-discussion is the
+                # common case, and it usually comes back within a few seconds.
+                # Remember the last error so that if every attempt fails we can
+                # say *why* nothing was recorded instead of reporting an empty
+                # room.
+                unreachable = exc
+                participants = []
+                logger.warning(f"Egress attempt {attempt+1}: {exc}")
+            else:
+                unreachable = None
+                logger.info(
+                    f"Egress attempt {attempt+1}: found {len(participants)} participants in {room_name}"
+                )
             
             for participant in participants:
                 identity = participant.identity
@@ -250,6 +280,26 @@ class EgressClient:
             # Wait before retrying
             if attempt < 3:
                 await asyncio.sleep(5)
+        
+        if unreachable is not None:
+            # Every attempt failed to reach LiveKit. Raising here is the point
+            # of this function: the discussion is about to run for several
+            # minutes recording nothing, and the caller has to know that now
+            # rather than discovering it at scoring time.
+            raise LiveKitUnreachableError(
+                f"Recording {room_name} never started: LiveKit unreachable "
+                f"after 4 attempts: {unreachable}"
+            )
+        
+        if not started:
+            # LiveKit answered and told us the room was empty (or nobody had a
+            # microphone track). Not an outage, but still a discussion that
+            # will produce no audio, so it does not belong at INFO.
+            logger.error(
+                f"Started 0 track egresses for room {room_name}: no participant "
+                f"published an audio track. This discussion will have no recording."
+            )
+            return started
         
         logger.info(f"Started {len(started)} track egresses for room {room_name}")
         return started

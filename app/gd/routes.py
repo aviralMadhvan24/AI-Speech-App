@@ -341,6 +341,11 @@ async def _run_scoring(code: str) -> None:
             if not os.path.exists(audio_path):
                 logger.warning(
                     f"No egress audio for {participant.display_name} at {audio_path}"
+                    + (
+                        f" (recording never started: {room.recording_failed})"
+                        if room.recording_failed
+                        else ""
+                    )
                 )
                 # Fall back to any PTT speeches that might exist
                 ptts = gd_speeches_store.list_speeches_for_participant(
@@ -469,7 +474,18 @@ async def _run_scoring(code: str) -> None:
         # Store scores on room and finalize
         await gd_room_manager.finalize_scores(code, scores)
         
-        logger.info(f"GD scoring complete for {code}: {len(scores)} participants")
+        if not persisted_speeches:
+            # Every participant scored zero because there was nothing to score.
+            # This is the shape the DWWZWX and 8ZZV3V sessions had: four log
+            # lines at INFO/WARNING and a "complete" at the end, with two real
+            # students left holding an empty result page. Name it as a failure.
+            logger.error(
+                f"GD {code} produced no transcripts at all: "
+                f"{len(room.participants)} participant(s) scored on nothing. "
+                f"Reason: {room.recording_failed or 'no audio was captured'}"
+            )
+        else:
+            logger.info(f"GD scoring complete for {code}: {len(scores)} participants")
 
         # If detailed mode, spawn background pronunciation re-scoring
         if room.scoring_mode == "detailed":

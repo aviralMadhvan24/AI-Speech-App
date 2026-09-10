@@ -349,3 +349,77 @@ echo ""
 #           file_server
 #       }
 #   }
+
+# â”€â”€ LiveKit stack (docker, started by hand â€” no compose file) â”€â”€
+#   Three containers on a user-defined bridge network called `livekit`:
+#
+#     sudo docker network create livekit
+#
+#     sudo docker run -d --name redis \
+#       --network livekit \
+#       -p 127.0.0.1:6379:6379 \
+#       --restart unless-stopped \
+#       redis:7-alpine redis-server
+#
+#     sudo docker run -d --name livekit-server \
+#       --network host \
+#       -v /opt/livekit/livekit.yaml:/etc/livekit.yaml \
+#       --restart unless-stopped \
+#       livekit/livekit-server --config /etc/livekit.yaml --node-ip 15.207.25.230
+#
+#     sudo docker run -d --name livekit-egress \
+#       --network livekit \
+#       -e EGRESS_CONFIG_FILE=/etc/egress.yaml \
+#       -v /opt/livekit/egress.yaml:/etc/egress.yaml \
+#       -v /opt/livekit/egress-out:/out \
+#       --restart unless-stopped \
+#       livekit/egress:latest
+#
+#   The `-p 127.0.0.1:6379:6379` on redis is load-bearing, and this is the
+#   part that has broken group discussion twice. livekit-server runs with
+#   --network host, so it is NOT on the bridge and cannot use Docker's
+#   embedded DNS: the name `redis` fails to resolve for it with
+#   "lookup redis on 127.0.0.53:53: server misbehaving", and it then
+#   crash-loops on startup. Pointing it at a container IP (172.18.0.x) works
+#   until the day redis is recreated and lands on a different address, at
+#   which point it crash-loops again â€” silently, as far as the app is
+#   concerned. Publishing redis on the loopback interface gives host-network
+#   livekit a fixed address that no restart can move.
+#
+#   livekit-egress IS on the bridge, so it keeps using the DNS name and needs
+#   no host port. Do not "tidy" these into the same form â€” they differ because
+#   their network modes differ.
+#
+# â”€â”€ /opt/livekit/livekit.yaml â”€â”€
+#   port: 7880
+#   rtc:
+#     port_range_start: 50000
+#     port_range_end: 50200
+#     tcp_port: 7881
+#     use_external_ip: true
+#   redis:
+#     address: 127.0.0.1:6379   # see above â€” never a 172.18.0.x address
+#   keys:
+#     <api-key>: <api-secret>   # must match egress.yaml and the backend .env
+#   turn:
+#     enabled: false
+#
+# â”€â”€ /opt/livekit/egress.yaml â”€â”€
+#   api_key: <api-key>
+#   api_secret: <api-secret>
+#   ws_url: ws://172.31.1.83:7880   # the box's private IP, reachable from the bridge
+#   insecure: true
+#   redis:
+#     address: redis:6379           # DNS name is correct here: egress is on the bridge
+#   file_output:
+#     local:
+#       - /out
+#   log_level: info
+#
+#   Egress writes each participant's track to /opt/livekit/egress-out as
+#   <session_id>_<participant_identity>.ogg, which is what app/gd/routes.py
+#   reads back when it scores a discussion.
+#
+#   `not enough cpu for some egress types` in the egress log is expected on a
+#   t3.large (2 cores, 4 recommended). It rules out room-composite recording;
+#   the per-track audio egress this app uses runs fine.

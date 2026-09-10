@@ -18,7 +18,7 @@ from fastapi import HTTPException, WebSocket
 from app.auth import User
 from app.core.config import settings
 from app.core.livekit_client import livekit
-from app.core.egress_client import egress_client
+from app.core.egress_client import egress_client, LiveKitUnreachableError
 from app.storage import custom_topics, users_store
 from app.gd.schemas import (
     GDParticipantInternal,
@@ -417,10 +417,12 @@ class GDRoomManager:
         room = self._rooms.get(code)
         if room is None or not room.livekit_room:
             logger.warning(f"Cannot start egress for {code}: no LiveKit room")
+            self._mark_recording_failed(code, "no LiveKit room for this discussion")
             return
 
         if not egress_client.is_available:
             logger.warning(f"Egress not available for {code}")
+            self._mark_recording_failed(code, "recording is not configured on this server")
             return
 
         try:
@@ -431,9 +433,35 @@ class GDRoomManager:
                 room_name=room.livekit_room,
                 session_id=room.session_id,
             )
-            logger.info(f"Started egress for {len(started)} participants in GD {code}")
+        except LiveKitUnreachableError as e:
+            # The discussion is already running and will record nothing. Say so
+            # at ERROR with the room code, because the only other trace of this
+            # is participants getting an empty result several minutes later.
+            logger.error(
+                f"GD {code} is recording nothing: LiveKit unreachable: {e}"
+            )
+            self._mark_recording_failed(code, "the recording server was unreachable")
+            return
         except Exception as e:
             logger.error(f"Failed to start egress for GD {code}: {e}")
+            self._mark_recording_failed(code, f"recording failed to start: {e}")
+            return
+
+        if not started:
+            logger.error(
+                f"GD {code} is recording nothing: no participant published an "
+                f"audio track"
+            )
+            self._mark_recording_failed(code, "no microphone audio reached the server")
+            return
+
+        logger.info(f"Started egress for {len(started)} participants in GD {code}")
+
+    def _mark_recording_failed(self, code: str, reason: str) -> None:
+        """Flag on the room that this discussion has no audio being recorded."""
+        room = self._rooms.get(code)
+        if room is not None:
+            room.recording_failed = reason
 
     async def _stop_egress_recording(self, code: str) -> dict[str, str]:
         """Stop all egress recordings for a room. Returns stopped egresses."""

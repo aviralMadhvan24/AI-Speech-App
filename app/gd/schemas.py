@@ -95,6 +95,10 @@ class GDRoom(BaseModel):
     created_at: float
     completed_at: Optional[float] = None
     scoring_started_at: Optional[float] = None
+    # Set when the audio recording could not be started, holding a short reason.
+    # Scoring reads it to tell "nobody spoke" apart from "we never recorded",
+    # which are the same empty transcript list but very different to report.
+    recording_failed: Optional[str] = None
 
     _pause_started_at: Optional[float] = PrivateAttr(default=None)
 
