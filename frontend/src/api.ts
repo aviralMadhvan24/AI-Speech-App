@@ -52,15 +52,41 @@ async function authedHeaders(init?: RequestInit): Promise<Headers> {
   return headers;
 }
 
+/** Pull FastAPI's `{"detail": "..."}` out of an error body, if it has one. */
+function extractDetail(body: string): string | null {
+  if (!body) return null;
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
+  } catch {
+    // Not JSON (an HTML error page, a proxy timeout) — fall through.
+  }
+  return null;
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const fullUrl = `${API_BASE_URL}${url}`;
   const headers = await authedHeaders(init);
   const response = await fetch(fullUrl, { ...init, headers });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const body = await response.text().catch(() => "");
+    const detail = extractDetail(body);
+
+    // 4xx means the request itself was the problem and the server already
+    // wrote a message aimed at the person — a corrupt recording, a file too
+    // large, an unsupported format. Surface that verbatim; prefixing it with
+    // "POST /analyze failed: 400 Bad Request" only buries the useful part.
+    // 5xx keeps the noisy form, because there the status and route are the
+    // diagnostic value and the detail is usually generic.
+    if (response.status >= 400 && response.status < 500 && detail) {
+      throw new Error(detail);
+    }
+
     throw new Error(
       `${init?.method ?? "GET"} ${url} failed: ${response.status} ${response.statusText}${
-        detail ? ` — ${detail.slice(0, 240)}` : ""
+        body ? ` — ${(detail ?? body).slice(0, 240)}` : ""
       }`,
     );
   }

@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 from fastapi import APIRouter
@@ -93,7 +94,15 @@ async def analyze_audio(
         )
     )
 
-    audio_asset = preprocess_audio_asset(audio_asset)
+    # Everything from here to the end of scoring is synchronous, CPU-bound work
+    # (ffmpeg, Whisper, a Wav2Vec2 forward pass). Called directly from this
+    # `async def` it ran ON the event loop, so a single student's transcription
+    # froze every other request in the process — including cheap ones like
+    # loading prompts or joining a room. With one uvicorn worker (the box has no
+    # memory for more) that is the whole server. Handing each stage to a worker
+    # thread keeps the loop free to serve everyone else; the heavy stages still
+    # serialise internally on their own locks, which is correct on two cores.
+    audio_asset = await asyncio.to_thread(preprocess_audio_asset, audio_asset)
     logger.info(
         stage_log(
             "audio_preprocessed",
@@ -106,7 +115,10 @@ async def analyze_audio(
         )
     )
 
-    transcription = transcribe_audio(audio_asset.processed_path)
+    transcription = await asyncio.to_thread(
+        transcribe_audio,
+        audio_asset.processed_path,
+    )
     logger.info(
         stage_log(
             "asr_done",
@@ -117,11 +129,13 @@ async def analyze_audio(
         )
     )
 
-    pronunciation = assess_pronunciation(
-        audio_path=audio_asset.processed_path,
-        expected_text=expected_text,
-        transcription=transcription,
-        analysis_id=analysis_id,
+    pronunciation = await asyncio.to_thread(
+        lambda: assess_pronunciation(
+            audio_path=audio_asset.processed_path,
+            expected_text=expected_text,
+            transcription=transcription,
+            analysis_id=analysis_id,
+        )
     )
     logger.info(
         stage_log(

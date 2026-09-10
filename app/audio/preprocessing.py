@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.audio.schemas import AudioAsset
 from app.core.exceptions import AudioProcessingException
+from app.core.exceptions import InvalidAudioUploadException
 from app.core.logger import logger
 from app.utils.ffmpeg_utils import get_ffmpeg_command
 
@@ -15,6 +16,31 @@ TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 
 MAX_DURATION_SECONDS = 300
+
+# Substrings ffmpeg prints when it cannot demux/decode the *input* file.
+# These mean the browser handed us a broken container (truncated blob, missing
+# EBML/moov header, zero streams) — retrying the same bytes cannot help, so the
+# student is asked to record again instead of the request 500-ing.
+UNDECODABLE_INPUT_MARKERS = (
+    "ebml header parsing failed",
+    "invalid data found when processing input",
+    "moov atom not found",
+    "does not contain any stream",
+    "could not find codec parameters",
+    "end of file",
+    "format not recognised",
+    "format not recognized",
+    "invalid stream specifier",
+)
+
+
+def _is_undecodable_input(stderr_text: str):
+    lowered = stderr_text.lower()
+
+    return any(
+        marker in lowered
+        for marker in UNDECODABLE_INPUT_MARKERS
+    )
 
 
 def _read_audio_metadata(audio_path: str):
@@ -79,10 +105,22 @@ def preprocess_audio_asset(audio: AudioAsset):
 
         duration_seconds = metadata["duration_seconds"]
 
-        if (
-            duration_seconds is not None
-            and duration_seconds > MAX_DURATION_SECONDS
-        ):
+        # ffmpeg can exit 0 having written a header-only wav — a recording
+        # where the mic was muted or the blob carried no audio track. There is
+        # nothing to transcribe, so treat it like any other unusable upload.
+        if not duration_seconds:
+            logger.warning(
+                f"Empty audio after preprocessing: {audio.original_path}"
+            )
+
+            raise InvalidAudioUploadException(
+                detail=(
+                    "No sound was captured in that recording. "
+                    "Check your microphone and record again."
+                )
+            )
+
+        if duration_seconds > MAX_DURATION_SECONDS:
             raise HTTPException(
                 status_code=413,
                 detail="Audio duration is too long"
@@ -105,7 +143,21 @@ def preprocess_audio_asset(audio: AudioAsset):
         )
 
     except subprocess.CalledProcessError as error:
-        logger.error(error.stderr.decode())
+        stderr_text = (error.stderr or b"").decode(errors="replace")
+
+        if _is_undecodable_input(stderr_text):
+            # Log at WARNING, not ERROR: a broken upload is an expected event
+            # under real classroom conditions, not a server fault worth paging
+            # on. Keep the size so a spike in these is traceable to a device.
+            logger.warning(
+                f"Undecodable upload {audio.original_path} "
+                f"({audio.size_bytes} bytes): "
+                f"{stderr_text.strip().splitlines()[-1] if stderr_text.strip() else 'no stderr'}"
+            )
+
+            raise InvalidAudioUploadException()
+
+        logger.error(stderr_text)
         raise AudioProcessingException()
 
     except RuntimeError as error:

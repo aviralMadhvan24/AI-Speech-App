@@ -21,6 +21,7 @@ Notes:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import List, Optional, Tuple
 
 import librosa
@@ -72,6 +73,12 @@ except Exception as exc:
 # Module-level model cache so we load weights once per process.
 _MODEL_CACHE: dict = {}
 
+# Scoring now runs in a worker thread so it cannot stall the event loop, which
+# means two requests can arrive here at once on a cold cache and each start its
+# own `from_pretrained`. This box has no memory to spare for a duplicate copy,
+# so the first caller loads and the rest wait.
+_MODEL_LOAD_LOCK = threading.Lock()
+
 
 def _load_model(model_name: str):
     if model_name in _MODEL_CACHE:
@@ -79,6 +86,17 @@ def _load_model(model_name: str):
 
     if not HF_AVAILABLE or ProcessorClass is None or ModelClass is None:
         raise RuntimeError("HF phoneme dependencies are not available")
+
+    with _MODEL_LOAD_LOCK:
+        # Re-check under the lock: another thread may have finished loading
+        # while we were blocked on it.
+        if model_name in _MODEL_CACHE:
+            return _MODEL_CACHE[model_name]
+
+        return _load_model_uncached(model_name)
+
+
+def _load_model_uncached(model_name: str):
 
     logger.info("Loading HF phoneme model: %s", model_name)
 
